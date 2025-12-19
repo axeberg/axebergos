@@ -5,15 +5,9 @@
 
 use crate::compositor;
 use crate::console_log;
-use crate::kernel::{self, channel, Priority};
+use crate::kernel::syscall::{self, OpenFlags};
+use crate::kernel::{self, channel, Fd, Priority};
 use crate::runtime;
-use crate::vfs::{self, FileSystem, MemoryFs};
-use std::cell::RefCell;
-
-thread_local! {
-    /// Global filesystem - will be abstracted behind a proper VFS layer later
-    pub static FS: RefCell<MemoryFs> = RefCell::new(MemoryFs::new());
-}
 
 /// Boot the system
 pub fn boot() {
@@ -24,11 +18,16 @@ pub fn boot() {
 
     console_log!("\n[boot] Initializing kernel...");
 
-    // Initialize the VFS with some demonstration content
+    // Create init process (PID 1)
+    let init_pid = syscall::spawn_process("init");
+    syscall::set_current_process(init_pid);
+    console_log!("[boot] Init process started ({})", init_pid);
+
+    // Initialize the filesystem with content
     init_filesystem();
 
-    // Spawn system tasks
-    spawn_init_tasks();
+    // Spawn system processes
+    spawn_init_processes();
 
     // Start the runtime loop (this returns immediately, loop runs via rAF)
     console_log!("[boot] Starting runtime...");
@@ -38,114 +37,115 @@ pub fn boot() {
     console_log!("\n  axeberg is alive. Welcome home.\n");
 }
 
-/// Set up initial filesystem structure
+/// Set up initial filesystem structure using syscalls
 fn init_filesystem() {
-    console_log!("[boot] Mounting memory filesystem...");
+    console_log!("[boot] Initializing filesystem...");
 
-    FS.with(|fs| {
-        let mut fs = fs.borrow_mut();
+    // Create user home directory
+    syscall::mkdir("/home/user").expect("create /home/user");
 
-        // Create directory structure
-        fs.create_dir("/home").expect("create /home");
-        fs.create_dir("/home/user").expect("create /home/user");
-        fs.create_dir("/etc").expect("create /etc");
-        fs.create_dir("/tmp").expect("create /tmp");
+    // Write welcome file
+    let welcome = "Welcome to axeberg!\n\nThis is your personal computing environment.\nTractable. Immediate. Yours.\n";
+    let fd = syscall::open("/home/user/welcome.txt", OpenFlags::WRITE).expect("create welcome.txt");
+    syscall::write(fd, welcome.as_bytes()).expect("write welcome.txt");
+    syscall::close(fd).expect("close welcome.txt");
 
-        // Write a welcome file
-        vfs::write_string(
-            &mut *fs,
-            "/home/user/welcome.txt",
-            "Welcome to axeberg!\n\nThis is your personal computing environment.\nTractable. Immediate. Yours.\n",
-        )
-        .expect("write welcome.txt");
+    // Write version file
+    let fd = syscall::open("/etc/version", OpenFlags::WRITE).expect("create version");
+    syscall::write(fd, b"axeberg 0.1.0\n").expect("write version");
+    syscall::close(fd).expect("close version");
 
-        // Write system info
-        vfs::write_string(&mut *fs, "/etc/version", "axeberg 0.1.0\n").expect("write version");
-
-        console_log!("[boot] Filesystem initialized:");
-        console_log!("       /home/user/welcome.txt");
-        console_log!("       /etc/version");
-    });
+    console_log!("[boot] Filesystem initialized:");
+    console_log!("       /home/user/welcome.txt");
+    console_log!("       /etc/version");
 }
 
-/// Spawn initial system tasks
-fn spawn_init_tasks() {
-    console_log!("[boot] Spawning init tasks...");
+/// Spawn initial system processes
+fn spawn_init_processes() {
+    console_log!("[boot] Spawning init processes...");
 
-    // Task 1: Read and display the welcome message
+    // Process 1: Read and display the welcome message using syscalls
     kernel::spawn(async {
-        console_log!("[task:welcome] Starting...");
+        console_log!("[proc:welcome] Starting...");
 
-        let content = FS.with(|fs| {
-            let mut fs = fs.borrow_mut();
-            vfs::read_to_string(&mut *fs, "/home/user/welcome.txt")
-        });
-
-        match content {
-            Ok(text) => {
-                console_log!("[task:welcome] Read welcome.txt:");
-                for line in text.lines() {
-                    console_log!("  {}", line);
+        // Read the welcome file via syscall
+        match syscall::open("/home/user/welcome.txt", OpenFlags::READ) {
+            Ok(fd) => {
+                let mut buf = [0u8; 256];
+                match syscall::read(fd, &mut buf) {
+                    Ok(n) => {
+                        let text = String::from_utf8_lossy(&buf[..n]);
+                        console_log!("[proc:welcome] Read welcome.txt:");
+                        for line in text.lines() {
+                            console_log!("  {}", line);
+                        }
+                    }
+                    Err(e) => console_log!("[proc:welcome] Read error: {}", e),
                 }
+                let _ = syscall::close(fd);
             }
-            Err(e) => {
-                console_log!("[task:welcome] Error: {:?}", e);
-            }
+            Err(e) => console_log!("[proc:welcome] Open error: {}", e),
         }
 
-        console_log!("[task:welcome] Complete.");
+        console_log!("[proc:welcome] Complete.");
     });
 
-    // Task 2: Demonstrate IPC between tasks
+    // Process 2: Demonstrate writing to stdout (console)
+    kernel::spawn(async {
+        console_log!("[proc:hello] Writing to stdout...");
+
+        // Write to stdout (fd 1) which goes to console
+        let msg = b"Hello from axeberg!\n";
+        match syscall::write(Fd::STDOUT, msg) {
+            Ok(_) => console_log!("[proc:hello] Wrote to stdout"),
+            Err(e) => console_log!("[proc:hello] Write error: {}", e),
+        }
+    });
+
+    // Process 3: Demonstrate IPC between processes
     let (tx, rx) = channel::<String>();
 
     kernel::spawn(async move {
-        console_log!("[task:sender] Sending message via IPC...");
-        tx.send("Hello from sender task!".to_string()).unwrap();
+        console_log!("[proc:sender] Sending message via IPC...");
+        tx.send("Hello from sender!".to_string()).unwrap();
         tx.send("IPC is working!".to_string()).unwrap();
         tx.close();
-        console_log!("[task:sender] Messages sent, channel closed.");
+        console_log!("[proc:sender] Messages sent, channel closed.");
     });
 
     kernel::spawn(async move {
-        console_log!("[task:receiver] Waiting for messages...");
+        console_log!("[proc:receiver] Waiting for messages...");
 
-        // Poll until we get messages
         loop {
             match rx.try_recv() {
                 Ok(msg) => {
-                    console_log!("[task:receiver] Got: {}", msg);
+                    console_log!("[proc:receiver] Got: {}", msg);
                 }
                 Err(crate::kernel::ipc::TryRecvError::Closed) => {
-                    console_log!("[task:receiver] Channel closed, done.");
+                    console_log!("[proc:receiver] Channel closed, done.");
                     break;
                 }
                 Err(crate::kernel::ipc::TryRecvError::Empty) => {
-                    // Yield to other tasks
                     futures::pending!();
                 }
             }
         }
     });
 
-    // Task 3: Compositor initialization (Critical priority)
-    // Rendering happens in runtime.rs, this just sets up the surface
+    // Process 4: Compositor initialization (Critical priority)
     kernel::spawn_with_priority(
         async {
             console_log!("[compositor] Initializing...");
-
-            // Use spawn_local for async init since compositor::init needs async
             wasm_bindgen_futures::spawn_local(init_compositor());
         },
         Priority::Critical,
     );
 
-    console_log!("[boot] Init tasks spawned.");
+    console_log!("[boot] Init processes spawned.");
 }
 
 /// Initialize the compositor asynchronously
 async fn init_compositor() {
-    // Create a new compositor, init it, then swap it into the global
     let mut comp = compositor::Compositor::new();
 
     if let Err(e) = comp.init().await {
@@ -155,12 +155,11 @@ async fn init_compositor() {
 
     console_log!("[compositor] Surface ready, creating demo windows...");
 
-    // Create demo windows
+    // Create demo windows (using TaskId for now, will use syscall later)
     let owner = kernel::TaskId(0);
     comp.create_window("Terminal", owner);
     comp.create_window("Files", owner);
 
-    // Swap initialized compositor into global
     compositor::COMPOSITOR.with(|c| {
         *c.borrow_mut() = comp;
     });

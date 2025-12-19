@@ -1,48 +1,36 @@
-//! The kernel - task execution, IPC, and system services
+//! The kernel - process management, syscalls, and system services
 //!
 //! Inspired by Oxide's Hubris:
 //! - Tasks are specified at build time
 //! - Synchronous mental model, async implementation
 //! - Small, auditable core
 //!
-//! Extended for UI work:
-//! - Tick-based execution for frame-by-frame rendering
-//! - Priority levels for compositor vs apps
-//! - Event queue for input handling
+//! Core abstractions:
+//! - Process: unit of isolation, has its own file descriptors
+//! - Handle/Fd: reference to a kernel object
+//! - KernelObject: file, pipe, console, window, etc.
+//! - Syscall: the interface between user code and the kernel
 
 pub mod events;
 pub mod executor;
 pub mod ipc;
+pub mod object;
+pub mod process;
+pub mod syscall;
 pub mod task;
 
 pub use executor::{Executor, Priority};
 pub use ipc::{channel, Receiver, Sender};
+pub use process::{Fd, Handle, OpenFlags, Pid};
+pub use syscall::{SyscallError, SyscallResult};
 pub use task::{Task, TaskId, TaskState};
 
 use std::cell::RefCell;
 
 thread_local! {
-    /// The global kernel instance
-    static KERNEL: RefCell<Kernel> = RefCell::new(Kernel::new());
-}
-
-/// The kernel manages all system state
-pub struct Kernel {
-    executor: Executor,
-}
-
-impl Kernel {
-    pub fn new() -> Self {
-        Self {
-            executor: Executor::new(),
-        }
-    }
-}
-
-impl Default for Kernel {
-    fn default() -> Self {
-        Self::new()
-    }
+    /// The executor for running async tasks
+    /// Note: The full kernel state (processes, objects) is in syscall::KERNEL
+    static EXECUTOR: RefCell<Executor> = RefCell::new(Executor::new());
 }
 
 /// Spawn a task with normal priority, returns task ID
@@ -50,7 +38,7 @@ pub fn spawn<F>(future: F) -> TaskId
 where
     F: std::future::Future<Output = ()> + 'static,
 {
-    KERNEL.with(|k| k.borrow_mut().executor.spawn(future))
+    EXECUTOR.with(|e| e.borrow_mut().spawn(future))
 }
 
 /// Spawn a task with specified priority
@@ -58,29 +46,25 @@ pub fn spawn_with_priority<F>(future: F, priority: Priority) -> TaskId
 where
     F: std::future::Future<Output = ()> + 'static,
 {
-    KERNEL.with(|k| {
-        k.borrow_mut()
-            .executor
-            .spawn_with_priority(future, priority)
-    })
+    EXECUTOR.with(|e| e.borrow_mut().spawn_with_priority(future, priority))
 }
 
 /// Run one tick of execution (call from requestAnimationFrame)
 pub fn tick() -> usize {
-    KERNEL.with(|k| k.borrow_mut().executor.tick())
+    EXECUTOR.with(|e| e.borrow_mut().tick())
 }
 
 /// Run the executor until all tasks complete (for non-UI contexts)
 pub fn run() {
-    KERNEL.with(|k| k.borrow_mut().executor.run())
+    EXECUTOR.with(|e| e.borrow_mut().run())
 }
 
 /// Check if there are active tasks
 pub fn has_tasks() -> bool {
-    KERNEL.with(|k| k.borrow().executor.has_tasks())
+    EXECUTOR.with(|e| e.borrow().has_tasks())
 }
 
 /// Get count of active tasks
 pub fn task_count() -> usize {
-    KERNEL.with(|k| k.borrow().executor.task_count())
+    EXECUTOR.with(|e| e.borrow().task_count())
 }
