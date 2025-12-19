@@ -14,6 +14,7 @@
 pub mod events;
 pub mod executor;
 pub mod ipc;
+pub mod memory;
 pub mod object;
 pub mod process;
 pub mod syscall;
@@ -21,6 +22,7 @@ pub mod task;
 
 pub use executor::{Executor, Priority};
 pub use ipc::{channel, Receiver, Sender};
+pub use memory::{MemoryError, MemoryStats, Protection, RegionId, ShmId, ShmInfo, SystemMemoryStats};
 pub use process::{Fd, Handle, OpenFlags, Pid};
 pub use syscall::{SyscallError, SyscallResult};
 pub use task::{Task, TaskId, TaskState};

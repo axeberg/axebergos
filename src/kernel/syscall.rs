@@ -6,6 +6,10 @@
 //! - Auditing: all operations go through a single point
 //! - Safety: the kernel validates all operations
 
+use super::memory::{
+    MemoryError, MemoryManager, MemoryStats, Protection, RegionId, ShmId, ShmInfo,
+    SystemMemoryStats,
+};
 use super::object::{
     ConsoleObject, FileObject, KernelObject, ObjectTable, PipeObject, WindowObject,
 };
@@ -38,6 +42,8 @@ pub enum SyscallError {
     NoProcess,
     /// Generic I/O error
     Io(String),
+    /// Memory error
+    Memory(MemoryError),
 }
 
 impl std::fmt::Display for SyscallError {
@@ -52,7 +58,14 @@ impl std::fmt::Display for SyscallError {
             SyscallError::Busy => write!(f, "resource busy"),
             SyscallError::NoProcess => write!(f, "no such process"),
             SyscallError::Io(msg) => write!(f, "I/O error: {}", msg),
+            SyscallError::Memory(e) => write!(f, "memory error: {}", e),
         }
+    }
+}
+
+impl From<MemoryError> for SyscallError {
+    fn from(e: MemoryError) -> Self {
+        SyscallError::Memory(e)
     }
 }
 
@@ -88,6 +101,8 @@ pub struct Kernel {
     vfs: MemoryFs,
     /// Map from our Handle to VFS FileHandle for open files
     vfs_handles: HashMap<Handle, usize>,
+    /// Memory manager for shared memory and accounting
+    memory: MemoryManager,
 }
 
 impl Kernel {
@@ -114,6 +129,7 @@ impl Kernel {
             console_handle,
             vfs,
             vfs_handles: HashMap::new(),
+            memory: MemoryManager::new(),
         }
     }
 
@@ -473,6 +489,178 @@ impl Kernel {
         let path_str = resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
         Ok(self.vfs.exists(path_str))
     }
+
+    // ========== MEMORY SYSCALLS ==========
+
+    /// Allocate a memory region for the current process
+    pub fn sys_alloc(&mut self, size: usize, prot: Protection) -> SyscallResult<RegionId> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get_mut(&current).ok_or(SyscallError::NoProcess)?;
+
+        let region_id = self.memory.alloc_region_id();
+        process.memory.allocate(region_id, size, prot)?;
+
+        Ok(region_id)
+    }
+
+    /// Free a memory region
+    pub fn sys_free(&mut self, region_id: RegionId) -> SyscallResult<()> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get_mut(&current).ok_or(SyscallError::NoProcess)?;
+
+        process.memory.free(region_id)?;
+        Ok(())
+    }
+
+    /// Read from a memory region
+    pub fn sys_mem_read(
+        &mut self,
+        region_id: RegionId,
+        offset: usize,
+        buf: &mut [u8],
+    ) -> SyscallResult<usize> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get_mut(&current).ok_or(SyscallError::NoProcess)?;
+
+        let region = process.memory.get(region_id).ok_or(SyscallError::Memory(
+            MemoryError::InvalidRegion,
+        ))?;
+
+        Ok(region.read(offset, buf)?)
+    }
+
+    /// Write to a memory region
+    pub fn sys_mem_write(
+        &mut self,
+        region_id: RegionId,
+        offset: usize,
+        buf: &[u8],
+    ) -> SyscallResult<usize> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get_mut(&current).ok_or(SyscallError::NoProcess)?;
+
+        let region = process.memory.get_mut(region_id).ok_or(SyscallError::Memory(
+            MemoryError::InvalidRegion,
+        ))?;
+
+        Ok(region.write(offset, buf)?)
+    }
+
+    /// Create a shared memory segment
+    pub fn sys_shmget(&mut self, size: usize) -> SyscallResult<ShmId> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        Ok(self.memory.shmget(size, current)?)
+    }
+
+    /// Attach to a shared memory segment
+    pub fn sys_shmat(&mut self, shm_id: ShmId, prot: Protection) -> SyscallResult<RegionId> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+
+        // Get the shared memory region from the manager
+        let region = self.memory.shmat(shm_id, current, prot)?;
+        let region_id = region.id;
+
+        // Attach to the process memory
+        let process = self.processes.get_mut(&current).ok_or(SyscallError::NoProcess)?;
+        process.memory.attach_shm(shm_id, region)?;
+
+        Ok(region_id)
+    }
+
+    /// Detach from a shared memory segment
+    pub fn sys_shmdt(&mut self, shm_id: ShmId) -> SyscallResult<()> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+
+        // Sync changes back to shared memory before detaching
+        let process = self.processes.get_mut(&current).ok_or(SyscallError::NoProcess)?;
+
+        // Get the region data before detaching
+        if let Some(region_id) = process.memory.shm_region(shm_id) {
+            if let Some(region) = process.memory.get(region_id) {
+                let data = region.as_slice().to_vec();
+                self.memory.shm_sync(shm_id, &data)?;
+            }
+        }
+
+        // Detach from process memory
+        process.memory.detach_shm(shm_id)?;
+
+        // Detach from global shared memory (may remove if refcount hits 0)
+        self.memory.shmdt(shm_id, current)?;
+
+        Ok(())
+    }
+
+    /// Sync shared memory region (write local changes to shared segment)
+    pub fn sys_shm_sync(&mut self, shm_id: ShmId) -> SyscallResult<()> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get(&current).ok_or(SyscallError::NoProcess)?;
+
+        // Get the region data
+        let region_id = process.memory.shm_region(shm_id).ok_or(SyscallError::Memory(
+            MemoryError::NotAttached,
+        ))?;
+
+        let region = process.memory.get(region_id).ok_or(SyscallError::Memory(
+            MemoryError::InvalidRegion,
+        ))?;
+
+        let data = region.as_slice().to_vec();
+        self.memory.shm_sync(shm_id, &data)?;
+
+        Ok(())
+    }
+
+    /// Refresh local shared memory region from shared segment
+    pub fn sys_shm_refresh(&mut self, shm_id: ShmId) -> SyscallResult<()> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+
+        // Get the latest shared data
+        let data = self.memory.shm_read(shm_id)?.to_vec();
+
+        // Update local region
+        let process = self.processes.get_mut(&current).ok_or(SyscallError::NoProcess)?;
+        let region_id = process.memory.shm_region(shm_id).ok_or(SyscallError::Memory(
+            MemoryError::NotAttached,
+        ))?;
+
+        let region = process.memory.get_mut(region_id).ok_or(SyscallError::Memory(
+            MemoryError::InvalidRegion,
+        ))?;
+
+        region.write(0, &data)?;
+        Ok(())
+    }
+
+    /// Get shared memory info
+    pub fn sys_shm_info(&self, shm_id: ShmId) -> SyscallResult<ShmInfo> {
+        Ok(self.memory.shm_info(shm_id)?)
+    }
+
+    /// List all shared memory segments
+    pub fn sys_shm_list(&self) -> SyscallResult<Vec<ShmInfo>> {
+        Ok(self.memory.shm_list())
+    }
+
+    /// Get memory stats for current process
+    pub fn sys_memstats(&self) -> SyscallResult<MemoryStats> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get(&current).ok_or(SyscallError::NoProcess)?;
+        Ok(process.memory.stats())
+    }
+
+    /// Set memory limit for current process
+    pub fn sys_set_memlimit(&mut self, limit: usize) -> SyscallResult<()> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get_mut(&current).ok_or(SyscallError::NoProcess)?;
+        process.memory.set_limit(limit);
+        Ok(())
+    }
+
+    /// Get system-wide memory stats
+    pub fn sys_system_memstats(&self) -> SyscallResult<SystemMemoryStats> {
+        Ok(self.memory.system_stats())
+    }
 }
 
 impl Default for Kernel {
@@ -586,6 +774,78 @@ pub fn console_take_output() -> Vec<u8> {
             .map(|c| c.take_output())
             .unwrap_or_default()
     })
+}
+
+// ========== MEMORY API ==========
+
+/// Allocate a memory region
+pub fn mem_alloc(size: usize, prot: Protection) -> SyscallResult<RegionId> {
+    KERNEL.with(|k| k.borrow_mut().sys_alloc(size, prot))
+}
+
+/// Free a memory region
+pub fn mem_free(region_id: RegionId) -> SyscallResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_free(region_id))
+}
+
+/// Read from a memory region
+pub fn mem_read(region_id: RegionId, offset: usize, buf: &mut [u8]) -> SyscallResult<usize> {
+    KERNEL.with(|k| k.borrow_mut().sys_mem_read(region_id, offset, buf))
+}
+
+/// Write to a memory region
+pub fn mem_write(region_id: RegionId, offset: usize, buf: &[u8]) -> SyscallResult<usize> {
+    KERNEL.with(|k| k.borrow_mut().sys_mem_write(region_id, offset, buf))
+}
+
+/// Create a shared memory segment
+pub fn shmget(size: usize) -> SyscallResult<ShmId> {
+    KERNEL.with(|k| k.borrow_mut().sys_shmget(size))
+}
+
+/// Attach to a shared memory segment
+pub fn shmat(shm_id: ShmId, prot: Protection) -> SyscallResult<RegionId> {
+    KERNEL.with(|k| k.borrow_mut().sys_shmat(shm_id, prot))
+}
+
+/// Detach from a shared memory segment
+pub fn shmdt(shm_id: ShmId) -> SyscallResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_shmdt(shm_id))
+}
+
+/// Sync local changes to shared memory
+pub fn shm_sync(shm_id: ShmId) -> SyscallResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_shm_sync(shm_id))
+}
+
+/// Refresh local region from shared memory
+pub fn shm_refresh(shm_id: ShmId) -> SyscallResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_shm_refresh(shm_id))
+}
+
+/// Get shared memory info
+pub fn shm_info(shm_id: ShmId) -> SyscallResult<ShmInfo> {
+    KERNEL.with(|k| k.borrow().sys_shm_info(shm_id))
+}
+
+/// List all shared memory segments
+pub fn shm_list() -> SyscallResult<Vec<ShmInfo>> {
+    KERNEL.with(|k| k.borrow().sys_shm_list())
+}
+
+/// Get memory stats for current process
+pub fn memstats() -> SyscallResult<MemoryStats> {
+    KERNEL.with(|k| k.borrow().sys_memstats())
+}
+
+/// Set memory limit for current process
+pub fn set_memlimit(limit: usize) -> SyscallResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_set_memlimit(limit))
+}
+
+/// Get system-wide memory stats
+pub fn system_memstats() -> SyscallResult<SystemMemoryStats> {
+    KERNEL.with(|k| k.borrow().sys_system_memstats())
 }
 
 #[cfg(test)]
@@ -765,5 +1025,150 @@ mod tests {
         // Close the dup - stdout should still work
         close(fd).unwrap();
         write(Fd::STDOUT, b"!").unwrap();
+    }
+
+    // ========== MEMORY TESTS ==========
+
+    #[test]
+    fn test_mem_alloc_free() {
+        setup_test_kernel();
+
+        let region = mem_alloc(1024, Protection::READ_WRITE).unwrap();
+        assert!(region.0 > 0);
+
+        // Check stats
+        let stats = memstats().unwrap();
+        assert_eq!(stats.allocated, 1024);
+        assert_eq!(stats.region_count, 1);
+
+        // Free
+        mem_free(region).unwrap();
+
+        let stats = memstats().unwrap();
+        assert_eq!(stats.allocated, 0);
+        assert_eq!(stats.region_count, 0);
+    }
+
+    #[test]
+    fn test_mem_read_write() {
+        setup_test_kernel();
+
+        let region = mem_alloc(100, Protection::READ_WRITE).unwrap();
+
+        // Write to the region
+        let written = mem_write(region, 0, b"hello world").unwrap();
+        assert_eq!(written, 11);
+
+        // Read back
+        let mut buf = [0u8; 20];
+        let n = mem_read(region, 0, &mut buf).unwrap();
+        assert_eq!(n, 20);
+        assert_eq!(&buf[..11], b"hello world");
+
+        mem_free(region).unwrap();
+    }
+
+    #[test]
+    fn test_mem_limit() {
+        setup_test_kernel();
+
+        // Set a limit
+        set_memlimit(1000).unwrap();
+
+        // Allocate within limit
+        let r1 = mem_alloc(500, Protection::READ_WRITE).unwrap();
+        let r2 = mem_alloc(400, Protection::READ_WRITE).unwrap();
+
+        // This should fail
+        let result = mem_alloc(200, Protection::READ_WRITE);
+        assert!(result.is_err());
+
+        mem_free(r1).unwrap();
+        mem_free(r2).unwrap();
+    }
+
+    #[test]
+    fn test_shm_basic() {
+        setup_test_kernel();
+
+        // Create shared memory
+        let shm_id = shmget(1024).unwrap();
+        assert!(shm_id.0 > 0);
+
+        // Get info - not attached until shmat
+        let info = shm_info(shm_id).unwrap();
+        assert_eq!(info.size, 1024);
+        assert_eq!(info.attached_count, 0);
+
+        // Attach to get a region
+        let region = shmat(shm_id, Protection::READ_WRITE).unwrap();
+
+        // Now we're attached
+        let info = shm_info(shm_id).unwrap();
+        assert_eq!(info.attached_count, 1);
+
+        // Write to region
+        mem_write(region, 0, b"shared data").unwrap();
+
+        // Sync to shared memory
+        shm_sync(shm_id).unwrap();
+
+        // Detach
+        shmdt(shm_id).unwrap();
+
+        let stats = memstats().unwrap();
+        assert_eq!(stats.shm_count, 0);
+    }
+
+    #[test]
+    fn test_shm_list() {
+        setup_test_kernel();
+
+        let shm1 = shmget(1000).unwrap();
+        let shm2 = shmget(2000).unwrap();
+
+        let list = shm_list().unwrap();
+        assert_eq!(list.len(), 2);
+
+        // To clean up, we need to attach first (then detach)
+        let _r1 = shmat(shm1, Protection::READ_WRITE).unwrap();
+        let _r2 = shmat(shm2, Protection::READ_WRITE).unwrap();
+        shmdt(shm1).unwrap();
+        shmdt(shm2).unwrap();
+
+        let list = shm_list().unwrap();
+        assert_eq!(list.len(), 0);
+    }
+
+    #[test]
+    fn test_system_memstats() {
+        setup_test_kernel();
+
+        let stats = system_memstats().unwrap();
+        assert_eq!(stats.shm_count, 0);
+
+        let _shm = shmget(1024).unwrap();
+
+        let stats = system_memstats().unwrap();
+        assert_eq!(stats.shm_count, 1);
+        assert_eq!(stats.shm_total_size, 1024);
+    }
+
+    #[test]
+    fn test_mem_protection() {
+        setup_test_kernel();
+
+        // Read-only region
+        let region = mem_alloc(100, Protection::READ).unwrap();
+
+        // Read should work
+        let mut buf = [0u8; 10];
+        assert!(mem_read(region, 0, &mut buf).is_ok());
+
+        // Write should fail
+        let result = mem_write(region, 0, b"test");
+        assert!(result.is_err());
+
+        mem_free(region).unwrap();
     }
 }

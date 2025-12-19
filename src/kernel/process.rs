@@ -4,6 +4,7 @@
 //! Each process has its own file descriptor table, working directory,
 //! and runs as an async task in the executor.
 
+use super::memory::ProcessMemory;
 use super::TaskId;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -105,6 +106,9 @@ pub struct Process {
     /// File descriptor table
     pub files: FileTable,
 
+    /// Memory tracking
+    pub memory: ProcessMemory,
+
     /// Current working directory
     pub cwd: PathBuf,
 
@@ -123,6 +127,21 @@ impl Process {
             parent,
             state: ProcessState::Running,
             files: FileTable::new(),
+            memory: ProcessMemory::new(),
+            cwd: PathBuf::from("/"),
+            task: None,
+            name,
+        }
+    }
+
+    /// Create a process with a memory limit
+    pub fn with_memory_limit(pid: Pid, name: String, parent: Option<Pid>, limit: usize) -> Self {
+        Self {
+            pid,
+            parent,
+            state: ProcessState::Running,
+            files: FileTable::new(),
+            memory: ProcessMemory::with_limit(limit),
             cwd: PathBuf::from("/"),
             task: None,
             name,
