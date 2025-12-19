@@ -1,4 +1,4 @@
-.PHONY: build dev clean check
+.PHONY: build dev clean check serve
 
 # Build WASM package
 build:
@@ -9,8 +9,9 @@ dev:
 	wasm-pack build --target web --dev
 
 # Run a local server for testing
+# Install with: cargo install miniserve
 serve: build
-	python3 -m http.server 8080
+	miniserve --index index.html -p 8080 .
 
 # Type check without building
 check:
