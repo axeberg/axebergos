@@ -17,15 +17,21 @@ pub mod ipc;
 pub mod memory;
 pub mod object;
 pub mod process;
+pub mod signal;
 pub mod syscall;
 pub mod task;
+pub mod timer;
+pub mod trace;
 
 pub use executor::{Executor, Priority};
 pub use ipc::{channel, Receiver, Sender};
 pub use memory::{MemoryError, MemoryStats, Protection, RegionId, ShmId, ShmInfo, SystemMemoryStats};
 pub use process::{Fd, Handle, OpenFlags, Pid};
+pub use signal::{Signal, SignalAction, SignalError};
 pub use syscall::{SyscallError, SyscallResult};
 pub use task::{Task, TaskId, TaskState};
+pub use timer::TimerId;
+pub use trace::{TraceCategory, TraceEvent, TraceSummary, Tracer};
 
 use std::cell::RefCell;
 

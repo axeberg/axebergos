@@ -195,6 +195,37 @@ impl Executor {
         self.tasks.len() + self.pending_spawn.borrow().len()
     }
 
+    /// Wake a task by ID (mark it as ready to be polled)
+    ///
+    /// Used by timers and other async wake sources.
+    /// Returns true if the task exists and was woken.
+    pub fn wake_task(&self, task_id: TaskId) -> bool {
+        // Check if task exists (either in tasks map or pending spawn)
+        let exists = self.tasks.contains_key(&task_id)
+            || self.pending_spawn.borrow().iter().any(|t| t.id == task_id);
+
+        if exists {
+            self.ready.borrow_mut().insert(task_id);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Wake multiple tasks by ID
+    ///
+    /// Convenience method for batch waking (e.g., from timer queue).
+    pub fn wake_tasks(&self, task_ids: &[TaskId]) {
+        let mut ready = self.ready.borrow_mut();
+        for &task_id in task_ids {
+            let exists = self.tasks.contains_key(&task_id)
+                || self.pending_spawn.borrow().iter().any(|t| t.id == task_id);
+            if exists {
+                ready.insert(task_id);
+            }
+        }
+    }
+
     /// Create a waker that marks a task as ready
     fn create_waker(&self, task_id: TaskId) -> Waker {
         let state = Box::new(WakerState {
@@ -430,5 +461,80 @@ mod tests {
 
         exec.run();
         assert!(spawned.get());
+    }
+
+    #[test]
+    fn test_wake_task() {
+        let mut exec = Executor::new();
+        let counter = Rc::new(Cell::new(0));
+        let counter_clone = counter.clone();
+
+        let task_id = exec.spawn(async move {
+            counter_clone.set(counter_clone.get() + 1);
+            futures::pending!(); // Yield without waking
+            counter_clone.set(counter_clone.get() + 1);
+        });
+
+        // First tick: runs until yield
+        exec.tick();
+        assert_eq!(counter.get(), 1);
+        assert!(exec.has_tasks());
+
+        // Second tick: task not ready, nothing happens
+        let polled = exec.tick();
+        assert_eq!(polled, 0);
+        assert_eq!(counter.get(), 1);
+
+        // Wake the task externally (like a timer would)
+        assert!(exec.wake_task(task_id));
+
+        // Third tick: task is now ready again
+        let polled = exec.tick();
+        assert_eq!(polled, 1);
+        assert_eq!(counter.get(), 2);
+
+        // Task completed
+        assert!(!exec.has_tasks());
+    }
+
+    #[test]
+    fn test_wake_nonexistent_task() {
+        let exec = Executor::new();
+        let fake_id = TaskId(9999);
+
+        // Waking a nonexistent task returns false
+        assert!(!exec.wake_task(fake_id));
+    }
+
+    #[test]
+    fn test_wake_tasks_batch() {
+        let mut exec = Executor::new();
+        let counter = Rc::new(Cell::new(0));
+
+        let mut task_ids = Vec::new();
+        for _ in 0..3 {
+            let counter = counter.clone();
+            let id = exec.spawn(async move {
+                counter.set(counter.get() + 1);
+                futures::pending!();
+                counter.set(counter.get() + 1);
+            });
+            task_ids.push(id);
+        }
+
+        // First tick: all run once
+        exec.tick();
+        assert_eq!(counter.get(), 3);
+
+        // Second tick: nothing ready
+        exec.tick();
+        assert_eq!(counter.get(), 3);
+
+        // Wake all tasks at once
+        exec.wake_tasks(&task_ids);
+
+        // Third tick: all run again
+        exec.tick();
+        assert_eq!(counter.get(), 6);
     }
 }

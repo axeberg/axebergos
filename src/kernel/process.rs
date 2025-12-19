@@ -5,6 +5,7 @@
 //! and runs as an async task in the executor.
 
 use super::memory::ProcessMemory;
+use super::signal::ProcessSignals;
 use super::TaskId;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -28,6 +29,8 @@ pub enum ProcessState {
     Sleeping,
     /// Process is blocked waiting for another process
     Blocked(Pid),
+    /// Process is stopped (by signal)
+    Stopped,
     /// Process has exited with a status code
     Zombie(i32),
 }
@@ -109,6 +112,9 @@ pub struct Process {
     /// Memory tracking
     pub memory: ProcessMemory,
 
+    /// Signal handling
+    pub signals: ProcessSignals,
+
     /// Current working directory
     pub cwd: PathBuf,
 
@@ -128,6 +134,7 @@ impl Process {
             state: ProcessState::Running,
             files: FileTable::new(),
             memory: ProcessMemory::new(),
+            signals: ProcessSignals::new(),
             cwd: PathBuf::from("/"),
             task: None,
             name,
@@ -142,6 +149,7 @@ impl Process {
             state: ProcessState::Running,
             files: FileTable::new(),
             memory: ProcessMemory::with_limit(limit),
+            signals: ProcessSignals::new(),
             cwd: PathBuf::from("/"),
             task: None,
             name,
@@ -151,6 +159,16 @@ impl Process {
     /// Check if process is alive (not a zombie)
     pub fn is_alive(&self) -> bool {
         !matches!(self.state, ProcessState::Zombie(_))
+    }
+
+    /// Check if process is stopped
+    pub fn is_stopped(&self) -> bool {
+        matches!(self.state, ProcessState::Stopped)
+    }
+
+    /// Check if process can run (not stopped, not zombie)
+    pub fn can_run(&self) -> bool {
+        matches!(self.state, ProcessState::Running | ProcessState::Sleeping)
     }
 }
 

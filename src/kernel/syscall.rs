@@ -14,6 +14,10 @@ use super::object::{
     ConsoleObject, FileObject, KernelObject, ObjectTable, PipeObject, WindowObject,
 };
 pub use super::process::{Fd, Handle, OpenFlags, Pid, Process, ProcessState};
+use super::signal::{resolve_action, Signal, SignalAction, SignalError};
+use super::task::TaskId;
+use super::timer::{TimerId, TimerQueue};
+use super::trace::{TraceCategory, TraceSummary, Tracer};
 use crate::compositor::WindowId;
 use crate::vfs::{FileSystem, MemoryFs, OpenOptions as VfsOpenOptions};
 use std::cell::RefCell;
@@ -44,6 +48,10 @@ pub enum SyscallError {
     Io(String),
     /// Memory error
     Memory(MemoryError),
+    /// Signal error
+    Signal(SignalError),
+    /// Process was interrupted by signal
+    Interrupted,
 }
 
 impl std::fmt::Display for SyscallError {
@@ -59,6 +67,8 @@ impl std::fmt::Display for SyscallError {
             SyscallError::NoProcess => write!(f, "no such process"),
             SyscallError::Io(msg) => write!(f, "I/O error: {}", msg),
             SyscallError::Memory(e) => write!(f, "memory error: {}", e),
+            SyscallError::Signal(e) => write!(f, "signal error: {}", e),
+            SyscallError::Interrupted => write!(f, "interrupted by signal"),
         }
     }
 }
@@ -66,6 +76,12 @@ impl std::fmt::Display for SyscallError {
 impl From<MemoryError> for SyscallError {
     fn from(e: MemoryError) -> Self {
         SyscallError::Memory(e)
+    }
+}
+
+impl From<SignalError> for SyscallError {
+    fn from(e: SignalError) -> Self {
+        SyscallError::Signal(e)
     }
 }
 
@@ -103,6 +119,12 @@ pub struct Kernel {
     vfs_handles: HashMap<Handle, usize>,
     /// Memory manager for shared memory and accounting
     memory: MemoryManager,
+    /// Timer queue
+    timers: TimerQueue,
+    /// Current monotonic time (updated by tick)
+    now: f64,
+    /// Tracer for instrumentation and debugging
+    tracer: Tracer,
 }
 
 impl Kernel {
@@ -130,6 +152,9 @@ impl Kernel {
             vfs,
             vfs_handles: HashMap::new(),
             memory: MemoryManager::new(),
+            timers: TimerQueue::new(),
+            now: 0.0,
+            tracer: Tracer::new(),
         }
     }
 
@@ -195,6 +220,60 @@ impl Kernel {
             Some(KernelObject::Console(c)) => Some(c),
             _ => None,
         }
+    }
+
+    // ========== TIMER/TICK ==========
+
+    /// Process a kernel tick - updates timers and returns tasks to wake
+    ///
+    /// Call this each frame with the current monotonic time (e.g., performance.now()).
+    /// Returns a list of task IDs that should be woken (timers expired).
+    pub fn tick(&mut self, now: f64) -> Vec<TaskId> {
+        self.now = now;
+        self.timers.tick(now)
+    }
+
+    /// Get the current kernel time
+    pub fn now(&self) -> f64 {
+        self.now
+    }
+
+    // ========== TRACING ==========
+
+    /// Enable tracing
+    pub fn trace_enable(&mut self) {
+        self.tracer.enable();
+        self.tracer.set_start_time(self.now);
+    }
+
+    /// Disable tracing
+    pub fn trace_disable(&mut self) {
+        self.tracer.disable();
+    }
+
+    /// Check if tracing is enabled
+    pub fn trace_enabled(&self) -> bool {
+        self.tracer.is_enabled()
+    }
+
+    /// Get trace summary
+    pub fn trace_summary(&self) -> TraceSummary {
+        self.tracer.summary(self.now)
+    }
+
+    /// Get the tracer (for detailed access)
+    pub fn tracer(&self) -> &Tracer {
+        &self.tracer
+    }
+
+    /// Get the tracer mutably
+    pub fn tracer_mut(&mut self) -> &mut Tracer {
+        &mut self.tracer
+    }
+
+    /// Reset trace data
+    pub fn trace_reset(&mut self) {
+        self.tracer.reset();
     }
 
     // ========== SYSCALLS ==========
@@ -661,6 +740,167 @@ impl Kernel {
     pub fn sys_system_memstats(&self) -> SyscallResult<SystemMemoryStats> {
         Ok(self.memory.system_stats())
     }
+
+    // ========== TIMER SYSCALLS ==========
+
+    /// Get current kernel time
+    pub fn sys_now(&self) -> f64 {
+        self.now
+    }
+
+    /// Set current kernel time (called from runtime with rAF timestamp)
+    pub fn set_time(&mut self, now: f64) {
+        self.now = now;
+    }
+
+    /// Schedule a one-shot timer
+    pub fn sys_timer_set(&mut self, delay_ms: f64, wake_task: Option<TaskId>) -> SyscallResult<TimerId> {
+        if delay_ms < 0.0 {
+            return Err(SyscallError::InvalidArgument);
+        }
+        Ok(self.timers.schedule(delay_ms, self.now, wake_task))
+    }
+
+    /// Schedule a repeating interval timer
+    pub fn sys_timer_interval(&mut self, interval_ms: f64, wake_task: Option<TaskId>) -> SyscallResult<TimerId> {
+        if interval_ms <= 0.0 {
+            return Err(SyscallError::InvalidArgument);
+        }
+        Ok(self.timers.schedule_interval(interval_ms, self.now, wake_task))
+    }
+
+    /// Cancel a timer
+    pub fn sys_timer_cancel(&mut self, timer_id: TimerId) -> SyscallResult<bool> {
+        Ok(self.timers.cancel(timer_id))
+    }
+
+    /// Check if a timer is pending
+    pub fn sys_timer_pending(&self, timer_id: TimerId) -> SyscallResult<bool> {
+        Ok(self.timers.is_pending(timer_id))
+    }
+
+    /// Get time until next timer fires (for sleep optimization)
+    pub fn time_until_next_timer(&self) -> Option<f64> {
+        self.timers.time_until_next(self.now)
+    }
+
+    /// Get pending timer count
+    pub fn pending_timer_count(&self) -> usize {
+        self.timers.pending_count()
+    }
+
+    /// Tick timers, returning tasks to wake
+    pub fn tick_timers(&mut self) -> Vec<TaskId> {
+        self.timers.tick(self.now)
+    }
+
+    /// Set an alarm for the current process (SIGALRM after delay)
+    pub fn sys_alarm(&mut self, delay_ms: f64) -> SyscallResult<TimerId> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get(&current).ok_or(SyscallError::NoProcess)?;
+        let task = process.task;
+        self.sys_timer_set(delay_ms, task)
+    }
+
+    // ========== SIGNAL SYSCALLS ==========
+
+    /// Send a signal to a process
+    pub fn sys_kill(&mut self, pid: Pid, signal: Signal) -> SyscallResult<()> {
+        let process = self.processes.get_mut(&pid).ok_or(SyscallError::NoProcess)?;
+
+        // Can't signal zombies
+        if matches!(process.state, ProcessState::Zombie(_)) {
+            return Err(SyscallError::NoProcess);
+        }
+
+        // Queue the signal
+        process.signals.send(signal);
+
+        Ok(())
+    }
+
+    /// Set signal handler for current process
+    pub fn sys_signal(&mut self, signal: Signal, action: SignalAction) -> SyscallResult<SignalAction> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get_mut(&current).ok_or(SyscallError::NoProcess)?;
+
+        let old_action = process.signals.disposition.get_action(signal);
+        process.signals.disposition.set_action(signal, action)?;
+
+        Ok(old_action)
+    }
+
+    /// Block a signal for current process
+    pub fn sys_sigblock(&mut self, signal: Signal) -> SyscallResult<()> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get_mut(&current).ok_or(SyscallError::NoProcess)?;
+        process.signals.block(signal)?;
+        Ok(())
+    }
+
+    /// Unblock a signal for current process
+    pub fn sys_sigunblock(&mut self, signal: Signal) -> SyscallResult<()> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get_mut(&current).ok_or(SyscallError::NoProcess)?;
+        process.signals.unblock(signal);
+        Ok(())
+    }
+
+    /// Check if current process has pending signals
+    pub fn sys_sigpending(&self) -> SyscallResult<bool> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get(&current).ok_or(SyscallError::NoProcess)?;
+        Ok(process.signals.has_pending())
+    }
+
+    /// Process pending signals for a process, returns action to take
+    pub fn process_signals(&mut self, pid: Pid) -> Option<(Signal, SignalAction)> {
+        let process = self.processes.get_mut(&pid)?;
+
+        // Get next pending signal
+        let signal = process.signals.next_pending()?;
+
+        // Resolve the action
+        let action = resolve_action(signal, &process.signals.disposition);
+
+        // Apply immediate actions
+        match action {
+            SignalAction::Kill | SignalAction::Terminate => {
+                process.state = ProcessState::Zombie(-(signal.num() as i32));
+            }
+            SignalAction::Stop => {
+                process.state = ProcessState::Stopped;
+                process.signals.stop();
+            }
+            SignalAction::Continue => {
+                if process.state == ProcessState::Stopped {
+                    process.state = ProcessState::Running;
+                }
+                process.signals.cont();
+            }
+            SignalAction::Ignore => {
+                // Nothing to do
+            }
+            SignalAction::Handle | SignalAction::Default => {
+                // Handler will be called by caller
+            }
+        }
+
+        Some((signal, action))
+    }
+
+    /// Get process state
+    pub fn get_process_state(&self, pid: Pid) -> Option<ProcessState> {
+        self.processes.get(&pid).map(|p| p.state.clone())
+    }
+
+    /// List all processes
+    pub fn list_processes(&self) -> Vec<(Pid, String, ProcessState)> {
+        self.processes
+            .values()
+            .map(|p| (p.pid, p.name.clone(), p.state.clone()))
+            .collect()
+    }
 }
 
 impl Default for Kernel {
@@ -846,6 +1086,140 @@ pub fn set_memlimit(limit: usize) -> SyscallResult<()> {
 /// Get system-wide memory stats
 pub fn system_memstats() -> SyscallResult<SystemMemoryStats> {
     KERNEL.with(|k| k.borrow().sys_system_memstats())
+}
+
+// ========== TIMER API ==========
+
+/// Get current kernel time (monotonic ms)
+pub fn now() -> f64 {
+    KERNEL.with(|k| k.borrow().sys_now())
+}
+
+/// Set current time (called from runtime)
+pub fn set_time(time: f64) {
+    KERNEL.with(|k| k.borrow_mut().set_time(time))
+}
+
+/// Schedule a one-shot timer
+pub fn timer_set(delay_ms: f64, wake_task: Option<TaskId>) -> SyscallResult<TimerId> {
+    KERNEL.with(|k| k.borrow_mut().sys_timer_set(delay_ms, wake_task))
+}
+
+/// Schedule a repeating interval timer
+pub fn timer_interval(interval_ms: f64, wake_task: Option<TaskId>) -> SyscallResult<TimerId> {
+    KERNEL.with(|k| k.borrow_mut().sys_timer_interval(interval_ms, wake_task))
+}
+
+/// Cancel a timer
+pub fn timer_cancel(timer_id: TimerId) -> SyscallResult<bool> {
+    KERNEL.with(|k| k.borrow_mut().sys_timer_cancel(timer_id))
+}
+
+/// Check if a timer is pending
+pub fn timer_pending(timer_id: TimerId) -> SyscallResult<bool> {
+    KERNEL.with(|k| k.borrow().sys_timer_pending(timer_id))
+}
+
+/// Set an alarm (sends SIGALRM to current process after delay)
+pub fn alarm(delay_ms: f64) -> SyscallResult<TimerId> {
+    KERNEL.with(|k| k.borrow_mut().sys_alarm(delay_ms))
+}
+
+/// Get time until next timer fires
+pub fn time_until_next_timer() -> Option<f64> {
+    KERNEL.with(|k| k.borrow().time_until_next_timer())
+}
+
+/// Get pending timer count
+pub fn pending_timer_count() -> usize {
+    KERNEL.with(|k| k.borrow().pending_timer_count())
+}
+
+/// Tick timers and return tasks to wake (call from runtime)
+pub fn tick_timers() -> Vec<TaskId> {
+    KERNEL.with(|k| k.borrow_mut().tick_timers())
+}
+
+// ========== SIGNAL API ==========
+
+/// Send a signal to a process
+pub fn kill(pid: Pid, signal: Signal) -> SyscallResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_kill(pid, signal))
+}
+
+/// Set signal handler for current process
+pub fn signal(sig: Signal, action: SignalAction) -> SyscallResult<SignalAction> {
+    KERNEL.with(|k| k.borrow_mut().sys_signal(sig, action))
+}
+
+/// Block a signal
+pub fn sigblock(sig: Signal) -> SyscallResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_sigblock(sig))
+}
+
+/// Unblock a signal
+pub fn sigunblock(sig: Signal) -> SyscallResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_sigunblock(sig))
+}
+
+/// Check for pending signals
+pub fn sigpending() -> SyscallResult<bool> {
+    KERNEL.with(|k| k.borrow().sys_sigpending())
+}
+
+/// Process signals for a process (call from runtime)
+pub fn process_signals(pid: Pid) -> Option<(Signal, SignalAction)> {
+    KERNEL.with(|k| k.borrow_mut().process_signals(pid))
+}
+
+/// Get process state
+pub fn get_process_state(pid: Pid) -> Option<ProcessState> {
+    KERNEL.with(|k| k.borrow().get_process_state(pid))
+}
+
+/// List all processes
+pub fn list_processes() -> Vec<(Pid, String, ProcessState)> {
+    KERNEL.with(|k| k.borrow().list_processes())
+}
+
+// ========== Tracing API ==========
+
+/// Enable tracing
+pub fn trace_enable() {
+    KERNEL.with(|k| k.borrow_mut().trace_enable())
+}
+
+/// Disable tracing
+pub fn trace_disable() {
+    KERNEL.with(|k| k.borrow_mut().trace_disable())
+}
+
+/// Check if tracing is enabled
+pub fn trace_enabled() -> bool {
+    KERNEL.with(|k| k.borrow().trace_enabled())
+}
+
+/// Get trace summary
+pub fn trace_summary() -> TraceSummary {
+    KERNEL.with(|k| k.borrow().trace_summary())
+}
+
+/// Reset trace data
+pub fn trace_reset() {
+    KERNEL.with(|k| k.borrow_mut().trace_reset())
+}
+
+/// Trace a custom event
+pub fn trace_event(category: TraceCategory, name: &str, detail: Option<&str>) {
+    KERNEL.with(|k| {
+        let mut kernel = k.borrow_mut();
+        let now = kernel.now;
+        if let Some(d) = detail {
+            kernel.tracer_mut().trace_detail(now, category, name, d);
+        } else {
+            kernel.tracer_mut().trace_instant(now, category, name);
+        }
+    })
 }
 
 #[cfg(test)]
@@ -1170,5 +1544,274 @@ mod tests {
         assert!(result.is_err());
 
         mem_free(region).unwrap();
+    }
+
+    // ========== Timer Tests ==========
+
+    #[test]
+    fn test_timer_set() {
+        setup_test_kernel();
+
+        // Set a timer (no task to wake, just testing the timer itself)
+        let timer_id = timer_set(100.0, None).unwrap();
+        assert!(timer_id.0 > 0);
+
+        // Timer should be pending
+        KERNEL.with(|k| {
+            let kernel = k.borrow();
+            assert!(kernel.timers.is_pending(timer_id));
+        });
+
+        // Cancel it
+        assert!(timer_cancel(timer_id).unwrap());
+
+        // Timer should no longer be pending
+        KERNEL.with(|k| {
+            let kernel = k.borrow();
+            assert!(!kernel.timers.is_pending(timer_id));
+        });
+    }
+
+    #[test]
+    fn test_timer_tick() {
+        setup_test_kernel();
+
+        // Set timers at different times (no tasks to wake)
+        let _t1 = timer_set(50.0, None).unwrap();
+        let _t2 = timer_set(100.0, None).unwrap();
+        let _t3 = timer_set(150.0, None).unwrap();
+
+        // Tick at time 75 - t1 should fire (but no task woken since wake_task=None)
+        KERNEL.with(|k| {
+            let mut kernel = k.borrow_mut();
+            let woken = kernel.tick(75.0);
+            assert_eq!(woken.len(), 0); // No tasks because we passed None
+            assert_eq!(kernel.pending_timer_count(), 2); // 2 timers left
+        });
+
+        // Tick at time 125 - t2 should fire
+        KERNEL.with(|k| {
+            let mut kernel = k.borrow_mut();
+            kernel.tick(125.0);
+            assert_eq!(kernel.pending_timer_count(), 1); // 1 timer left
+        });
+
+        // Tick at time 200 - t3 should fire
+        KERNEL.with(|k| {
+            let mut kernel = k.borrow_mut();
+            kernel.tick(200.0);
+            assert_eq!(kernel.pending_timer_count(), 0); // No timers left
+        });
+    }
+
+    #[test]
+    fn test_timer_interval() {
+        setup_test_kernel();
+
+        // Set an interval timer (fires every 50ms)
+        let timer_id = timer_interval(50.0, None).unwrap();
+
+        // Tick at 50 - fires
+        KERNEL.with(|k| {
+            let mut kernel = k.borrow_mut();
+            kernel.tick(50.0);
+            // Timer should still be pending (it repeats)
+            assert!(kernel.timers.is_pending(timer_id));
+        });
+
+        // Tick at 100 - fires again
+        KERNEL.with(|k| {
+            let mut kernel = k.borrow_mut();
+            kernel.tick(100.0);
+            assert!(kernel.timers.is_pending(timer_id));
+        });
+
+        // Cancel it
+        timer_cancel(timer_id).unwrap();
+
+        // Timer should not be pending anymore
+        KERNEL.with(|k| {
+            let kernel = k.borrow();
+            assert!(!kernel.timers.is_pending(timer_id));
+        });
+    }
+
+    // ========== Signal Tests ==========
+
+    #[test]
+    fn test_signal_basic() {
+        setup_test_kernel();
+
+        // Create another process to signal
+        let target_pid = KERNEL.with(|k| {
+            let mut kernel = k.borrow_mut();
+            kernel.spawn_process("target", None)
+        });
+
+        // Send SIGUSR1 to the target
+        kill(target_pid, Signal::SIGUSR1).unwrap();
+
+        // Check that the signal is pending
+        KERNEL.with(|k| {
+            let kernel = k.borrow();
+            let process = kernel.get_process(target_pid).unwrap();
+            assert!(process.signals.has_pending());
+        });
+    }
+
+    #[test]
+    fn test_signal_block_unblock() {
+        setup_test_kernel();
+
+        // Block SIGUSR1
+        sigblock(Signal::SIGUSR1).unwrap();
+
+        // Self-signal
+        let my_pid = getpid().unwrap();
+        kill(my_pid, Signal::SIGUSR1).unwrap();
+
+        // Should not have pending (blocked signals don't count as "has_pending")
+        KERNEL.with(|k| {
+            let kernel = k.borrow();
+            let process = kernel.get_process(my_pid).unwrap();
+            assert!(!process.signals.has_pending());
+        });
+
+        // Unblock
+        sigunblock(Signal::SIGUSR1).unwrap();
+
+        // Now should have pending
+        KERNEL.with(|k| {
+            let kernel = k.borrow();
+            let process = kernel.get_process(my_pid).unwrap();
+            assert!(process.signals.has_pending());
+        });
+    }
+
+    #[test]
+    fn test_signal_disposition() {
+        setup_test_kernel();
+
+        // Set SIGTERM to ignore
+        signal(Signal::SIGTERM, SignalAction::Ignore).unwrap();
+
+        KERNEL.with(|k| {
+            let kernel = k.borrow();
+            let pid = kernel.current.unwrap();
+            let process = kernel.get_process(pid).unwrap();
+            assert_eq!(
+                process.signals.disposition.get_action(Signal::SIGTERM),
+                SignalAction::Ignore
+            );
+        });
+
+        // Cannot set SIGKILL disposition
+        let result = signal(Signal::SIGKILL, SignalAction::Ignore);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_sigkill_terminates() {
+        setup_test_kernel();
+
+        // Create a process to kill
+        let target_pid = KERNEL.with(|k| {
+            let mut kernel = k.borrow_mut();
+            kernel.spawn_process("victim", None)
+        });
+
+        // Send SIGKILL
+        kill(target_pid, Signal::SIGKILL).unwrap();
+
+        // Process should be a zombie now
+        KERNEL.with(|k| {
+            let kernel = k.borrow();
+            let process = kernel.get_process(target_pid).unwrap();
+            matches!(process.state, ProcessState::Zombie(_));
+        });
+    }
+
+    #[test]
+    fn test_sigpending() {
+        setup_test_kernel();
+
+        let my_pid = getpid().unwrap();
+
+        // No pending signals initially
+        let has_pending = sigpending().unwrap();
+        assert!(!has_pending);
+
+        // Send a signal
+        kill(my_pid, Signal::SIGUSR1).unwrap();
+
+        // Now has pending
+        let has_pending = sigpending().unwrap();
+        assert!(has_pending);
+    }
+
+    // ========== Tracing Tests ==========
+
+    #[test]
+    fn test_trace_enable_disable() {
+        setup_test_kernel();
+
+        assert!(!trace_enabled());
+
+        trace_enable();
+        assert!(trace_enabled());
+
+        trace_disable();
+        assert!(!trace_enabled());
+    }
+
+    #[test]
+    fn test_trace_summary() {
+        setup_test_kernel();
+
+        trace_enable();
+
+        // Get summary
+        let summary = trace_summary();
+        assert!(summary.enabled);
+        assert_eq!(summary.syscall_count, 0);
+    }
+
+    #[test]
+    fn test_trace_reset() {
+        setup_test_kernel();
+
+        trace_enable();
+
+        // Record some trace events
+        trace_event(TraceCategory::Custom, "test", Some("detail"));
+
+        KERNEL.with(|k| {
+            assert!(k.borrow().tracer().events().len() > 0);
+        });
+
+        trace_reset();
+
+        KERNEL.with(|k| {
+            assert_eq!(k.borrow().tracer().events().len(), 0);
+        });
+    }
+
+    #[test]
+    fn test_trace_custom_event() {
+        setup_test_kernel();
+
+        trace_enable();
+
+        trace_event(TraceCategory::Custom, "my_event", Some("custom detail"));
+        trace_event(TraceCategory::Syscall, "open", None);
+
+        KERNEL.with(|k| {
+            let events = k.borrow().tracer().events().clone();
+            assert_eq!(events.len(), 2);
+            assert_eq!(events[0].name, "my_event");
+            assert_eq!(events[0].detail, Some("custom detail".to_string()));
+            assert_eq!(events[1].name, "open");
+            assert!(events[1].detail.is_none());
+        });
     }
 }
