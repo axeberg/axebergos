@@ -150,6 +150,11 @@ impl Kernel {
         let mut process = Process::new(pid, name.to_string(), parent);
 
         // Give the process stdin/stdout/stderr pointing to console
+        // Retain the console handle for each fd (3 references)
+        self.objects.retain(self.console_handle);
+        self.objects.retain(self.console_handle);
+        self.objects.retain(self.console_handle);
+
         process.files.insert(Fd::STDIN, self.console_handle);
         process.files.insert(Fd::STDOUT, self.console_handle);
         process.files.insert(Fd::STDERR, self.console_handle);
@@ -219,19 +224,20 @@ impl Kernel {
 
         let handle = process.files.remove(fd).ok_or(SyscallError::BadFd)?;
 
-        // Sync file to VFS if it's a file
+        // Sync file to VFS if it's a file (before potential release)
         if let Some(KernelObject::File(_)) = self.objects.get(handle) {
             self.sync_file(handle)?;
         }
 
-        // Close VFS handle if present
-        if let Some(vh) = self.vfs_handles.remove(&handle) {
-            let _ = self.vfs.close(vh);
+        // Release the handle (decrements refcount)
+        // If refcount drops to 0, the object is removed
+        if let Some(_removed_object) = self.objects.release(handle) {
+            // Object was deallocated - clean up VFS handle if present
+            if let Some(vh) = self.vfs_handles.remove(&handle) {
+                let _ = self.vfs.close(vh);
+            }
         }
 
-        // Note: we don't remove the object from the object table here
-        // because other processes might have handles to it
-        // A proper implementation would use reference counting
         Ok(())
     }
 
@@ -276,6 +282,24 @@ impl Kernel {
         let fd = process.files.alloc(handle);
 
         Ok(fd)
+    }
+
+    /// Duplicate a file descriptor
+    pub fn sys_dup(&mut self, fd: Fd) -> SyscallResult<Fd> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get_mut(&current).unwrap();
+
+        // Get the handle for the existing fd
+        let handle = process.files.get(fd).ok_or(SyscallError::BadFd)?;
+
+        // Retain the object (increment refcount)
+        if !self.objects.retain(handle) {
+            return Err(SyscallError::BadFd);
+        }
+
+        // Allocate a new fd pointing to the same handle
+        let new_fd = process.files.alloc(handle);
+        Ok(new_fd)
     }
 
     /// Get current working directory
@@ -530,6 +554,11 @@ pub fn exists(path: &str) -> SyscallResult<bool> {
     KERNEL.with(|k| k.borrow().sys_exists(path))
 }
 
+/// Duplicate a file descriptor
+pub fn dup(fd: Fd) -> SyscallResult<Fd> {
+    KERNEL.with(|k| k.borrow_mut().sys_dup(fd))
+}
+
 /// Spawn a new process (internal, will be expanded)
 pub fn spawn_process(name: &str) -> Pid {
     KERNEL.with(|k| k.borrow_mut().spawn_process(name, None))
@@ -678,5 +707,63 @@ mod tests {
 
         mkdir("/tmp/testdir").unwrap();
         assert!(exists("/tmp/testdir").unwrap());
+    }
+
+    #[test]
+    fn test_dup() {
+        setup_test_kernel();
+
+        // Open a file
+        let fd1 = open("/tmp/dup_test.txt", OpenFlags::WRITE).unwrap();
+        write(fd1, b"hello").unwrap();
+
+        // Dup the fd
+        let fd2 = dup(fd1).unwrap();
+        assert_ne!(fd1, fd2);
+
+        // Both fds can write
+        write(fd2, b" world").unwrap();
+
+        // Close fd1 - file should still be accessible via fd2
+        close(fd1).unwrap();
+
+        // fd2 should still work
+        write(fd2, b"!").unwrap();
+        close(fd2).unwrap();
+
+        // Verify content was written
+        let fd = open("/tmp/dup_test.txt", OpenFlags::READ).unwrap();
+        let mut buf = [0u8; 20];
+        let n = read(fd, &mut buf).unwrap();
+        assert_eq!(&buf[..n], b"hello world!");
+        close(fd).unwrap();
+    }
+
+    #[test]
+    fn test_dup_invalid_fd() {
+        setup_test_kernel();
+
+        // Can't dup an invalid fd
+        assert!(dup(Fd(99)).is_err());
+    }
+
+    #[test]
+    fn test_refcount_with_stdio() {
+        setup_test_kernel();
+
+        // stdout is shared (refcount > 1)
+        // Writing should work
+        write(Fd::STDOUT, b"test").unwrap();
+
+        // Dup stdout
+        let fd = dup(Fd::STDOUT).unwrap();
+
+        // Both can write
+        write(Fd::STDOUT, b" more").unwrap();
+        write(fd, b" stuff").unwrap();
+
+        // Close the dup - stdout should still work
+        close(fd).unwrap();
+        write(Fd::STDOUT, b"!").unwrap();
     }
 }

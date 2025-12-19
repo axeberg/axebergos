@@ -410,10 +410,22 @@ impl DirectoryObject {
     }
 }
 
-/// The object table - maps handles to objects
+/// An entry in the object table with reference count
+struct ObjectEntry {
+    object: KernelObject,
+    refcount: usize,
+}
+
+/// The object table - maps handles to reference-counted objects
+///
+/// Reference counting rules:
+/// - insert() creates an object with refcount 1
+/// - retain() increments refcount (when duplicating a handle)
+/// - release() decrements refcount, removes object when it reaches 0
+/// - Objects are only deallocated when refcount drops to 0
 pub struct ObjectTable {
     next_id: u64,
-    objects: HashMap<Handle, KernelObject>,
+    objects: HashMap<Handle, ObjectEntry>,
 }
 
 impl ObjectTable {
@@ -424,27 +436,82 @@ impl ObjectTable {
         }
     }
 
-    /// Insert a new object and return its handle
+    /// Insert a new object and return its handle (refcount starts at 1)
     pub fn insert(&mut self, obj: KernelObject) -> Handle {
         let handle = Handle(self.next_id);
         self.next_id += 1;
-        self.objects.insert(handle, obj);
+        self.objects.insert(
+            handle,
+            ObjectEntry {
+                object: obj,
+                refcount: 1,
+            },
+        );
         handle
+    }
+
+    /// Increment the reference count for a handle
+    /// Returns true if the handle exists, false otherwise
+    pub fn retain(&mut self, handle: Handle) -> bool {
+        if let Some(entry) = self.objects.get_mut(&handle) {
+            entry.refcount += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Decrement the reference count for a handle
+    /// Returns the object if refcount drops to 0 (object is removed)
+    /// Returns None if handle doesn't exist or refcount is still > 0
+    pub fn release(&mut self, handle: Handle) -> Option<KernelObject> {
+        let should_remove = {
+            if let Some(entry) = self.objects.get_mut(&handle) {
+                entry.refcount = entry.refcount.saturating_sub(1);
+                entry.refcount == 0
+            } else {
+                return None;
+            }
+        };
+
+        if should_remove {
+            self.objects.remove(&handle).map(|e| e.object)
+        } else {
+            None
+        }
+    }
+
+    /// Get the current reference count for a handle
+    pub fn refcount(&self, handle: Handle) -> usize {
+        self.objects
+            .get(&handle)
+            .map(|e| e.refcount)
+            .unwrap_or(0)
     }
 
     /// Get an object by handle
     pub fn get(&self, handle: Handle) -> Option<&KernelObject> {
-        self.objects.get(&handle)
+        self.objects.get(&handle).map(|e| &e.object)
     }
 
     /// Get a mutable object by handle
     pub fn get_mut(&mut self, handle: Handle) -> Option<&mut KernelObject> {
-        self.objects.get_mut(&handle)
+        self.objects.get_mut(&handle).map(|e| &mut e.object)
     }
 
-    /// Remove an object
-    pub fn remove(&mut self, handle: Handle) -> Option<KernelObject> {
-        self.objects.remove(&handle)
+    /// Check if a handle exists
+    pub fn contains(&self, handle: Handle) -> bool {
+        self.objects.contains_key(&handle)
+    }
+
+    /// Get total number of objects
+    pub fn len(&self) -> usize {
+        self.objects.len()
+    }
+
+    /// Check if table is empty
+    pub fn is_empty(&self) -> bool {
+        self.objects.is_empty()
     }
 }
 
@@ -519,7 +586,7 @@ mod tests {
     }
 
     #[test]
-    fn test_object_table() {
+    fn test_object_table_basic() {
         let mut table = ObjectTable::new();
 
         let h1 = table.insert(KernelObject::Console(ConsoleObject::new()));
@@ -528,8 +595,91 @@ mod tests {
         assert!(table.get(h1).is_some());
         assert!(table.get(h2).is_some());
         assert!(table.get(Handle::NULL).is_none());
+        assert_eq!(table.len(), 2);
 
-        table.remove(h1);
+        // Release with refcount 1 should remove
+        let removed = table.release(h1);
+        assert!(removed.is_some());
         assert!(table.get(h1).is_none());
+        assert_eq!(table.len(), 1);
+    }
+
+    #[test]
+    fn test_refcount_initial() {
+        let mut table = ObjectTable::new();
+        let h = table.insert(KernelObject::Console(ConsoleObject::new()));
+
+        // Initial refcount is 1
+        assert_eq!(table.refcount(h), 1);
+    }
+
+    #[test]
+    fn test_refcount_retain() {
+        let mut table = ObjectTable::new();
+        let h = table.insert(KernelObject::Console(ConsoleObject::new()));
+
+        // Retain increments refcount
+        assert!(table.retain(h));
+        assert_eq!(table.refcount(h), 2);
+
+        assert!(table.retain(h));
+        assert_eq!(table.refcount(h), 3);
+
+        // Retain on invalid handle returns false
+        assert!(!table.retain(Handle::NULL));
+    }
+
+    #[test]
+    fn test_refcount_release() {
+        let mut table = ObjectTable::new();
+        let h = table.insert(KernelObject::Console(ConsoleObject::new()));
+
+        // Add more refs
+        table.retain(h);
+        table.retain(h);
+        assert_eq!(table.refcount(h), 3);
+
+        // Release doesn't remove until refcount hits 0
+        assert!(table.release(h).is_none());
+        assert_eq!(table.refcount(h), 2);
+        assert!(table.get(h).is_some());
+
+        assert!(table.release(h).is_none());
+        assert_eq!(table.refcount(h), 1);
+        assert!(table.get(h).is_some());
+
+        // Final release removes the object
+        let removed = table.release(h);
+        assert!(removed.is_some());
+        assert_eq!(table.refcount(h), 0);
+        assert!(table.get(h).is_none());
+    }
+
+    #[test]
+    fn test_refcount_shared_handle() {
+        let mut table = ObjectTable::new();
+        let h = table.insert(KernelObject::Pipe(PipeObject::new(1024)));
+
+        // Simulate sharing: two processes have the same handle
+        table.retain(h); // Second process gets it
+        assert_eq!(table.refcount(h), 2);
+
+        // First process closes
+        assert!(table.release(h).is_none());
+        assert!(table.get(h).is_some()); // Still exists
+
+        // Second process closes
+        let removed = table.release(h);
+        assert!(removed.is_some()); // Now gone
+        assert!(table.get(h).is_none());
+    }
+
+    #[test]
+    fn test_release_invalid_handle() {
+        let mut table = ObjectTable::new();
+
+        // Release on non-existent handle returns None
+        assert!(table.release(Handle(999)).is_none());
+        assert!(table.release(Handle::NULL).is_none());
     }
 }
