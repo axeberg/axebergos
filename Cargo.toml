@@ -8,6 +8,10 @@ license = "MIT"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[[bin]]
+name = "serve"
+path = "src/bin/serve.rs"
+
 [features]
 default = ["console_error_panic_hook"]
 
@@ -32,6 +36,10 @@ features = [
     "Document",
     "Performance",
 ]
+
+# Dev server (native only, not compiled to WASM)
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tiny_http = "0.12"
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"

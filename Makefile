@@ -8,10 +8,9 @@ build:
 dev:
 	wasm-pack build --target web --dev
 
-# Run a local server for testing
-# Install with: cargo install miniserve
+# Run the built-in dev server
 serve: build
-	miniserve --index index.html -p 8080 .
+	cargo run --bin serve
 
 # Type check without building
 check:
