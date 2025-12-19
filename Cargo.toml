@@ -1,0 +1,41 @@
+[package]
+name = "axeberg"
+version = "0.1.0"
+edition = "2024"
+description = "A personal mini-OS in Rust, compiled to WASM"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["console_error_panic_hook"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+console_error_panic_hook = { version = "0.1", optional = true }
+
+# Async runtime - we build our own executor but need futures
+futures = "0.3"
+pin-project-lite = "0.2"
+
+# For the VFS - efficient handle allocation
+slab = "0.4"
+
+[dependencies.web-sys]
+version = "0.3"
+features = [
+    "console",
+    "Window",
+    "Document",
+    "Performance",
+]
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+[profile.release]
+opt-level = "s"
+lto = true

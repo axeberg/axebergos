@@ -1,0 +1,133 @@
+//! Virtual File System
+//!
+//! A minimal VFS that provides a unified interface over different backends.
+//! Start with in-memory, add OPFS persistence later.
+//!
+//! Design: trait-based abstraction, keeping it simple.
+
+pub mod memory;
+
+pub use memory::MemoryFs;
+
+use std::io;
+
+/// A file handle
+pub type FileHandle = usize;
+
+/// File open modes
+#[derive(Debug, Clone, Copy)]
+pub struct OpenOptions {
+    pub read: bool,
+    pub write: bool,
+    pub create: bool,
+    pub truncate: bool,
+}
+
+impl Default for OpenOptions {
+    fn default() -> Self {
+        Self {
+            read: true,
+            write: false,
+            create: false,
+            truncate: false,
+        }
+    }
+}
+
+impl OpenOptions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn read(mut self, read: bool) -> Self {
+        self.read = read;
+        self
+    }
+
+    pub fn write(mut self, write: bool) -> Self {
+        self.write = write;
+        self
+    }
+
+    pub fn create(mut self, create: bool) -> Self {
+        self.create = create;
+        self
+    }
+
+    pub fn truncate(mut self, truncate: bool) -> Self {
+        self.truncate = truncate;
+        self
+    }
+}
+
+/// File metadata
+#[derive(Debug, Clone)]
+pub struct Metadata {
+    pub size: u64,
+    pub is_dir: bool,
+    pub is_file: bool,
+}
+
+/// Directory entry
+#[derive(Debug, Clone)]
+pub struct DirEntry {
+    pub name: String,
+    pub is_dir: bool,
+}
+
+/// The FileSystem trait - implement this for different backends
+pub trait FileSystem {
+    /// Open a file, returning a handle
+    fn open(&mut self, path: &str, options: OpenOptions) -> io::Result<FileHandle>;
+
+    /// Close a file handle
+    fn close(&mut self, handle: FileHandle) -> io::Result<()>;
+
+    /// Read from a file
+    fn read(&mut self, handle: FileHandle, buf: &mut [u8]) -> io::Result<usize>;
+
+    /// Write to a file
+    fn write(&mut self, handle: FileHandle, buf: &[u8]) -> io::Result<usize>;
+
+    /// Seek within a file
+    fn seek(&mut self, handle: FileHandle, pos: io::SeekFrom) -> io::Result<u64>;
+
+    /// Get file metadata
+    fn metadata(&self, path: &str) -> io::Result<Metadata>;
+
+    /// Create a directory
+    fn create_dir(&mut self, path: &str) -> io::Result<()>;
+
+    /// Read directory contents
+    fn read_dir(&self, path: &str) -> io::Result<Vec<DirEntry>>;
+
+    /// Remove a file
+    fn remove_file(&mut self, path: &str) -> io::Result<()>;
+
+    /// Remove a directory
+    fn remove_dir(&mut self, path: &str) -> io::Result<()>;
+
+    /// Check if path exists
+    fn exists(&self, path: &str) -> bool;
+}
+
+/// Convenience wrapper for reading entire file to string
+pub fn read_to_string<F: FileSystem>(fs: &mut F, path: &str) -> io::Result<String> {
+    let handle = fs.open(path, OpenOptions::new().read(true))?;
+    let meta = fs.metadata(path)?;
+    let mut buf = vec![0u8; meta.size as usize];
+    fs.read(handle, &mut buf)?;
+    fs.close(handle)?;
+    String::from_utf8(buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+/// Convenience wrapper for writing string to file
+pub fn write_string<F: FileSystem>(fs: &mut F, path: &str, content: &str) -> io::Result<()> {
+    let handle = fs.open(
+        path,
+        OpenOptions::new().write(true).create(true).truncate(true),
+    )?;
+    fs.write(handle, content.as_bytes())?;
+    fs.close(handle)?;
+    Ok(())
+}

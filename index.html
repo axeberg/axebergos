@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>axeberg</title>
+    <style>
+        :root {
+            --bg: #0a0a0a;
+            --fg: #e0e0e0;
+            --accent: #7aa2f7;
+            --dim: #565f89;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: var(--bg);
+            color: var(--fg);
+            font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace;
+            font-size: 14px;
+            line-height: 1.6;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #boot-log {
+            flex: 1;
+            padding: 24px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .log-line {
+            opacity: 0;
+            animation: fadeIn 0.15s ease forwards;
+        }
+
+        @keyframes fadeIn {
+            to { opacity: 1; }
+        }
+
+        .accent { color: var(--accent); }
+        .dim { color: var(--dim); }
+
+        #loading {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+        }
+
+        #loading.hidden {
+            display: none;
+        }
+
+        .spinner {
+            width: 24px;
+            height: 24px;
+            border: 2px solid var(--dim);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 16px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div id="loading">
+        <div class="spinner"></div>
+        <div class="dim">Loading axeberg...</div>
+    </div>
+    <div id="boot-log"></div>
+
+    <script type="module">
+        // Intercept console.log to display in our boot log
+        const bootLog = document.getElementById('boot-log');
+        const loading = document.getElementById('loading');
+        const originalLog = console.log;
+
+        console.log = (...args) => {
+            originalLog.apply(console, args);
+
+            const line = document.createElement('div');
+            line.className = 'log-line';
+            line.textContent = args.join(' ');
+            bootLog.appendChild(line);
+            bootLog.scrollTop = bootLog.scrollHeight;
+        };
+
+        // Load and run the WASM module
+        async function boot() {
+            try {
+                const { default: init } = await import('./pkg/axeberg.js');
+                loading.classList.add('hidden');
+                await init();
+            } catch (e) {
+                loading.classList.add('hidden');
+                console.log(`[error] Failed to load: ${e.message}`);
+                console.log('[error] Run: wasm-pack build --target web');
+            }
+        }
+
+        boot();
+    </script>
+</body>
+</html>
