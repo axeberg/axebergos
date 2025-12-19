@@ -420,4 +420,204 @@ mod tests {
         assert_eq!(&buf, b"hello world");
         fs.close(handle).unwrap();
     }
+
+    #[test]
+    fn test_root_exists() {
+        let fs = MemoryFs::new();
+        assert!(fs.exists("/"));
+        assert!(fs.metadata("/").unwrap().is_dir);
+    }
+
+    #[test]
+    fn test_create_directory() {
+        let mut fs = MemoryFs::new();
+
+        fs.create_dir("/home").unwrap();
+        assert!(fs.exists("/home"));
+        assert!(fs.metadata("/home").unwrap().is_dir);
+    }
+
+    #[test]
+    fn test_nested_directories() {
+        let mut fs = MemoryFs::new();
+
+        fs.create_dir("/home").unwrap();
+        fs.create_dir("/home/user").unwrap();
+        fs.create_dir("/home/user/docs").unwrap();
+
+        assert!(fs.exists("/home/user/docs"));
+    }
+
+    #[test]
+    fn test_create_dir_without_parent_fails() {
+        let mut fs = MemoryFs::new();
+
+        let result = fs.create_dir("/home/user");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_file_not_found() {
+        let mut fs = MemoryFs::new();
+
+        let result = fs.open("/nonexistent.txt", OpenOptions::new().read(true));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_create_file() {
+        let mut fs = MemoryFs::new();
+
+        let handle = fs
+            .open("/test.txt", OpenOptions::new().write(true).create(true))
+            .unwrap();
+        fs.close(handle).unwrap();
+
+        assert!(fs.exists("/test.txt"));
+        assert!(fs.metadata("/test.txt").unwrap().is_file);
+    }
+
+    #[test]
+    fn test_truncate() {
+        let mut fs = MemoryFs::new();
+
+        // Write initial content
+        let handle = fs
+            .open("/test.txt", OpenOptions::new().write(true).create(true))
+            .unwrap();
+        fs.write(handle, b"hello world").unwrap();
+        fs.close(handle).unwrap();
+
+        // Truncate and write new content
+        let handle = fs
+            .open(
+                "/test.txt",
+                OpenOptions::new().write(true).truncate(true),
+            )
+            .unwrap();
+        fs.write(handle, b"hi").unwrap();
+        fs.close(handle).unwrap();
+
+        // Verify
+        assert_eq!(fs.metadata("/test.txt").unwrap().size, 2);
+    }
+
+    #[test]
+    fn test_seek() {
+        let mut fs = MemoryFs::new();
+
+        let handle = fs
+            .open("/test.txt", OpenOptions::new().write(true).create(true))
+            .unwrap();
+        fs.write(handle, b"hello world").unwrap();
+        fs.close(handle).unwrap();
+
+        let handle = fs
+            .open("/test.txt", OpenOptions::new().read(true))
+            .unwrap();
+
+        // Seek to position 6
+        fs.seek(handle, SeekFrom::Start(6)).unwrap();
+
+        let mut buf = [0u8; 5];
+        fs.read(handle, &mut buf).unwrap();
+        assert_eq!(&buf, b"world");
+
+        fs.close(handle).unwrap();
+    }
+
+    #[test]
+    fn test_read_dir() {
+        let mut fs = MemoryFs::new();
+
+        fs.create_dir("/home").unwrap();
+        let _ = fs
+            .open("/home/file1.txt", OpenOptions::new().write(true).create(true))
+            .unwrap();
+        let _ = fs
+            .open("/home/file2.txt", OpenOptions::new().write(true).create(true))
+            .unwrap();
+        fs.create_dir("/home/subdir").unwrap();
+
+        let entries = fs.read_dir("/home").unwrap();
+        assert_eq!(entries.len(), 3);
+
+        let names: Vec<_> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"file1.txt"));
+        assert!(names.contains(&"file2.txt"));
+        assert!(names.contains(&"subdir"));
+    }
+
+    #[test]
+    fn test_remove_file() {
+        let mut fs = MemoryFs::new();
+
+        let handle = fs
+            .open("/test.txt", OpenOptions::new().write(true).create(true))
+            .unwrap();
+        fs.close(handle).unwrap();
+
+        assert!(fs.exists("/test.txt"));
+        fs.remove_file("/test.txt").unwrap();
+        assert!(!fs.exists("/test.txt"));
+    }
+
+    #[test]
+    fn test_remove_empty_dir() {
+        let mut fs = MemoryFs::new();
+
+        fs.create_dir("/empty").unwrap();
+        fs.remove_dir("/empty").unwrap();
+        assert!(!fs.exists("/empty"));
+    }
+
+    #[test]
+    fn test_remove_nonempty_dir_fails() {
+        let mut fs = MemoryFs::new();
+
+        fs.create_dir("/dir").unwrap();
+        let handle = fs
+            .open("/dir/file.txt", OpenOptions::new().write(true).create(true))
+            .unwrap();
+        fs.close(handle).unwrap();
+
+        let result = fs.remove_dir("/dir");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cannot_remove_root() {
+        let mut fs = MemoryFs::new();
+
+        let result = fs.remove_dir("/");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_path_normalization() {
+        let mut fs = MemoryFs::new();
+
+        fs.create_dir("/home").unwrap();
+
+        // Both should refer to same directory
+        assert!(fs.exists("/home"));
+        assert!(fs.exists("/home/"));
+        assert!(fs.exists("home"));
+    }
+
+    #[test]
+    fn test_file_metadata_size() {
+        let mut fs = MemoryFs::new();
+
+        let handle = fs
+            .open("/test.txt", OpenOptions::new().write(true).create(true))
+            .unwrap();
+        fs.write(handle, b"12345").unwrap();
+        fs.close(handle).unwrap();
+
+        let meta = fs.metadata("/test.txt").unwrap();
+        assert_eq!(meta.size, 5);
+        assert!(meta.is_file);
+        assert!(!meta.is_dir);
+    }
 }

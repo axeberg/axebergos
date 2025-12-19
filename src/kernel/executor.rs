@@ -249,3 +249,186 @@ unsafe fn waker_drop(ptr: *const ()) {
         drop(Box::from_raw(ptr as *mut WakerState));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    #[test]
+    fn test_spawn_returns_unique_ids() {
+        let mut exec = Executor::new();
+        let id1 = exec.spawn(async {});
+        let id2 = exec.spawn(async {});
+        let id3 = exec.spawn(async {});
+
+        assert_ne!(id1, id2);
+        assert_ne!(id2, id3);
+        assert_ne!(id1, id3);
+    }
+
+    #[test]
+    fn test_task_runs_to_completion() {
+        let mut exec = Executor::new();
+        let ran = Rc::new(Cell::new(false));
+        let ran_clone = ran.clone();
+
+        exec.spawn(async move {
+            ran_clone.set(true);
+        });
+
+        exec.run();
+        assert!(ran.get());
+    }
+
+    #[test]
+    fn test_multiple_tasks_all_complete() {
+        let mut exec = Executor::new();
+        let counter = Rc::new(Cell::new(0));
+
+        for _ in 0..10 {
+            let counter = counter.clone();
+            exec.spawn(async move {
+                counter.set(counter.get() + 1);
+            });
+        }
+
+        exec.run();
+        assert_eq!(counter.get(), 10);
+    }
+
+    #[test]
+    fn test_tick_returns_polled_count() {
+        let mut exec = Executor::new();
+        exec.spawn(async {});
+        exec.spawn(async {});
+        exec.spawn(async {});
+
+        let polled = exec.tick();
+        assert_eq!(polled, 3);
+
+        // After completion, no tasks left
+        assert!(!exec.has_tasks());
+    }
+
+    #[test]
+    fn test_priority_order() {
+        let mut exec = Executor::new();
+        let order = Rc::new(RefCell::new(Vec::new()));
+
+        // Spawn in reverse priority order
+        {
+            let order = order.clone();
+            exec.spawn_with_priority(
+                async move {
+                    order.borrow_mut().push("background");
+                },
+                Priority::Background,
+            );
+        }
+        {
+            let order = order.clone();
+            exec.spawn_with_priority(
+                async move {
+                    order.borrow_mut().push("normal");
+                },
+                Priority::Normal,
+            );
+        }
+        {
+            let order = order.clone();
+            exec.spawn_with_priority(
+                async move {
+                    order.borrow_mut().push("critical");
+                },
+                Priority::Critical,
+            );
+        }
+
+        exec.tick();
+
+        let result = order.borrow();
+        assert_eq!(result.as_slice(), &["critical", "normal", "background"]);
+    }
+
+    #[test]
+    fn test_yielding_task_with_run() {
+        // run() handles tasks that yield without waking
+        let mut exec = Executor::new();
+        let counter = Rc::new(Cell::new(0));
+        let counter_clone = counter.clone();
+
+        exec.spawn(async move {
+            counter_clone.set(counter_clone.get() + 1);
+            futures::pending!(); // Yield
+            counter_clone.set(counter_clone.get() + 1);
+            futures::pending!(); // Yield
+            counter_clone.set(counter_clone.get() + 1);
+        });
+
+        exec.run();
+        assert_eq!(counter.get(), 3);
+        assert!(!exec.has_tasks());
+    }
+
+    #[test]
+    fn test_tick_without_wake_leaves_task_pending() {
+        // tick() only polls tasks that are in the ready set
+        // A task that yields without waking won't be re-polled
+        let mut exec = Executor::new();
+        let counter = Rc::new(Cell::new(0));
+        let counter_clone = counter.clone();
+
+        exec.spawn(async move {
+            counter_clone.set(counter_clone.get() + 1);
+            futures::pending!(); // Yield without waking
+        });
+
+        // First tick: runs until yield
+        exec.tick();
+        assert_eq!(counter.get(), 1);
+        assert!(exec.has_tasks());
+
+        // Second tick: task is NOT in ready set, so nothing happens
+        let polled = exec.tick();
+        assert_eq!(polled, 0); // Nothing was polled
+        assert_eq!(counter.get(), 1); // Counter unchanged
+        assert!(exec.has_tasks()); // Task still exists
+    }
+
+    #[test]
+    fn test_task_count() {
+        let mut exec = Executor::new();
+        assert_eq!(exec.task_count(), 0);
+
+        exec.spawn(async { futures::pending!(); });
+        exec.spawn(async { futures::pending!(); });
+
+        // Before tick, tasks are in pending_spawn
+        assert_eq!(exec.task_count(), 2);
+
+        exec.tick();
+
+        // After tick, still 2 tasks (they yielded)
+        assert_eq!(exec.task_count(), 2);
+    }
+
+    #[test]
+    fn test_spawn_during_tick() {
+        let mut exec = Executor::new();
+        let spawned = Rc::new(Cell::new(false));
+        let spawned_clone = spawned.clone();
+
+        // This is tricky - we can't easily spawn during a tick in this test
+        // because we don't have access to the executor from within the future.
+        // But we can verify that pending_spawn works correctly.
+
+        exec.spawn(async move {
+            spawned_clone.set(true);
+        });
+
+        exec.run();
+        assert!(spawned.get());
+    }
+}

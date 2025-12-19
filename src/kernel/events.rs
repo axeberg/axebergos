@@ -141,3 +141,155 @@ pub fn drain_events() -> Vec<Event> {
 pub fn has_events() -> bool {
     EVENT_QUEUE.with(|q| !q.is_empty())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_event_queue_push_pop() {
+        let queue = EventQueue::new();
+
+        queue.push_input(InputEvent::MouseMove { x: 10.0, y: 20.0 });
+        queue.push_input(InputEvent::MouseMove { x: 30.0, y: 40.0 });
+
+        assert_eq!(queue.len(), 2);
+        assert!(!queue.is_empty());
+
+        let event = queue.pop().unwrap();
+        match event {
+            Event::Input(InputEvent::MouseMove { x, y }) => {
+                assert_eq!(x, 10.0);
+                assert_eq!(y, 20.0);
+            }
+            _ => panic!("Wrong event type"),
+        }
+
+        assert_eq!(queue.len(), 1);
+    }
+
+    #[test]
+    fn test_event_queue_drain() {
+        let queue = EventQueue::new();
+
+        queue.push_input(InputEvent::MouseMove { x: 1.0, y: 1.0 });
+        queue.push_input(InputEvent::MouseMove { x: 2.0, y: 2.0 });
+        queue.push_input(InputEvent::MouseMove { x: 3.0, y: 3.0 });
+
+        let events = queue.drain();
+        assert_eq!(events.len(), 3);
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn test_event_queue_empty() {
+        let queue = EventQueue::new();
+
+        assert!(queue.is_empty());
+        assert_eq!(queue.len(), 0);
+        assert!(queue.pop().is_none());
+    }
+
+    #[test]
+    fn test_event_queue_fifo() {
+        let queue = EventQueue::new();
+
+        for i in 0..10 {
+            queue.push_system(SystemEvent::Frame { timestamp: i as f64 });
+        }
+
+        for i in 0..10 {
+            match queue.pop() {
+                Some(Event::System(SystemEvent::Frame { timestamp })) => {
+                    assert_eq!(timestamp, i as f64);
+                }
+                _ => panic!("Wrong event"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_input_event_types() {
+        let queue = EventQueue::new();
+
+        queue.push_input(InputEvent::MouseDown {
+            x: 100.0,
+            y: 200.0,
+            button: MouseButton::Left,
+        });
+        queue.push_input(InputEvent::KeyDown {
+            key: "a".to_string(),
+            code: "KeyA".to_string(),
+            modifiers: Modifiers {
+                shift: true,
+                ctrl: false,
+                alt: false,
+                meta: false,
+            },
+        });
+        queue.push_input(InputEvent::Resize {
+            width: 1920,
+            height: 1080,
+        });
+
+        assert_eq!(queue.len(), 3);
+
+        // Verify mouse down
+        match queue.pop() {
+            Some(Event::Input(InputEvent::MouseDown { button, .. })) => {
+                assert_eq!(button, MouseButton::Left);
+            }
+            _ => panic!("Expected MouseDown"),
+        }
+
+        // Verify key down
+        match queue.pop() {
+            Some(Event::Input(InputEvent::KeyDown { key, modifiers, .. })) => {
+                assert_eq!(key, "a");
+                assert!(modifiers.shift);
+            }
+            _ => panic!("Expected KeyDown"),
+        }
+
+        // Verify resize
+        match queue.pop() {
+            Some(Event::Input(InputEvent::Resize { width, height })) => {
+                assert_eq!(width, 1920);
+                assert_eq!(height, 1080);
+            }
+            _ => panic!("Expected Resize"),
+        }
+    }
+
+    #[test]
+    fn test_system_events() {
+        let queue = EventQueue::new();
+
+        queue.push_system(SystemEvent::TaskCompleted(TaskId(42)));
+        queue.push_system(SystemEvent::TaskPanicked(TaskId(99), "oops".to_string()));
+
+        match queue.pop() {
+            Some(Event::System(SystemEvent::TaskCompleted(id))) => {
+                assert_eq!(id, TaskId(42));
+            }
+            _ => panic!("Expected TaskCompleted"),
+        }
+
+        match queue.pop() {
+            Some(Event::System(SystemEvent::TaskPanicked(id, msg))) => {
+                assert_eq!(id, TaskId(99));
+                assert_eq!(msg, "oops");
+            }
+            _ => panic!("Expected TaskPanicked"),
+        }
+    }
+
+    #[test]
+    fn test_modifiers_default() {
+        let mods = Modifiers::default();
+        assert!(!mods.shift);
+        assert!(!mods.ctrl);
+        assert!(!mods.alt);
+        assert!(!mods.meta);
+    }
+}

@@ -113,3 +113,86 @@ pub enum TryRecvError {
     Empty,
     Closed,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_send_receive() {
+        let (tx, rx) = channel::<i32>();
+
+        tx.send(42).unwrap();
+        tx.send(43).unwrap();
+
+        assert_eq!(rx.try_recv(), Ok(42));
+        assert_eq!(rx.try_recv(), Ok(43));
+        assert_eq!(rx.try_recv(), Err(TryRecvError::Empty));
+    }
+
+    #[test]
+    fn test_empty_channel() {
+        let (_tx, rx) = channel::<i32>();
+        assert_eq!(rx.try_recv(), Err(TryRecvError::Empty));
+    }
+
+    #[test]
+    fn test_closed_channel() {
+        let (tx, rx) = channel::<i32>();
+
+        tx.send(1).unwrap();
+        tx.close();
+
+        // Can still receive what was sent before close
+        assert_eq!(rx.try_recv(), Ok(1));
+        // Then get Closed
+        assert_eq!(rx.try_recv(), Err(TryRecvError::Closed));
+    }
+
+    #[test]
+    fn test_send_after_close_fails() {
+        let (tx, _rx) = channel::<i32>();
+
+        tx.close();
+        let result = tx.send(42);
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().0, 42); // Get the value back
+    }
+
+    #[test]
+    fn test_clone_sender() {
+        let (tx1, rx) = channel::<i32>();
+        let tx2 = tx1.clone();
+
+        tx1.send(1).unwrap();
+        tx2.send(2).unwrap();
+
+        assert_eq!(rx.try_recv(), Ok(1));
+        assert_eq!(rx.try_recv(), Ok(2));
+    }
+
+    #[test]
+    fn test_fifo_order() {
+        let (tx, rx) = channel::<i32>();
+
+        for i in 0..100 {
+            tx.send(i).unwrap();
+        }
+
+        for i in 0..100 {
+            assert_eq!(rx.try_recv(), Ok(i));
+        }
+    }
+
+    #[test]
+    fn test_channel_with_strings() {
+        let (tx, rx) = channel::<String>();
+
+        tx.send("hello".to_string()).unwrap();
+        tx.send("world".to_string()).unwrap();
+
+        assert_eq!(rx.try_recv(), Ok("hello".to_string()));
+        assert_eq!(rx.try_recv(), Ok("world".to_string()));
+    }
+}
