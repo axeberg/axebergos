@@ -34,11 +34,16 @@ features = [
     "console",
     "Window",
     "Document",
+    "HtmlElement",
     "Performance",
     "MouseEvent",
     "KeyboardEvent",
     "Event",
     "EventTarget",
+    # Canvas
+    "HtmlCanvasElement",
+    "CanvasRenderingContext2d",
+    "CssStyleDeclaration",
 ]
 
 # Dev server (native only, not compiled to WASM)

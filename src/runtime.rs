@@ -6,6 +6,7 @@
 //!
 //! The goal: make the browser disappear. You're running an OS.
 
+use crate::compositor;
 use crate::console_log;
 use crate::kernel::{self, events};
 use std::cell::RefCell;
@@ -105,11 +106,34 @@ fn frame_tick(timestamp: f64) {
     // Push a frame event
     events::push_system(events::SystemEvent::Frame { timestamp });
 
+    // Process input events for compositor
+    process_compositor_events();
+
     // Tick the kernel
     kernel::tick();
 
+    // Render the compositor
+    compositor::render();
+
     // Schedule next frame
     request_animation_frame();
+}
+
+/// Forward relevant events to the compositor
+fn process_compositor_events() {
+    // Peek at pending events and forward to compositor
+    // Note: Events are still in the queue for tasks to process
+    for event in events::peek_events() {
+        match event {
+            events::Event::Input(events::InputEvent::MouseDown { x, y, button }) => {
+                compositor::handle_click(x, y, button);
+            }
+            events::Event::Input(events::InputEvent::Resize { width, height }) => {
+                compositor::resize(width, height);
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Set up event listeners for input

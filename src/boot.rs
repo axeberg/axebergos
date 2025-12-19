@@ -3,8 +3,9 @@
 //! This is where axeberg comes to life. Following Radiant's philosophy:
 //! boot should be immediate, comprehensible, and joyful.
 
+use crate::compositor;
 use crate::console_log;
-use crate::kernel::{self, channel, events, Priority};
+use crate::kernel::{self, channel, Priority};
 use crate::runtime;
 use crate::vfs::{self, FileSystem, MemoryFs};
 use std::cell::RefCell;
@@ -127,64 +128,42 @@ fn spawn_init_tasks() {
         }
     });
 
-    // Task 3: Event processor (runs every frame, Critical priority)
-    // This is a placeholder for the future compositor
+    // Task 3: Compositor initialization (Critical priority)
+    // Rendering happens in runtime.rs, this just sets up the surface
     kernel::spawn_with_priority(
         async {
-            console_log!("[task:events] Event processor started");
-            let mut frame_count = 0u64;
-            let mut last_log = 0u64;
+            console_log!("[compositor] Initializing...");
 
-            loop {
-                // Process all pending events
-                while let Some(event) = events::pop_event() {
-                    match event {
-                        events::Event::System(events::SystemEvent::Frame { .. }) => {
-                            frame_count += 1;
-                            // Log every 60 frames (~1 second at 60fps)
-                            if frame_count - last_log >= 60 {
-                                console_log!(
-                                    "[task:events] Frame {} (tasks: {})",
-                                    frame_count,
-                                    kernel::task_count()
-                                );
-                                last_log = frame_count;
-                            }
-                        }
-                        events::Event::Input(input) => {
-                            // Log interesting input events
-                            match input {
-                                events::InputEvent::KeyDown { key, .. } => {
-                                    console_log!("[task:events] Key pressed: {}", key);
-                                }
-                                events::InputEvent::MouseDown { x, y, button } => {
-                                    console_log!(
-                                        "[task:events] Mouse {:?} at ({}, {})",
-                                        button,
-                                        x,
-                                        y
-                                    );
-                                }
-                                events::InputEvent::Resize { width, height } => {
-                                    console_log!(
-                                        "[task:events] Window resized to {}x{}",
-                                        width,
-                                        height
-                                    );
-                                }
-                                _ => {}
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-
-                // Yield until next frame
-                futures::pending!();
-            }
+            // Use spawn_local for async init since compositor::init needs async
+            wasm_bindgen_futures::spawn_local(init_compositor());
         },
         Priority::Critical,
     );
 
     console_log!("[boot] Init tasks spawned.");
+}
+
+/// Initialize the compositor asynchronously
+async fn init_compositor() {
+    // Create a new compositor, init it, then swap it into the global
+    let mut comp = compositor::Compositor::new();
+
+    if let Err(e) = comp.init().await {
+        console_log!("[compositor] Surface init failed: {}", e);
+        return;
+    }
+
+    console_log!("[compositor] Surface ready, creating demo windows...");
+
+    // Create demo windows
+    let owner = kernel::TaskId(0);
+    comp.create_window("Terminal", owner);
+    comp.create_window("Files", owner);
+
+    // Swap initialized compositor into global
+    compositor::COMPOSITOR.with(|c| {
+        *c.borrow_mut() = comp;
+    });
+
+    console_log!("[compositor] Compositor ready with 2 windows.");
 }

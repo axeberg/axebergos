@@ -104,6 +104,11 @@ impl EventQueue {
     pub fn len(&self) -> usize {
         self.queue.borrow().len()
     }
+
+    /// Peek at all events without consuming them
+    pub fn peek_all(&self) -> Vec<Event> {
+        self.queue.borrow().iter().cloned().collect()
+    }
 }
 
 impl Default for EventQueue {
@@ -114,7 +119,7 @@ impl Default for EventQueue {
 
 // Global event queue
 thread_local! {
-    static EVENT_QUEUE: EventQueue = EventQueue::new();
+    pub static EVENT_QUEUE: EventQueue = EventQueue::new();
 }
 
 /// Push an input event to the global queue
@@ -140,6 +145,11 @@ pub fn drain_events() -> Vec<Event> {
 /// Check if there are pending events
 pub fn has_events() -> bool {
     EVENT_QUEUE.with(|q| !q.is_empty())
+}
+
+/// Peek at all events without consuming them
+pub fn peek_events() -> Vec<Event> {
+    EVENT_QUEUE.with(|q| q.peek_all())
 }
 
 #[cfg(test)]
