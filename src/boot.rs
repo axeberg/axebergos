@@ -4,7 +4,8 @@
 //! boot should be immediate, comprehensible, and joyful.
 
 use crate::console_log;
-use crate::kernel::{self, channel};
+use crate::kernel::{self, channel, events, Priority};
+use crate::runtime;
 use crate::vfs::{self, FileSystem, MemoryFs};
 use std::cell::RefCell;
 
@@ -25,12 +26,12 @@ pub fn boot() {
     // Initialize the VFS with some demonstration content
     init_filesystem();
 
-    // Spawn demonstration tasks
+    // Spawn system tasks
     spawn_init_tasks();
 
-    // Run the executor
-    console_log!("[boot] Starting task executor...");
-    kernel::run();
+    // Start the runtime loop (this returns immediately, loop runs via rAF)
+    console_log!("[boot] Starting runtime...");
+    runtime::start();
 
     console_log!("[boot] System ready.");
     console_log!("\n  axeberg is alive. Welcome home.\n");
@@ -58,12 +59,7 @@ fn init_filesystem() {
         .expect("write welcome.txt");
 
         // Write system info
-        vfs::write_string(
-            &mut *fs,
-            "/etc/version",
-            "axeberg 0.1.0\n",
-        )
-        .expect("write version");
+        vfs::write_string(&mut *fs, "/etc/version", "axeberg 0.1.0\n").expect("write version");
 
         console_log!("[boot] Filesystem initialized:");
         console_log!("       /home/user/welcome.txt");
@@ -113,7 +109,7 @@ fn spawn_init_tasks() {
     kernel::spawn(async move {
         console_log!("[task:receiver] Waiting for messages...");
 
-        // Poll until we get messages (simple busy-wait for demo)
+        // Poll until we get messages
         loop {
             match rx.try_recv() {
                 Ok(msg) => {
@@ -130,6 +126,65 @@ fn spawn_init_tasks() {
             }
         }
     });
+
+    // Task 3: Event processor (runs every frame, Critical priority)
+    // This is a placeholder for the future compositor
+    kernel::spawn_with_priority(
+        async {
+            console_log!("[task:events] Event processor started");
+            let mut frame_count = 0u64;
+            let mut last_log = 0u64;
+
+            loop {
+                // Process all pending events
+                while let Some(event) = events::pop_event() {
+                    match event {
+                        events::Event::System(events::SystemEvent::Frame { .. }) => {
+                            frame_count += 1;
+                            // Log every 60 frames (~1 second at 60fps)
+                            if frame_count - last_log >= 60 {
+                                console_log!(
+                                    "[task:events] Frame {} (tasks: {})",
+                                    frame_count,
+                                    kernel::task_count()
+                                );
+                                last_log = frame_count;
+                            }
+                        }
+                        events::Event::Input(input) => {
+                            // Log interesting input events
+                            match input {
+                                events::InputEvent::KeyDown { key, .. } => {
+                                    console_log!("[task:events] Key pressed: {}", key);
+                                }
+                                events::InputEvent::MouseDown { x, y, button } => {
+                                    console_log!(
+                                        "[task:events] Mouse {:?} at ({}, {})",
+                                        button,
+                                        x,
+                                        y
+                                    );
+                                }
+                                events::InputEvent::Resize { width, height } => {
+                                    console_log!(
+                                        "[task:events] Window resized to {}x{}",
+                                        width,
+                                        height
+                                    );
+                                }
+                                _ => {}
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Yield until next frame
+                futures::pending!();
+            }
+        },
+        Priority::Critical,
+    );
 
     console_log!("[boot] Init tasks spawned.");
 }

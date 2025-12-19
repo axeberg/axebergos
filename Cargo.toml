@@ -35,6 +35,10 @@ features = [
     "Window",
     "Document",
     "Performance",
+    "MouseEvent",
+    "KeyboardEvent",
+    "Event",
+    "EventTarget",
 ]
 
 # Dev server (native only, not compiled to WASM)

@@ -1,74 +1,209 @@
 //! Async executor for cooperative multitasking
 //!
-//! This is a minimal, single-threaded executor designed for WASM.
-//! No work-stealing, no thread pools - just a simple task queue
-//! that polls futures until completion.
+//! Designed for UI work in WASM:
+//! - Tick-based execution (integrates with requestAnimationFrame)
+//! - Task identity (tasks have IDs for event routing)
+//! - Priority levels (compositor runs before apps)
+//! - Proper wake semantics (no busy-waiting)
 //!
-//! Tractability > Complexity
+//! Tractability > Complexity, but this is the kernel - it needs to be solid.
 
-use super::task::BoxFuture;
+use super::task::{BoxFuture, TaskId};
 use std::cell::RefCell;
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::future::Future;
 use std::rc::Rc;
 use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
-/// The executor - runs async tasks cooperatively
+/// Task priority levels
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Priority {
+    /// System-critical tasks (compositor, input handling)
+    Critical = 0,
+    /// Normal application tasks
+    Normal = 1,
+    /// Background tasks (can be starved)
+    Background = 2,
+}
+
+impl Default for Priority {
+    fn default() -> Self {
+        Priority::Normal
+    }
+}
+
+/// A managed task with metadata
+struct ManagedTask {
+    id: TaskId,
+    priority: Priority,
+    future: BoxFuture,
+}
+
+/// Shared state for waker to signal task readiness
+struct WakerState {
+    task_id: TaskId,
+    ready_set: Rc<RefCell<HashSet<TaskId>>>,
+}
+
+/// The executor - runs async tasks cooperatively, one tick at a time
 pub struct Executor {
-    /// Queue of tasks ready to be polled
-    ready_queue: Rc<RefCell<VecDeque<BoxFuture>>>,
+    /// All tasks, indexed by ID
+    tasks: BTreeMap<TaskId, ManagedTask>,
+
+    /// Tasks that are ready to be polled (signaled by waker)
+    ready: Rc<RefCell<HashSet<TaskId>>>,
+
+    /// Tasks waiting to be spawned (added during tick)
+    pending_spawn: RefCell<VecDeque<ManagedTask>>,
+
+    /// Next task ID
+    next_id: u64,
 }
 
 impl Executor {
     pub fn new() -> Self {
         Self {
-            ready_queue: Rc::new(RefCell::new(VecDeque::new())),
+            tasks: BTreeMap::new(),
+            ready: Rc::new(RefCell::new(HashSet::new())),
+            pending_spawn: RefCell::new(VecDeque::new()),
+            next_id: 0,
         }
     }
 
-    /// Spawn a future onto the executor
-    pub fn spawn<F>(&mut self, future: F)
+    /// Spawn a future with default (Normal) priority, returns task ID
+    pub fn spawn<F>(&mut self, future: F) -> TaskId
     where
         F: Future<Output = ()> + 'static,
     {
-        self.ready_queue.borrow_mut().push_back(Box::pin(future));
+        self.spawn_with_priority(future, Priority::Normal)
     }
 
-    /// Run all tasks until the queue is empty
+    /// Spawn a future with specified priority
+    pub fn spawn_with_priority<F>(&mut self, future: F, priority: Priority) -> TaskId
+    where
+        F: Future<Output = ()> + 'static,
+    {
+        let id = TaskId(self.next_id);
+        self.next_id += 1;
+
+        let task = ManagedTask {
+            id,
+            priority,
+            future: Box::pin(future),
+        };
+
+        // If we're in the middle of a tick, queue for later
+        // Otherwise add directly
+        self.pending_spawn.borrow_mut().push_back(task);
+
+        // Mark as ready to run immediately
+        self.ready.borrow_mut().insert(id);
+
+        id
+    }
+
+    /// Integrate pending spawns into the task map
+    fn integrate_pending(&mut self) {
+        let mut pending = self.pending_spawn.borrow_mut();
+        while let Some(task) = pending.pop_front() {
+            self.tasks.insert(task.id, task);
+        }
+    }
+
+    /// Run one tick of execution
     ///
-    /// In WASM, we can't block, so this runs synchronously until
-    /// all currently-ready tasks have been polled. Tasks that are
-    /// pending on async operations will be re-queued when woken.
-    pub fn run(&mut self) {
-        loop {
-            let task = self.ready_queue.borrow_mut().pop_front();
+    /// Polls all ready tasks once, in priority order.
+    /// Returns the number of tasks that were polled.
+    ///
+    /// Call this from requestAnimationFrame for UI work.
+    pub fn tick(&mut self) -> usize {
+        // First, integrate any tasks spawned since last tick
+        self.integrate_pending();
 
-            match task {
-                Some(mut future) => {
-                    // Create a waker that re-queues the task
-                    let queue = self.ready_queue.clone();
-                    let waker = create_waker(queue.clone());
-                    let mut cx = Context::from_waker(&waker);
+        // Collect ready task IDs, sorted by priority
+        let mut ready_ids: Vec<TaskId> = self.ready.borrow().iter().copied().collect();
 
-                    match future.as_mut().poll(&mut cx) {
-                        Poll::Ready(()) => {
-                            // Task completed, don't re-queue
-                        }
-                        Poll::Pending => {
-                            // Task yielded, re-queue for later
-                            // In a real system, it would only be re-queued
-                            // when its waker is invoked. For now, we re-queue
-                            // immediately (busy-wait style).
-                            queue.borrow_mut().push_back(future);
-                        }
-                    }
+        // Sort by priority (Critical first, then Normal, then Background)
+        ready_ids.sort_by_key(|id| {
+            self.tasks
+                .get(id)
+                .map(|t| t.priority)
+                .unwrap_or(Priority::Background)
+        });
+
+        let mut polled = 0;
+
+        for task_id in ready_ids {
+            // Remove from ready set before polling
+            self.ready.borrow_mut().remove(&task_id);
+
+            // Get the task (need to remove to get mutable access to future)
+            let Some(mut task) = self.tasks.remove(&task_id) else {
+                continue;
+            };
+
+            // Create waker for this task
+            let waker = self.create_waker(task_id);
+            let mut cx = Context::from_waker(&waker);
+
+            match task.future.as_mut().poll(&mut cx) {
+                Poll::Ready(()) => {
+                    // Task completed, don't re-insert
+                    polled += 1;
                 }
-                None => {
-                    // No more tasks
-                    break;
+                Poll::Pending => {
+                    // Task yielded, put it back (but NOT in ready set)
+                    // It will be re-added to ready set when waker is called
+                    self.tasks.insert(task_id, task);
+                    polled += 1;
                 }
             }
         }
+
+        // Integrate any tasks spawned during this tick
+        self.integrate_pending();
+
+        polled
+    }
+
+    /// Run until all tasks complete (for non-UI contexts)
+    pub fn run(&mut self) {
+        loop {
+            self.integrate_pending();
+            if self.tasks.is_empty() && self.pending_spawn.borrow().is_empty() {
+                break;
+            }
+
+            // If no tasks are ready, mark all as ready (prevents deadlock in simple cases)
+            if self.ready.borrow().is_empty() {
+                for id in self.tasks.keys() {
+                    self.ready.borrow_mut().insert(*id);
+                }
+            }
+
+            self.tick();
+        }
+    }
+
+    /// Check if there are any active tasks
+    pub fn has_tasks(&self) -> bool {
+        !self.tasks.is_empty() || !self.pending_spawn.borrow().is_empty()
+    }
+
+    /// Get count of active tasks
+    pub fn task_count(&self) -> usize {
+        self.tasks.len() + self.pending_spawn.borrow().len()
+    }
+
+    /// Create a waker that marks a task as ready
+    fn create_waker(&self, task_id: TaskId) -> Waker {
+        let state = Box::new(WakerState {
+            task_id,
+            ready_set: self.ready.clone(),
+        });
+        let ptr = Box::into_raw(state) as *const ();
+        let raw = RawWaker::new(ptr, &WAKER_VTABLE);
+        unsafe { Waker::from_raw(raw) }
     }
 }
 
@@ -78,49 +213,39 @@ impl Default for Executor {
     }
 }
 
-// Minimal waker implementation for our single-threaded executor
-// The waker doesn't need to do anything fancy - tasks are re-queued
-// immediately on Pending for now.
+// Waker implementation that properly signals task readiness
 
-fn create_waker(queue: Rc<RefCell<VecDeque<BoxFuture>>>) -> Waker {
-    // We leak the Rc here because wakers require 'static lifetime.
-    // In a production system, we'd use a more sophisticated approach.
-    let ptr = Rc::into_raw(queue) as *const ();
-    let raw = RawWaker::new(ptr, &VTABLE);
-    unsafe { Waker::from_raw(raw) }
-}
+const WAKER_VTABLE: RawWakerVTable =
+    RawWakerVTable::new(waker_clone, waker_wake, waker_wake_by_ref, waker_drop);
 
-const VTABLE: RawWakerVTable = RawWakerVTable::new(clone_fn, wake_fn, wake_by_ref_fn, drop_fn);
-
-unsafe fn clone_fn(ptr: *const ()) -> RawWaker {
-    // SAFETY: ptr was created from Rc::into_raw in create_waker
+unsafe fn waker_clone(ptr: *const ()) -> RawWaker {
     unsafe {
-        let rc = Rc::from_raw(ptr as *const RefCell<VecDeque<BoxFuture>>);
-        let cloned = rc.clone();
-        let _ = Rc::into_raw(rc); // Don't drop the original
-        RawWaker::new(Rc::into_raw(cloned) as *const (), &VTABLE)
+        let state = &*(ptr as *const WakerState);
+        let cloned = Box::new(WakerState {
+            task_id: state.task_id,
+            ready_set: state.ready_set.clone(),
+        });
+        RawWaker::new(Box::into_raw(cloned) as *const (), &WAKER_VTABLE)
     }
 }
 
-unsafe fn wake_fn(ptr: *const ()) {
-    // SAFETY: ptr was created from Rc::into_raw in create_waker
-    // In our simple executor, waking is a no-op since we re-queue on Pending
+unsafe fn waker_wake(ptr: *const ()) {
     unsafe {
-        drop(Rc::from_raw(
-            ptr as *const RefCell<VecDeque<BoxFuture>>,
-        ));
+        let state = Box::from_raw(ptr as *mut WakerState);
+        state.ready_set.borrow_mut().insert(state.task_id);
+        // Box is dropped here
     }
 }
 
-unsafe fn wake_by_ref_fn(_ptr: *const ()) {
-    // No-op for our simple executor
+unsafe fn waker_wake_by_ref(ptr: *const ()) {
+    unsafe {
+        let state = &*(ptr as *const WakerState);
+        state.ready_set.borrow_mut().insert(state.task_id);
+    }
 }
 
-unsafe fn drop_fn(ptr: *const ()) {
-    // SAFETY: ptr was created from Rc::into_raw in create_waker
+unsafe fn waker_drop(ptr: *const ()) {
     unsafe {
-        drop(Rc::from_raw(
-            ptr as *const RefCell<VecDeque<BoxFuture>>,
-        ));
+        drop(Box::from_raw(ptr as *mut WakerState));
     }
 }

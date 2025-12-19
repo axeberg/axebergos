@@ -12,9 +12,9 @@ dev:
 serve: build
 	cargo run --bin serve
 
-# Type check without building
+# Type check without building (lib only, serve bin doesn't compile for wasm)
 check:
-	cargo check --target wasm32-unknown-unknown
+	cargo check --lib --target wasm32-unknown-unknown
 
 # Clean build artifacts
 clean:

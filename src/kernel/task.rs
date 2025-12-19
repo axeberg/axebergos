@@ -8,7 +8,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 /// Unique identifier for a task
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TaskId(pub u64);
 
 impl std::fmt::Display for TaskId {

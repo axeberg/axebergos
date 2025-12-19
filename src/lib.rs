@@ -9,6 +9,7 @@
 use wasm_bindgen::prelude::*;
 
 pub mod kernel;
+pub mod runtime;
 pub mod vfs;
 
 mod boot;
