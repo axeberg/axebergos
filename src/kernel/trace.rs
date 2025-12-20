@@ -566,48 +566,6 @@ impl std::fmt::Display for TraceSummary {
     }
 }
 
-/// Span guard for measuring operation duration
-pub struct SpanGuard<'a> {
-    tracer: &'a mut Tracer,
-    category: TraceCategory,
-    name: String,
-    start_time: f64,
-    pid: Option<u32>,
-}
-
-impl<'a> SpanGuard<'a> {
-    pub fn new(
-        tracer: &'a mut Tracer,
-        category: TraceCategory,
-        name: impl Into<String>,
-        start_time: f64,
-    ) -> Self {
-        Self {
-            tracer,
-            category,
-            name: name.into(),
-            start_time,
-            pid: None,
-        }
-    }
-
-    pub fn with_pid(mut self, pid: u32) -> Self {
-        self.pid = Some(pid);
-        self
-    }
-
-    pub fn finish(self, end_time: f64) {
-        let duration = end_time - self.start_time;
-        let mut event = TraceEvent::instant(self.start_time, self.category, &self.name)
-            .with_duration(duration);
-        if let Some(pid) = self.pid {
-            event = event.with_pid(pid);
-        }
-        // Can't use self.tracer here because we consumed self, need different design
-        // This is just for the API design - real impl would use RefCell
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
