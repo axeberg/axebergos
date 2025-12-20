@@ -9,7 +9,9 @@
 //! Built incrementally with comprehensive tests at each step.
 
 pub mod builtins;
+pub mod executor;
 pub mod parser;
 
 pub use builtins::{execute as execute_builtin, is_builtin, BuiltinResult, ShellState};
+pub use executor::{ExecResult, Executor, ProgramRegistry};
 pub use parser::{parse, ParseError, Pipeline, Redirect, SimpleCommand};
