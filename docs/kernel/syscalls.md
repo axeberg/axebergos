@@ -309,6 +309,151 @@ Take output from the console.
 pub fn console_take_output() -> Vec<u8>
 ```
 
+## Timer Operations
+
+### timer_set
+
+Set a one-shot timer.
+
+```rust
+pub fn timer_set(delay_ms: f64, wake_task: Option<TaskId>) -> SyscallResult<TimerId>
+```
+
+Timer fires after `delay_ms` milliseconds. If `wake_task` is provided, that task is woken when the timer fires.
+
+### timer_interval
+
+Set a repeating interval timer.
+
+```rust
+pub fn timer_interval(interval_ms: f64, wake_task: Option<TaskId>) -> SyscallResult<TimerId>
+```
+
+Timer fires every `interval_ms` milliseconds until cancelled.
+
+### timer_cancel
+
+Cancel a pending timer.
+
+```rust
+pub fn timer_cancel(timer_id: TimerId) -> SyscallResult<bool>
+```
+
+Returns `true` if the timer was pending and cancelled.
+
+## Signal Operations
+
+### kill
+
+Send a signal to a process.
+
+```rust
+pub fn kill(pid: Pid, signal: Signal) -> SyscallResult<()>
+```
+
+**Available signals:**
+- `SIGTERM` - Graceful termination
+- `SIGKILL` - Immediate termination (cannot be caught)
+- `SIGSTOP` - Stop process (cannot be caught)
+- `SIGCONT` - Continue stopped process
+- `SIGINT`, `SIGQUIT`, `SIGHUP` - Termination signals
+- `SIGUSR1`, `SIGUSR2` - User-defined signals
+- `SIGCHLD` - Child status changed
+- `SIGALRM` - Timer alarm
+- `SIGPIPE` - Broken pipe
+
+### signal
+
+Set signal disposition for current process.
+
+```rust
+pub fn signal(sig: Signal, action: SignalAction) -> SyscallResult<()>
+```
+
+**Actions:**
+- `SignalAction::Default` - Use default behavior
+- `SignalAction::Ignore` - Ignore the signal
+- `SignalAction::Terminate` - Terminate the process
+- `SignalAction::Handle` - Custom handler (future)
+
+Note: `SIGKILL` and `SIGSTOP` cannot have their disposition changed.
+
+### sigblock
+
+Block a signal (queue but don't deliver).
+
+```rust
+pub fn sigblock(sig: Signal) -> SyscallResult<()>
+```
+
+### sigunblock
+
+Unblock a signal.
+
+```rust
+pub fn sigunblock(sig: Signal) -> SyscallResult<()>
+```
+
+### sigpending
+
+Check if there are pending signals.
+
+```rust
+pub fn sigpending() -> SyscallResult<bool>
+```
+
+## Tracing Operations
+
+### trace_enable
+
+Enable kernel tracing.
+
+```rust
+pub fn trace_enable()
+```
+
+### trace_disable
+
+Disable kernel tracing.
+
+```rust
+pub fn trace_disable()
+```
+
+### trace_enabled
+
+Check if tracing is enabled.
+
+```rust
+pub fn trace_enabled() -> bool
+```
+
+### trace_summary
+
+Get a summary of kernel statistics.
+
+```rust
+pub fn trace_summary() -> TraceSummary
+```
+
+Returns uptime, syscall counts, scheduler stats, process counts, and I/O bytes.
+
+### trace_reset
+
+Reset all trace data and statistics.
+
+```rust
+pub fn trace_reset()
+```
+
+### trace_event
+
+Record a custom trace event.
+
+```rust
+pub fn trace_event(category: TraceCategory, name: &str, detail: Option<&str>)
+```
+
 ## Error Handling
 
 All syscalls return `SyscallResult<T>`, which is `Result<T, SyscallError>`:
@@ -325,6 +470,8 @@ pub enum SyscallError {
     NoProcess,        // No current process
     Io(String),       // Generic I/O error
     Memory(MemoryError), // Memory error
+    Signal(SignalError), // Signal error
+    Interrupted,      // Interrupted by signal
 }
 ```
 

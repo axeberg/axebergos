@@ -39,10 +39,15 @@ Inspired by [Radiant Computer](https://radiant.computer/) and [Oxide's Hubris](h
 │  │  │    (In-memory filesystem)          │       │         │
 │  │  └────────────────────────────────────┘       │         │
 │  │                                               │         │
-│  │  ┌─────────────┐  ┌─────────────┐            │         │
-│  │  │  Executor   │  │     IPC     │            │         │
-│  │  │ (Async/rAF) │  │  (Channels) │            │         │
-│  │  └─────────────┘  └─────────────┘            │         │
+│  │  ┌─────────┐ ┌─────────┐ ┌───────┐ ┌───────┐ │         │
+│  │  │Executor │ │   IPC   │ │Timers │ │Signals│ │         │
+│  │  │(Async)  │ │(Channel)│ │(Queue)│ │(POSIX)│ │         │
+│  │  └─────────┘ └─────────┘ └───────┘ └───────┘ │         │
+│  │                                               │         │
+│  │  ┌───────────────────────────────────────┐   │         │
+│  │  │               Tracer                   │   │         │
+│  │  │  (Events, Stats, Instrumentation)      │   │         │
+│  │  └───────────────────────────────────────┘   │         │
 │  └───────────────────────────────────────────────┘         │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -58,6 +63,9 @@ Inspired by [Radiant Computer](https://radiant.computer/) and [Oxide's Hubris](h
 - [Object Table](kernel/objects.md) - Kernel objects and handles
 - [Executor](kernel/executor.md) - Async task execution
 - [IPC](kernel/ipc.md) - Inter-process communication
+- [Timers](kernel/timers.md) - Timer scheduling and async sleep
+- [Signals](kernel/signals.md) - POSIX-like signal system
+- [Tracing](kernel/tracing.md) - Instrumentation and debugging
 
 ### Userspace
 
