@@ -158,7 +158,7 @@ async fn init_compositor() {
     // Create windows (using TaskId for now, will use syscall later)
     let owner = kernel::TaskId(0);
     comp.create_terminal_window("Terminal", owner);
-    comp.create_window("Files", owner);
+    comp.create_filebrowser_window("Files", owner);
 
     compositor::COMPOSITOR.with(|c| {
         *c.borrow_mut() = comp;

@@ -16,7 +16,7 @@ pub use window::{Window, WindowId};
 
 use crate::console_log;
 use crate::kernel::{events, TaskId};
-use crate::shell::Terminal;
+use crate::shell::{FileBrowser, Terminal};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -104,6 +104,9 @@ pub struct Compositor {
     /// Terminal state for terminal windows
     terminals: HashMap<WindowId, Terminal>,
 
+    /// File browser state for file browser windows
+    file_browsers: HashMap<WindowId, FileBrowser>,
+
     /// Next window ID
     next_window_id: u64,
 
@@ -127,6 +130,7 @@ impl Compositor {
             surface: None,
             windows: HashMap::new(),
             terminals: HashMap::new(),
+            file_browsers: HashMap::new(),
             next_window_id: 0,
             layout: Layout::new(),
             width: 800,
@@ -205,10 +209,19 @@ impl Compositor {
         id
     }
 
+    /// Create a new file browser window
+    pub fn create_filebrowser_window(&mut self, title: &str, owner: TaskId) -> WindowId {
+        let id = self.create_window(title, owner);
+        self.file_browsers.insert(id, FileBrowser::new());
+        console_log!("[compositor] Window {} is a file browser", id.0);
+        id
+    }
+
     /// Close a window
     pub fn close_window(&mut self, id: WindowId) {
         if self.windows.remove(&id).is_some() {
             self.terminals.remove(&id);
+            self.file_browsers.remove(&id);
             self.layout.remove_window(id);
             self.recalculate_layout();
 
@@ -220,11 +233,17 @@ impl Compositor {
         }
     }
 
-    /// Handle keyboard input - forwards to focused terminal if applicable
+    /// Handle keyboard input - forwards to focused terminal or file browser
     pub fn handle_key(&mut self, key: &str, code: &str, ctrl: bool, alt: bool) -> bool {
         if let Some(focused_id) = self.focused {
             if let Some(terminal) = self.terminals.get_mut(&focused_id) {
                 return terminal.handle_key(key, code, ctrl, alt);
+            }
+            if let Some(browser) = self.file_browsers.get_mut(&focused_id) {
+                // File browser returns Some(path) when a file is selected
+                let _file_opened = browser.handle_key(key, code, ctrl, alt);
+                // TODO: Open file in editor when selected
+                return true;
             }
         }
         false
@@ -298,6 +317,11 @@ impl Compositor {
             // Render terminal content if this window has a terminal
             if let Some(terminal) = self.terminals.get(id) {
                 render_terminal(surface, &frame, window, terminal, is_focused);
+            }
+
+            // Render file browser content if this window has a file browser
+            if let Some(browser) = self.file_browsers.get(id) {
+                render_filebrowser(surface, &frame, window, browser, is_focused);
             }
         }
 
@@ -428,6 +452,137 @@ fn render_terminal(
     }
 }
 
+/// File browser rendering constants
+const FB_FONT_SIZE: f32 = 14.0;
+const FB_LINE_HEIGHT: f32 = 20.0;
+const FB_PADDING: f32 = 8.0;
+const FB_HEADER_HEIGHT: f32 = 28.0;
+
+/// Render file browser content inside a window
+fn render_filebrowser(
+    surface: &mut Surface,
+    frame: &surface::Frame,
+    window: &Window,
+    browser: &FileBrowser,
+    focused: bool,
+) {
+    let content = window.content_rect();
+
+    // Draw current path as header
+    let path_str = browser.cwd().display().to_string();
+    surface.draw_text(
+        frame,
+        &path_str,
+        content.x + FB_PADDING,
+        content.y + FB_PADDING + 14.0,
+        Color::rgb(0.5, 0.7, 0.9), // Blue path
+        FB_FONT_SIZE,
+    );
+
+    // Draw separator line
+    let sep_y = content.y + FB_HEADER_HEIGHT;
+    let sep_rect = Rect::new(content.x, sep_y, content.width, 1.0);
+    surface.draw_rect(frame, sep_rect, Color::rgba(0.3, 0.3, 0.4, 1.0));
+
+    // Calculate visible rows
+    let content_height = content.height - FB_HEADER_HEIGHT - FB_PADDING;
+    let visible_rows = (content_height / FB_LINE_HEIGHT) as usize;
+
+    // Draw entries
+    let mut y = sep_y + FB_PADDING + FB_LINE_HEIGHT;
+    let entries = browser.entries();
+    let selected = browser.selected();
+    let scroll = browser.scroll_offset();
+
+    for (idx, entry) in entries.iter().enumerate().skip(scroll).take(visible_rows) {
+        let is_selected = idx == selected;
+
+        // Draw selection highlight
+        if is_selected && focused {
+            let highlight = Rect::new(
+                content.x + 2.0,
+                y - FB_LINE_HEIGHT + 4.0,
+                content.width - 4.0,
+                FB_LINE_HEIGHT,
+            );
+            surface.draw_rect(frame, highlight, Color::rgba(0.3, 0.4, 0.5, 0.5));
+        }
+
+        // Icon prefix and color based on type
+        let (icon, color) = if entry.is_dir() {
+            if entry.name == ".." {
+                ("\u{2191} ", Color::rgb(0.6, 0.6, 0.8)) // Up arrow, light blue
+            } else {
+                ("\u{1F4C1} ", Color::rgb(0.5, 0.7, 0.9)) // Folder, blue
+            }
+        } else {
+            ("\u{1F4C4} ", Color::TEXT) // File, white
+        };
+
+        // Draw icon
+        surface.draw_text(
+            frame,
+            icon,
+            content.x + FB_PADDING,
+            y,
+            color,
+            FB_FONT_SIZE,
+        );
+
+        // Draw name
+        let name_x = content.x + FB_PADDING + 24.0; // After icon
+        surface.draw_text(
+            frame,
+            &entry.name,
+            name_x,
+            y,
+            color,
+            FB_FONT_SIZE,
+        );
+
+        // Draw size for files
+        if let Some(size) = entry.size {
+            let size_str = format_size(size);
+            let size_x = content.x + content.width - FB_PADDING - 60.0;
+            surface.draw_text(
+                frame,
+                &size_str,
+                size_x,
+                y,
+                Color::rgba(0.5, 0.5, 0.5, 1.0),
+                12.0,
+            );
+        }
+
+        y += FB_LINE_HEIGHT;
+    }
+
+    // Show error if any
+    if let Some(err) = browser.error() {
+        surface.draw_text(
+            frame,
+            err,
+            content.x + FB_PADDING,
+            content.y + content.height - FB_PADDING,
+            Color::rgb(1.0, 0.4, 0.4), // Red error
+            FB_FONT_SIZE,
+        );
+    }
+}
+
+/// Format file size for display
+fn format_size(size: u64) -> String {
+    if size < 1024 {
+        format!("{} B", size)
+    } else if size < 1024 * 1024 {
+        format!("{:.1} KB", size as f64 / 1024.0)
+    } else if size < 1024 * 1024 * 1024 {
+        format!("{:.1} MB", size as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.1} GB", size as f64 / (1024.0 * 1024.0 * 1024.0))
+    }
+}
+
 // Global compositor instance
 thread_local! {
     pub static COMPOSITOR: RefCell<Compositor> = RefCell::new(Compositor::new());
@@ -470,7 +625,12 @@ pub fn create_terminal_window(title: &str, owner: TaskId) -> WindowId {
     COMPOSITOR.with(|c| c.borrow_mut().create_terminal_window(title, owner))
 }
 
-/// Handle keyboard event - forwards to focused terminal
+/// Create a file browser window on the global compositor
+pub fn create_filebrowser_window(title: &str, owner: TaskId) -> WindowId {
+    COMPOSITOR.with(|c| c.borrow_mut().create_filebrowser_window(title, owner))
+}
+
+/// Handle keyboard event - forwards to focused terminal or file browser
 pub fn handle_key(key: &str, code: &str, ctrl: bool, alt: bool) -> bool {
     COMPOSITOR.with(|c| c.borrow_mut().handle_key(key, code, ctrl, alt))
 }

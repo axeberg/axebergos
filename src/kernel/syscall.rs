@@ -99,6 +99,14 @@ impl From<std::io::Error> for SyscallError {
     }
 }
 
+/// File metadata returned by the metadata syscall
+#[derive(Debug, Clone)]
+pub struct FileMetadata {
+    pub size: u64,
+    pub is_dir: bool,
+    pub is_file: bool,
+}
+
 pub type SyscallResult<T> = Result<T, SyscallError>;
 
 /// The kernel state - manages all processes and objects
@@ -582,6 +590,19 @@ impl Kernel {
         Ok(self.vfs.exists(path_str))
     }
 
+    /// Get file/directory metadata
+    pub fn sys_metadata(&self, path: &str) -> SyscallResult<FileMetadata> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let resolved = self.resolve_path(current, path)?;
+        let path_str = resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
+        let meta = self.vfs.metadata(path_str)?;
+        Ok(FileMetadata {
+            size: meta.size,
+            is_dir: meta.is_dir,
+            is_file: meta.is_file,
+        })
+    }
+
     // ========== MEMORY SYSCALLS ==========
 
     /// Allocate a memory region for the current process
@@ -993,6 +1014,11 @@ pub fn readdir(path: &str) -> SyscallResult<Vec<String>> {
 /// Check if path exists
 pub fn exists(path: &str) -> SyscallResult<bool> {
     KERNEL.with(|k| k.borrow().sys_exists(path))
+}
+
+/// Get file/directory metadata
+pub fn metadata(path: &str) -> SyscallResult<FileMetadata> {
+    KERNEL.with(|k| k.borrow().sys_metadata(path))
 }
 
 /// Duplicate a file descriptor
