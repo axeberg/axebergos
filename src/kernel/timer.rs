@@ -180,10 +180,16 @@ impl TimerQueue {
     }
 
     /// Cancel a timer
+    /// Returns true if the timer was pending and is now cancelled
+    /// Returns false if the timer doesn't exist or was already cancelled/fired
     pub fn cancel(&mut self, id: TimerId) -> bool {
         if let Some(timer) = self.timers.get_mut(&id) {
-            timer.cancel();
-            true
+            if timer.state == TimerState::Pending {
+                timer.cancel();
+                true
+            } else {
+                false
+            }
         } else {
             false
         }

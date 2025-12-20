@@ -23,6 +23,9 @@ pub mod task;
 pub mod timer;
 pub mod trace;
 
+#[cfg(test)]
+mod invariants_test;
+
 pub use executor::{Executor, Priority};
 pub use ipc::{channel, Receiver, Sender};
 pub use memory::{MemoryError, MemoryStats, Protection, RegionId, ShmId, ShmInfo, SystemMemoryStats};
