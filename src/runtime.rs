@@ -121,9 +121,8 @@ fn frame_tick(timestamp: f64) {
 
 /// Forward relevant events to the compositor
 fn process_compositor_events() {
-    // Peek at pending events and forward to compositor
-    // Note: Events are still in the queue for tasks to process
-    for event in events::peek_events() {
+    // Drain events and forward to compositor
+    for event in events::drain_events() {
         match event {
             events::Event::Input(events::InputEvent::MouseDown { x, y, button }) => {
                 compositor::handle_click(x, y, button);
