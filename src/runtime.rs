@@ -209,6 +209,12 @@ fn setup_event_listeners() {
     // Key down
     {
         let closure = Closure::wrap(Box::new(|event: web_sys::KeyboardEvent| {
+            // Ignore auto-repeat events
+            if event.repeat() {
+                return;
+            }
+            // Prevent default for most keys to avoid browser shortcuts
+            event.prevent_default();
             events::push_input(events::InputEvent::KeyDown {
                 key: event.key(),
                 code: event.code(),
