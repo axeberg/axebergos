@@ -480,8 +480,10 @@ impl Kernel {
         let path_str = path.to_str().ok_or(SyscallError::InvalidArgument)?;
 
         // Convert our flags to VFS options
+        // Note: We always need read access in VFS to read existing content into FileObject,
+        // but the actual permissions are tracked separately in the FileObject
         let vfs_opts = VfsOpenOptions {
-            read: flags.read,
+            read: true, // Always need to read existing content
             write: flags.write,
             create: flags.create,
             truncate: flags.truncate,
@@ -495,12 +497,23 @@ impl Kernel {
         let mut data = vec![0u8; meta.size as usize];
         if !data.is_empty() {
             self.vfs.read(vfs_handle, &mut data)?;
+        }
+
+        // For append mode, seek to end
+        if flags.append {
+            self.vfs.seek(vfs_handle, SeekFrom::End(0))?;
+        } else {
             // Seek back to start
             self.vfs.seek(vfs_handle, SeekFrom::Start(0))?;
         }
 
         // Create a FileObject that mirrors the VFS file
-        let file = FileObject::new(path.to_path_buf(), data, flags.read, flags.write);
+        // For append mode, position at end
+        let mut file = FileObject::new(path.to_path_buf(), data, flags.read, flags.write);
+        if flags.append {
+            file.position = file.data.len() as u64;
+        }
+
         let handle = self.objects.insert(KernelObject::File(file));
 
         // Track the VFS handle for sync/close

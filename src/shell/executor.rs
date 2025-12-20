@@ -1075,4 +1075,145 @@ mod tests {
         assert!(reg.contains("cat"));
         assert!(!reg.contains("nonexistent"));
     }
+
+    // ============ I/O Redirections ============
+
+    /// Helper to set up test environment (initializes kernel and creates /tmp)
+    fn setup_redirect_test() -> Executor {
+        // Initialize kernel with a test process
+        syscall::KERNEL.with(|k| {
+            use crate::kernel::syscall::Kernel;
+            *k.borrow_mut() = Kernel::new();
+            let pid = k.borrow_mut().spawn_process("test", None);
+            k.borrow_mut().set_current(pid);
+        });
+
+        let mut exec = Executor::new();
+        // Create /tmp directory for tests
+        exec.execute_line("mkdir /tmp");
+        exec
+    }
+
+    #[test]
+    fn test_redirect_stdout_to_file() {
+        let mut exec = setup_redirect_test();
+
+        // Create a file via redirect
+        let result = exec.execute_line("echo hello world > /tmp/test_redirect.txt");
+        assert_eq!(result.code, 0, "echo failed: {}", result.error);
+        assert!(result.output.is_empty()); // Output went to file, not stdout
+
+        // Read the file back
+        let result = exec.execute_line("cat /tmp/test_redirect.txt");
+        assert_eq!(result.code, 0, "cat failed: {}", result.error);
+        assert_eq!(result.output.trim(), "hello world");
+    }
+
+    #[test]
+    fn test_redirect_stdout_overwrite() {
+        let mut exec = setup_redirect_test();
+
+        // Write first content
+        exec.execute_line("echo first > /tmp/test_overwrite.txt");
+
+        // Overwrite with new content
+        exec.execute_line("echo second > /tmp/test_overwrite.txt");
+
+        // Verify only second content exists
+        let result = exec.execute_line("cat /tmp/test_overwrite.txt");
+        assert_eq!(result.output.trim(), "second");
+    }
+
+    #[test]
+    fn test_redirect_stdout_append() {
+        let mut exec = setup_redirect_test();
+
+        // Write first line
+        let r1 = exec.execute_line("echo line1 > /tmp/test_append.txt");
+        assert_eq!(r1.code, 0, "first echo failed: {}", r1.error);
+
+        // Append second line
+        let r2 = exec.execute_line("echo line2 >> /tmp/test_append.txt");
+        assert_eq!(r2.code, 0, "second echo failed: {}", r2.error);
+
+        // Verify both lines exist
+        let result = exec.execute_line("cat /tmp/test_append.txt");
+        assert_eq!(result.code, 0, "cat failed: {}", result.error);
+        assert!(result.output.contains("line1"), "missing line1 in: {:?}", result.output);
+        assert!(result.output.contains("line2"), "missing line2 in: {:?}", result.output);
+    }
+
+    #[test]
+    fn test_redirect_stdin_from_file() {
+        let mut exec = setup_redirect_test();
+
+        // Create a file with content
+        exec.execute_line("echo apple banana cherry > /tmp/test_stdin.txt");
+
+        // Use input redirection with grep
+        let result = exec.execute_line("grep banana < /tmp/test_stdin.txt");
+        assert_eq!(result.code, 0);
+        assert!(result.output.contains("banana"));
+    }
+
+    #[test]
+    fn test_redirect_pipeline_to_file() {
+        let mut exec = setup_redirect_test();
+
+        // Create source file with multiline content
+        exec.execute_line("echo cherry > /tmp/test_pipe_src.txt");
+        exec.execute_line("echo apple >> /tmp/test_pipe_src.txt");
+        exec.execute_line("echo banana >> /tmp/test_pipe_src.txt");
+
+        // Pipeline with final output redirect
+        let result = exec.execute_line("cat /tmp/test_pipe_src.txt | sort > /tmp/test_pipe_dst.txt");
+        assert_eq!(result.code, 0);
+
+        // Verify sorted output
+        let result = exec.execute_line("cat /tmp/test_pipe_dst.txt");
+        let lines: Vec<&str> = result.output.lines().collect();
+        assert!(!lines.is_empty());
+        // First line should be alphabetically first
+        assert!(lines[0].contains("apple"));
+    }
+
+    #[test]
+    fn test_redirect_relative_path() {
+        let mut exec = setup_redirect_test();
+        // cwd is /home by default, ensure /home/user exists
+        exec.execute_line("mkdir /home");
+        exec.execute_line("mkdir /home/user");
+        exec.execute_line("cd /home/user");
+
+        // Write to relative path
+        exec.execute_line("echo relative test > reltest.txt");
+
+        // Read back with absolute path
+        let result = exec.execute_line("cat /home/user/reltest.txt");
+        assert_eq!(result.output.trim(), "relative test");
+    }
+
+    #[test]
+    fn test_redirect_file_not_found() {
+        let mut exec = setup_redirect_test();
+
+        // Try to read from non-existent file
+        let result = exec.execute_line("cat < /nonexistent/file.txt");
+        assert!(result.code != 0 || !result.error.is_empty());
+    }
+
+    #[test]
+    fn test_redirect_wc_from_file() {
+        let mut exec = setup_redirect_test();
+
+        // Create a file with known content
+        exec.execute_line("echo one two three > /tmp/test_wc.txt");
+        exec.execute_line("echo four five >> /tmp/test_wc.txt");
+
+        // Count words from file
+        let result = exec.execute_line("wc < /tmp/test_wc.txt");
+        assert_eq!(result.code, 0);
+        // wc output should contain line/word/char counts
+        assert!(!result.output.is_empty());
+    }
 }
