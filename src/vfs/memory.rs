@@ -391,6 +391,93 @@ impl FileSystem for MemoryFs {
         }
     }
 
+    fn rename(&mut self, from: &str, to: &str) -> io::Result<()> {
+        let from = Self::normalize_path(from);
+        let to = Self::normalize_path(to);
+
+        if from == "/" {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Cannot rename root directory",
+            ));
+        }
+
+        if !self.nodes.contains_key(&from) {
+            return Err(io::Error::new(io::ErrorKind::NotFound, "Source not found"));
+        }
+
+        // Check destination parent exists
+        self.ensure_parent(&to)?;
+
+        // Check if destination already exists
+        if self.nodes.contains_key(&to) {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "Destination already exists",
+            ));
+        }
+
+        // For directories, we need to rename all children too
+        let is_dir = matches!(self.nodes.get(&from), Some(Node::Directory));
+
+        if is_dir {
+            // Collect all paths that need renaming
+            let from_prefix = format!("{}/", from);
+            let to_prefix = format!("{}/", to);
+            let children: Vec<(String, Node)> = self
+                .nodes
+                .iter()
+                .filter(|(p, _)| p.starts_with(&from_prefix))
+                .map(|(p, n)| {
+                    let new_path = format!("{}{}", to_prefix, &p[from_prefix.len()..]);
+                    (new_path, n.clone())
+                })
+                .collect();
+
+            // Remove old paths
+            self.nodes.retain(|p, _| !p.starts_with(&from_prefix));
+
+            // Insert new paths
+            for (path, node) in children {
+                self.nodes.insert(path, node);
+            }
+        }
+
+        // Move the node itself
+        if let Some(node) = self.nodes.remove(&from) {
+            self.nodes.insert(to, node);
+        }
+
+        Ok(())
+    }
+
+    fn copy_file(&mut self, from: &str, to: &str) -> io::Result<u64> {
+        let from = Self::normalize_path(from);
+        let to = Self::normalize_path(to);
+
+        // Get source data
+        let data = match self.nodes.get(&from) {
+            Some(Node::File(data)) => data.clone(),
+            Some(Node::Directory) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Cannot copy directory with copy_file",
+                ))
+            }
+            None => return Err(io::Error::new(io::ErrorKind::NotFound, "Source not found")),
+        };
+
+        // Ensure parent exists
+        self.ensure_parent(&to)?;
+
+        let size = data.len() as u64;
+
+        // Insert copy at destination
+        self.nodes.insert(to, Node::File(data));
+
+        Ok(size)
+    }
+
     fn exists(&self, path: &str) -> bool {
         let path = Self::normalize_path(path);
         self.nodes.contains_key(&path)
@@ -619,5 +706,141 @@ mod tests {
         assert_eq!(meta.size, 5);
         assert!(meta.is_file);
         assert!(!meta.is_dir);
+    }
+
+    #[test]
+    fn test_rename_file() {
+        let mut fs = MemoryFs::new();
+
+        let handle = fs
+            .open("/old.txt", OpenOptions::new().write(true).create(true))
+            .unwrap();
+        fs.write(handle, b"content").unwrap();
+        fs.close(handle).unwrap();
+
+        fs.rename("/old.txt", "/new.txt").unwrap();
+
+        assert!(!fs.exists("/old.txt"));
+        assert!(fs.exists("/new.txt"));
+
+        // Content should be preserved
+        let handle = fs.open("/new.txt", OpenOptions::new().read(true)).unwrap();
+        let mut buf = [0u8; 7];
+        fs.read(handle, &mut buf).unwrap();
+        assert_eq!(&buf, b"content");
+    }
+
+    #[test]
+    fn test_rename_directory() {
+        let mut fs = MemoryFs::new();
+
+        fs.create_dir("/olddir").unwrap();
+        let handle = fs
+            .open("/olddir/file.txt", OpenOptions::new().write(true).create(true))
+            .unwrap();
+        fs.write(handle, b"test").unwrap();
+        fs.close(handle).unwrap();
+
+        fs.rename("/olddir", "/newdir").unwrap();
+
+        assert!(!fs.exists("/olddir"));
+        assert!(!fs.exists("/olddir/file.txt"));
+        assert!(fs.exists("/newdir"));
+        assert!(fs.exists("/newdir/file.txt"));
+    }
+
+    #[test]
+    fn test_rename_to_existing_fails() {
+        let mut fs = MemoryFs::new();
+
+        let handle = fs
+            .open("/a.txt", OpenOptions::new().write(true).create(true))
+            .unwrap();
+        fs.close(handle).unwrap();
+
+        let handle = fs
+            .open("/b.txt", OpenOptions::new().write(true).create(true))
+            .unwrap();
+        fs.close(handle).unwrap();
+
+        let result = fs.rename("/a.txt", "/b.txt");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_rename_nonexistent_fails() {
+        let mut fs = MemoryFs::new();
+
+        let result = fs.rename("/nonexistent", "/new");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_rename_root_fails() {
+        let mut fs = MemoryFs::new();
+
+        let result = fs.rename("/", "/newroot");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_copy_file() {
+        let mut fs = MemoryFs::new();
+
+        let handle = fs
+            .open("/source.txt", OpenOptions::new().write(true).create(true))
+            .unwrap();
+        fs.write(handle, b"hello world").unwrap();
+        fs.close(handle).unwrap();
+
+        let size = fs.copy_file("/source.txt", "/dest.txt").unwrap();
+        assert_eq!(size, 11);
+
+        // Both files should exist
+        assert!(fs.exists("/source.txt"));
+        assert!(fs.exists("/dest.txt"));
+
+        // Content should match
+        let handle = fs.open("/dest.txt", OpenOptions::new().read(true)).unwrap();
+        let mut buf = [0u8; 11];
+        fs.read(handle, &mut buf).unwrap();
+        assert_eq!(&buf, b"hello world");
+    }
+
+    #[test]
+    fn test_copy_directory_fails() {
+        let mut fs = MemoryFs::new();
+
+        fs.create_dir("/mydir").unwrap();
+
+        let result = fs.copy_file("/mydir", "/copydir");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_copy_nonexistent_fails() {
+        let mut fs = MemoryFs::new();
+
+        let result = fs.copy_file("/nonexistent", "/dest");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_move_file_across_dirs() {
+        let mut fs = MemoryFs::new();
+
+        fs.create_dir("/dir1").unwrap();
+        fs.create_dir("/dir2").unwrap();
+
+        let handle = fs
+            .open("/dir1/file.txt", OpenOptions::new().write(true).create(true))
+            .unwrap();
+        fs.write(handle, b"moving").unwrap();
+        fs.close(handle).unwrap();
+
+        fs.rename("/dir1/file.txt", "/dir2/file.txt").unwrap();
+
+        assert!(!fs.exists("/dir1/file.txt"));
+        assert!(fs.exists("/dir2/file.txt"));
     }
 }

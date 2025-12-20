@@ -603,6 +603,46 @@ impl Kernel {
         })
     }
 
+    /// Remove a file
+    pub fn sys_remove_file(&mut self, path: &str) -> SyscallResult<()> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let resolved = self.resolve_path(current, path)?;
+        let path_str = resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
+        self.vfs.remove_file(path_str)?;
+        Ok(())
+    }
+
+    /// Remove a directory (must be empty)
+    pub fn sys_remove_dir(&mut self, path: &str) -> SyscallResult<()> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let resolved = self.resolve_path(current, path)?;
+        let path_str = resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
+        self.vfs.remove_dir(path_str)?;
+        Ok(())
+    }
+
+    /// Rename/move a file or directory
+    pub fn sys_rename(&mut self, from: &str, to: &str) -> SyscallResult<()> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let from_resolved = self.resolve_path(current, from)?;
+        let to_resolved = self.resolve_path(current, to)?;
+        let from_str = from_resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
+        let to_str = to_resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
+        self.vfs.rename(from_str, to_str)?;
+        Ok(())
+    }
+
+    /// Copy a file
+    pub fn sys_copy_file(&mut self, from: &str, to: &str) -> SyscallResult<u64> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let from_resolved = self.resolve_path(current, from)?;
+        let to_resolved = self.resolve_path(current, to)?;
+        let from_str = from_resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
+        let to_str = to_resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
+        let size = self.vfs.copy_file(from_str, to_str)?;
+        Ok(size)
+    }
+
     // ========== MEMORY SYSCALLS ==========
 
     /// Allocate a memory region for the current process
@@ -1019,6 +1059,26 @@ pub fn exists(path: &str) -> SyscallResult<bool> {
 /// Get file/directory metadata
 pub fn metadata(path: &str) -> SyscallResult<FileMetadata> {
     KERNEL.with(|k| k.borrow().sys_metadata(path))
+}
+
+/// Remove a file
+pub fn remove_file(path: &str) -> SyscallResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_remove_file(path))
+}
+
+/// Remove a directory (must be empty)
+pub fn remove_dir(path: &str) -> SyscallResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_remove_dir(path))
+}
+
+/// Rename/move a file or directory
+pub fn rename(from: &str, to: &str) -> SyscallResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_rename(from, to))
+}
+
+/// Copy a file
+pub fn copy_file(from: &str, to: &str) -> SyscallResult<u64> {
+    KERNEL.with(|k| k.borrow_mut().sys_copy_file(from, to))
 }
 
 /// Duplicate a file descriptor

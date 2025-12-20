@@ -17,6 +17,6 @@ pub mod terminal;
 
 pub use builtins::{execute as execute_builtin, is_builtin, BuiltinResult, ShellState};
 pub use executor::{ExecResult, Executor, ProgramRegistry};
-pub use filebrowser::FileBrowser;
+pub use filebrowser::{ClipboardEntry, Entry, EntryType, FileBrowser, InputMode, StatusMessage};
 pub use parser::{parse, ParseError, Pipeline, Redirect, SimpleCommand};
 pub use terminal::Terminal;

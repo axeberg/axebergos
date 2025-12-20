@@ -107,6 +107,12 @@ pub trait FileSystem {
     /// Remove a directory
     fn remove_dir(&mut self, path: &str) -> io::Result<()>;
 
+    /// Rename/move a file or directory
+    fn rename(&mut self, from: &str, to: &str) -> io::Result<()>;
+
+    /// Copy a file to a new location
+    fn copy_file(&mut self, from: &str, to: &str) -> io::Result<u64>;
+
     /// Check if path exists
     fn exists(&self, path: &str) -> bool;
 }
