@@ -11,6 +11,7 @@ use wasm_bindgen::prelude::*;
 pub mod compositor;
 pub mod kernel;
 pub mod runtime;
+pub mod shell;
 pub mod vfs;
 
 mod boot;
