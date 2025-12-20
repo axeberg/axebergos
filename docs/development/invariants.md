@@ -131,10 +131,25 @@ Use proptest/quickcheck for:
 - Random timer schedules
 
 ### TLA+ Specifications
-Model the following state machines:
-1. Process lifecycle (P1, P2)
-2. Signal delivery (S1-S5)
-3. Timer queue (T1-T4)
+Formal specifications in `specs/tla/`:
+
+1. **ProcessStateMachine.tla** - Process lifecycle (P1, P2, P3)
+   - Exhaustively verifies state transitions
+   - Proves zombie finality
+   - Checks parent-child consistency
+
+2. **SignalDelivery.tla** - Signal system (S1-S5)
+   - Verifies SIGKILL/SIGSTOP cannot be blocked
+   - Proves priority ordering
+   - Models signal coalescing
+
+3. **TimerQueue.tla** - Timer queue (T1-T4)
+   - Verifies monotonic ordering
+   - Proves no missed timers
+   - Checks cancel effectiveness
+
+Run with TLC model checker to find bugs before implementation.
+See `specs/tla/README.md` for usage instructions.
 
 ### Fuzzing
 Fuzz the syscall interface with random sequences to find:
