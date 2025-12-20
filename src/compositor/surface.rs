@@ -44,7 +44,6 @@ impl Surface {
         let _ = style.set_property("left", "0");
         let _ = style.set_property("width", "100%");
         let _ = style.set_property("height", "100%");
-        let _ = style.set_property("z-index", "-1"); // Behind other content initially
 
         // Add to document
         document
