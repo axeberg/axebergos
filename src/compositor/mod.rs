@@ -16,6 +16,7 @@ pub use window::{Window, WindowId};
 
 use crate::console_log;
 use crate::kernel::{events, TaskId};
+use crate::shell::Terminal;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -100,6 +101,9 @@ pub struct Compositor {
     /// All windows
     windows: HashMap<WindowId, Window>,
 
+    /// Terminal state for terminal windows
+    terminals: HashMap<WindowId, Terminal>,
+
     /// Next window ID
     next_window_id: u64,
 
@@ -122,6 +126,7 @@ impl Compositor {
         Self {
             surface: None,
             windows: HashMap::new(),
+            terminals: HashMap::new(),
             next_window_id: 0,
             layout: Layout::new(),
             width: 800,
@@ -192,9 +197,18 @@ impl Compositor {
         id
     }
 
+    /// Create a new terminal window
+    pub fn create_terminal_window(&mut self, title: &str, owner: TaskId) -> WindowId {
+        let id = self.create_window(title, owner);
+        self.terminals.insert(id, Terminal::new());
+        console_log!("[compositor] Window {} is a terminal", id.0);
+        id
+    }
+
     /// Close a window
     pub fn close_window(&mut self, id: WindowId) {
         if self.windows.remove(&id).is_some() {
+            self.terminals.remove(&id);
             self.layout.remove_window(id);
             self.recalculate_layout();
 
@@ -204,6 +218,16 @@ impl Compositor {
 
             console_log!("[compositor] Closed window {}", id.0);
         }
+    }
+
+    /// Handle keyboard input - forwards to focused terminal if applicable
+    pub fn handle_key(&mut self, key: &str, code: &str, ctrl: bool, alt: bool) -> bool {
+        if let Some(focused_id) = self.focused {
+            if let Some(terminal) = self.terminals.get_mut(&focused_id) {
+                return terminal.handle_key(key, code, ctrl, alt);
+            }
+        }
+        false
     }
 
     /// Handle resize
@@ -270,6 +294,11 @@ impl Compositor {
         for (id, window) in &self.windows {
             let is_focused = self.focused == Some(*id);
             render_window(surface, &frame, window, is_focused);
+
+            // Render terminal content if this window has a terminal
+            if let Some(terminal) = self.terminals.get(id) {
+                render_terminal(surface, &frame, window, terminal, is_focused);
+            }
         }
 
         // End frame
@@ -321,6 +350,82 @@ fn render_window(surface: &mut Surface, frame: &surface::Frame, window: &Window,
         Color::rgba(0.15, 0.15, 0.2, 1.0)
     };
     surface.draw_rect(frame, title_bar, title_color);
+
+    // Draw window title
+    surface.draw_text(
+        frame,
+        &window.title,
+        title_bar.x + 8.0,
+        title_bar.y + 16.0,
+        Color::TEXT,
+        14.0,
+    );
+}
+
+/// Terminal rendering constants
+const TERM_FONT_SIZE: f32 = 14.0;
+const TERM_LINE_HEIGHT: f32 = 18.0;
+const TERM_PADDING: f32 = 8.0;
+
+/// Render terminal content inside a window
+fn render_terminal(
+    surface: &mut Surface,
+    frame: &surface::Frame,
+    window: &Window,
+    terminal: &Terminal,
+    focused: bool,
+) {
+    let content = window.content_rect();
+
+    // Calculate visible rows
+    let visible_rows = ((content.height - TERM_PADDING * 2.0) / TERM_LINE_HEIGHT) as usize;
+
+    // Update terminal's visible rows (for scroll calculation)
+    // Note: terminal is immutable here, so we set this elsewhere
+
+    // Draw scrollback lines
+    let mut y = content.y + TERM_PADDING + TERM_LINE_HEIGHT;
+    for line in terminal.visible_lines().take(visible_rows.saturating_sub(1)) {
+        let color = if line.is_input {
+            Color::rgb(0.6, 0.8, 0.6) // Greenish for user input
+        } else {
+            Color::TEXT
+        };
+        surface.draw_text(frame, &line.text, content.x + TERM_PADDING, y, color, TERM_FONT_SIZE);
+        y += TERM_LINE_HEIGHT;
+    }
+
+    // Draw input line at bottom
+    let (prompt, input, cursor_pos) = terminal.input_line();
+    let input_y = content.y + content.height - TERM_PADDING - 4.0;
+
+    // Draw prompt
+    surface.draw_text(
+        frame,
+        prompt,
+        content.x + TERM_PADDING,
+        input_y,
+        Color::rgb(0.5, 0.7, 0.9), // Blueish prompt
+        TERM_FONT_SIZE,
+    );
+
+    // Draw input text
+    let prompt_width = prompt.len() as f32 * 8.4; // Approximate char width
+    surface.draw_text(
+        frame,
+        input,
+        content.x + TERM_PADDING + prompt_width,
+        input_y,
+        Color::TEXT,
+        TERM_FONT_SIZE,
+    );
+
+    // Draw cursor (blinking effect could be added via frame count)
+    if focused {
+        let cursor_x = content.x + TERM_PADDING + prompt_width + (cursor_pos as f32 * 8.4);
+        let cursor_rect = Rect::new(cursor_x, input_y - TERM_LINE_HEIGHT + 4.0, 2.0, TERM_LINE_HEIGHT);
+        surface.draw_rect(frame, cursor_rect, Color::ACCENT);
+    }
 }
 
 // Global compositor instance
@@ -358,4 +463,14 @@ pub fn resize(width: u32, height: u32) {
 /// Handle click event
 pub fn handle_click(x: f64, y: f64, button: events::MouseButton) {
     COMPOSITOR.with(|c| c.borrow_mut().handle_click(x, y, button))
+}
+
+/// Create a terminal window on the global compositor
+pub fn create_terminal_window(title: &str, owner: TaskId) -> WindowId {
+    COMPOSITOR.with(|c| c.borrow_mut().create_terminal_window(title, owner))
+}
+
+/// Handle keyboard event - forwards to focused terminal
+pub fn handle_key(key: &str, code: &str, ctrl: bool, alt: bool) -> bool {
+    COMPOSITOR.with(|c| c.borrow_mut().handle_key(key, code, ctrl, alt))
 }

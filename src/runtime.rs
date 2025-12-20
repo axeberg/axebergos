@@ -131,6 +131,14 @@ fn process_compositor_events() {
             events::Event::Input(events::InputEvent::Resize { width, height }) => {
                 compositor::resize(width, height);
             }
+            events::Event::Input(events::InputEvent::KeyDown {
+                key,
+                code,
+                modifiers,
+            }) => {
+                // Forward to compositor (terminal windows handle keyboard input)
+                compositor::handle_key(&key, &code, modifiers.ctrl, modifiers.alt);
+            }
             _ => {}
         }
     }

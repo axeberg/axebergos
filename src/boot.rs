@@ -153,11 +153,11 @@ async fn init_compositor() {
         return;
     }
 
-    console_log!("[compositor] Surface ready, creating demo windows...");
+    console_log!("[compositor] Surface ready, creating windows...");
 
-    // Create demo windows (using TaskId for now, will use syscall later)
+    // Create windows (using TaskId for now, will use syscall later)
     let owner = kernel::TaskId(0);
-    comp.create_window("Terminal", owner);
+    comp.create_terminal_window("Terminal", owner);
     comp.create_window("Files", owner);
 
     compositor::COMPOSITOR.with(|c| {
