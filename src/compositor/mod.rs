@@ -14,7 +14,6 @@ pub use layout::{Layout, LayoutNode, Split};
 pub use surface::Surface;
 pub use window::{Window, WindowId};
 
-use crate::console_log;
 use crate::kernel::{events, TaskId};
 use crate::shell::{FileBrowser, Terminal};
 use std::cell::RefCell;
@@ -146,7 +145,6 @@ impl Compositor {
             return Ok(());
         }
 
-        console_log!("[compositor] Initializing...");
 
         // Get window dimensions
         if let Some(window) = web_sys::window() {
@@ -166,14 +164,8 @@ impl Compositor {
         match Surface::new(self.width, self.height).await {
             Ok(surface) => {
                 self.surface = Some(surface);
-                console_log!(
-                    "[compositor] Surface created ({}x{})",
-                    self.width,
-                    self.height
-                );
             }
             Err(e) => {
-                console_log!("[compositor] Failed to create surface: {}", e);
                 return Err(e);
             }
         }
@@ -196,8 +188,6 @@ impl Compositor {
 
         // Focus the new window
         self.focused = Some(id);
-
-        console_log!("[compositor] Created window {} '{}'", id.0, title);
         id
     }
 
@@ -205,7 +195,6 @@ impl Compositor {
     pub fn create_terminal_window(&mut self, title: &str, owner: TaskId) -> WindowId {
         let id = self.create_window(title, owner);
         self.terminals.insert(id, Terminal::new());
-        console_log!("[compositor] Window {} is a terminal", id.0);
         id
     }
 
@@ -213,8 +202,17 @@ impl Compositor {
     pub fn create_filebrowser_window(&mut self, title: &str, owner: TaskId) -> WindowId {
         let id = self.create_window(title, owner);
         self.file_browsers.insert(id, FileBrowser::new());
-        console_log!("[compositor] Window {} is a file browser", id.0);
         id
+    }
+
+    /// Get a terminal by window ID
+    pub fn get_terminal_mut(&mut self, id: WindowId) -> Option<&mut Terminal> {
+        self.terminals.get_mut(&id)
+    }
+
+    /// Get a file browser by window ID
+    pub fn get_filebrowser_mut(&mut self, id: WindowId) -> Option<&mut FileBrowser> {
+        self.file_browsers.get_mut(&id)
     }
 
     /// Close a window
@@ -228,8 +226,6 @@ impl Compositor {
             if self.focused == Some(id) {
                 self.focused = self.windows.keys().next().copied();
             }
-
-            console_log!("[compositor] Closed window {}", id.0);
         }
     }
 
@@ -263,7 +259,6 @@ impl Compositor {
         }
 
         self.recalculate_layout();
-        console_log!("[compositor] Resized to {}x{}", width, height);
     }
 
     /// Recalculate window positions based on layout

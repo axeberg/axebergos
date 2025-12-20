@@ -4,7 +4,6 @@
 //! Can be upgraded to WebGPU later for better performance.
 
 use super::{Color, Rect};
-use crate::console_log;
 use wasm_bindgen::JsCast;
 
 /// A frame being rendered (for Canvas2D this is just a marker)
@@ -61,8 +60,6 @@ impl Surface {
             .ok_or("No context")?
             .dyn_into::<web_sys::CanvasRenderingContext2d>()
             .map_err(|_| "Not a 2D context")?;
-
-        console_log!("[surface] Canvas2D surface created ({}x{})", width, height);
 
         Ok(Self {
             canvas,
