@@ -1052,11 +1052,82 @@ mod tests {
     fn test_cd_updates_state() {
         setup_kernel();
         let mut exec = Executor::new();
-        exec.state.cwd = std::path::PathBuf::from("/home");
 
-        // This will fail because /tmp may not exist in VFS
-        // but we can test that cd tries to change directory
-        let _ = exec.execute_line("cd /dev");
+        // Create test directory
+        exec.execute_line("mkdir /test_cd");
+
+        // cd to it
+        let result = exec.execute_line("cd /test_cd");
+        assert_eq!(result.code, 0, "cd failed: {}", result.error);
+
+        // Verify shell state updated
+        assert_eq!(exec.state.cwd.display().to_string(), "/test_cd");
+
+        // Verify PWD env var updated
+        assert_eq!(exec.state.get_env("PWD"), Some("/test_cd"));
+    }
+
+    #[test]
+    fn test_cd_then_ls_relative_path() {
+        setup_kernel();
+        let mut exec = Executor::new();
+
+        // Create directory structure
+        exec.execute_line("mkdir /test_ls");
+        exec.execute_line("touch /test_ls/file1.txt");
+        exec.execute_line("touch /test_ls/file2.txt");
+
+        // cd to the directory
+        let result = exec.execute_line("cd /test_ls");
+        assert_eq!(result.code, 0, "cd failed: {}", result.error);
+
+        // ls with current directory (relative path)
+        let result = exec.execute_line("ls .");
+        assert_eq!(result.code, 0, "ls . failed: {}", result.error);
+        assert!(result.output.contains("file1.txt"), "ls output missing file1.txt: {}", result.output);
+        assert!(result.output.contains("file2.txt"), "ls output missing file2.txt: {}", result.output);
+    }
+
+    #[test]
+    fn test_ls_without_args_uses_cwd() {
+        setup_kernel();
+        let mut exec = Executor::new();
+
+        // Create and cd to directory
+        exec.execute_line("mkdir /test_ls_cwd");
+        exec.execute_line("touch /test_ls_cwd/myfile.txt");
+        exec.execute_line("cd /test_ls_cwd");
+
+        // ls without arguments should list current directory
+        let result = exec.execute_line("ls");
+        assert_eq!(result.code, 0, "ls failed: {}", result.error);
+        assert!(result.output.contains("myfile.txt"), "ls output missing myfile.txt: {}", result.output);
+    }
+
+    #[test]
+    fn test_cat_relative_path() {
+        setup_kernel();
+        let mut exec = Executor::new();
+
+        // Create a file with content
+        exec.execute_line("mkdir /test_cat");
+        exec.execute_line("echo hello world > /test_cat/greeting.txt");
+        exec.execute_line("cd /test_cat");
+
+        // cat with relative path
+        let result = exec.execute_line("cat greeting.txt");
+        assert_eq!(result.code, 0, "cat failed: {}", result.error);
+        assert!(result.output.contains("hello world"), "cat output wrong: {}", result.output);
+    }
+
+    #[test]
+    fn test_cd_to_nonexistent() {
+        setup_kernel();
+        let mut exec = Executor::new();
+
+        let result = exec.execute_line("cd /nonexistent_dir_xyz");
+        assert_ne!(result.code, 0);
+        assert!(result.error.contains("No such file"));
     }
 
     // ============ Environment ============

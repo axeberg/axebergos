@@ -52,7 +52,7 @@ impl MemoryFs {
         fs
     }
 
-    /// Normalize a path (ensure leading slash, no trailing slash except root)
+    /// Normalize a path (ensure leading slash, no trailing slash except root, resolve . and ..)
     fn normalize_path(path: &str) -> String {
         let path = if path.starts_with('/') {
             path.to_string()
@@ -60,10 +60,22 @@ impl MemoryFs {
             format!("/{}", path)
         };
 
-        if path.len() > 1 && path.ends_with('/') {
-            path[..path.len() - 1].to_string()
+        // Resolve . and .. components
+        let mut result: Vec<&str> = Vec::new();
+        for component in path.split('/') {
+            match component {
+                "" | "." => {} // skip empty and current dir
+                ".." => {
+                    result.pop(); // go up one level
+                }
+                name => result.push(name),
+            }
+        }
+
+        if result.is_empty() {
+            "/".to_string()
         } else {
-            path
+            format!("/{}", result.join("/"))
         }
     }
 
