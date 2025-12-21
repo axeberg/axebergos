@@ -81,6 +81,8 @@ impl ProgramRegistry {
         reg.register("mkdir", prog_mkdir);
         reg.register("touch", prog_touch);
         reg.register("rm", prog_rm);
+        reg.register("cp", prog_cp);
+        reg.register("mv", prog_mv);
         reg.register("head", prog_head);
         reg.register("tail", prog_tail);
         reg.register("wc", prog_wc);
@@ -611,18 +613,97 @@ fn prog_touch(args: &[String], _stdout: &mut String, stderr: &mut String) -> i32
     code
 }
 
-/// rm - remove files (stub - needs VFS unlink)
+/// rm - remove files
 fn prog_rm(args: &[String], _stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, paths) = extract_stdin(args);
+    let (_, args) = extract_stdin(args);
+
+    if args.is_empty() {
+        stderr.push_str("rm: missing operand\n");
+        return 1;
+    }
+
+    let recursive = args.iter().any(|&a| a == "-r" || a == "-rf" || a == "-fr");
+    let paths: Vec<&str> = args.iter()
+        .copied()
+        .filter(|a| !a.starts_with('-'))
+        .collect();
 
     if paths.is_empty() {
         stderr.push_str("rm: missing operand\n");
         return 1;
     }
 
-    // TODO: Need VFS unlink syscall
-    stderr.push_str("rm: not yet implemented\n");
-    1
+    let mut failed = false;
+    for path in paths {
+        // Check if it's a directory
+        match syscall::metadata(path) {
+            Ok(meta) if meta.is_dir => {
+                if recursive {
+                    if let Err(e) = syscall::remove_dir(path) {
+                        stderr.push_str(&format!("rm: cannot remove '{}': {}\n", path, e));
+                        failed = true;
+                    }
+                } else {
+                    stderr.push_str(&format!("rm: cannot remove '{}': Is a directory\n", path));
+                    failed = true;
+                }
+            }
+            Ok(_) => {
+                if let Err(e) = syscall::remove_file(path) {
+                    stderr.push_str(&format!("rm: cannot remove '{}': {}\n", path, e));
+                    failed = true;
+                }
+            }
+            Err(e) => {
+                stderr.push_str(&format!("rm: cannot remove '{}': {}\n", path, e));
+                failed = true;
+            }
+        }
+    }
+
+    if failed { 1 } else { 0 }
+}
+
+/// cp - copy files
+fn prog_cp(args: &[String], _stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if args.len() < 2 {
+        stderr.push_str("cp: missing operand\n");
+        return 1;
+    }
+
+    let src = &args[0];
+    let dst = &args[1];
+
+    match syscall::copy_file(src, dst) {
+        Ok(_) => 0,
+        Err(e) => {
+            stderr.push_str(&format!("cp: cannot copy '{}' to '{}': {}\n", src, dst, e));
+            1
+        }
+    }
+}
+
+/// mv - move/rename files
+fn prog_mv(args: &[String], _stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if args.len() < 2 {
+        stderr.push_str("mv: missing operand\n");
+        return 1;
+    }
+
+    let src = &args[0];
+    let dst = &args[1];
+
+    match syscall::rename(src, dst) {
+        Ok(()) => 0,
+        Err(e) => {
+            stderr.push_str(&format!("mv: cannot move '{}' to '{}': {}\n", src, dst, e));
+            1
+        }
+    }
 }
 
 /// head - output first lines

@@ -40,20 +40,30 @@ fn init_filesystem() {
 This is your personal computing environment.
 Tractable. Immediate. Yours.
 
+Available commands:
+  ls [path]      - List directory contents
+  cd <path>      - Change directory
+  pwd            - Print working directory
+  cat <file>     - Display file contents
+  echo <text>    - Print text
+  mkdir <dir>    - Create directory
+  touch <file>   - Create empty file
+  rm <file>      - Remove file
+  cp <src> <dst> - Copy file
+  mv <src> <dst> - Move/rename file
+  wc <file>      - Count lines/words/chars
+  head <file>    - Show first lines
+  tail <file>    - Show last lines
+  clear          - Clear screen
+  help           - Show this help
+
 Keyboard shortcuts:
-  Terminal: Type commands and press Enter
-  File Browser:
-    Arrow keys - Navigate
-    Enter      - Open file/directory
-    Backspace  - Go up
-    n          - New file
-    N          - New directory
-    d/Delete   - Delete
-    r/F2       - Rename
-    c          - Copy
-    x          - Cut
-    p/v        - Paste
-    Ctrl+R     - Refresh
+  Ctrl+C  - Cancel current input
+  Ctrl+L  - Clear screen
+  Ctrl+U  - Clear line
+  Ctrl+A  - Move to start of line
+  Ctrl+E  - Move to end of line
+  Up/Down - Command history
 "#;
     let fd = syscall::open("/home/user/welcome.txt", OpenFlags::WRITE).expect("create welcome.txt");
     syscall::write(fd, welcome.as_bytes()).expect("write welcome.txt");
@@ -74,15 +84,14 @@ async fn init_compositor() {
         return;
     }
 
-    // Create windows
+    // Create terminal window (takes full screen with single window)
     let owner = kernel::TaskId(0);
-    comp.create_terminal_window("Terminal", owner);
-    comp.create_filebrowser_window("Files", owner);
+    let term_id = comp.create_terminal_window("Terminal", owner);
 
     // Print welcome message to terminal
-    if let Some(term) = comp.get_terminal_mut(compositor::WindowId(1)) {
+    if let Some(term) = comp.get_terminal_mut(term_id) {
         term.print("axeberg v0.1.0");
-        term.print("Type 'help' for available commands, or 'cat /home/user/welcome.txt'");
+        term.print("Type 'help' for available commands.");
         term.print("");
     }
 
