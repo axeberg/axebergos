@@ -52,8 +52,12 @@ pub struct Surface {
     context: web_sys::GpuCanvasContext,
     canvas: web_sys::HtmlCanvasElement,
     _format: web_sys::GpuTextureFormat,
+    /// Physical pixel width (CSS width * DPR)
     width: u32,
+    /// Physical pixel height (CSS height * DPR)
     height: u32,
+    /// Device pixel ratio for high-DPI displays
+    device_pixel_ratio: f64,
 
     // Pipelines
     rect_pipeline: web_sys::GpuRenderPipeline,
@@ -75,11 +79,24 @@ pub struct Surface {
 
 impl Surface {
     /// Create a new WebGPU surface
+    ///
+    /// width/height are CSS pixel dimensions. They will be scaled by device pixel ratio
+    /// for high-DPI displays.
     pub async fn new(width: u32, height: u32) -> Result<Self, String> {
         // Get WebGPU adapter
         let window = web_sys::window().ok_or("No window")?;
         let navigator = window.navigator();
         let gpu = navigator.gpu();
+
+        // Get device pixel ratio for high-DPI displays (Retina, etc.)
+        let device_pixel_ratio = window.device_pixel_ratio();
+        let physical_width = ((width as f64) * device_pixel_ratio).round() as u32;
+        let physical_height = ((height as f64) * device_pixel_ratio).round() as u32;
+
+        web_sys::console::log_1(&format!(
+            "[surface] DPR: {}, CSS: {}x{}, Physical: {}x{}",
+            device_pixel_ratio, width, height, physical_width, physical_height
+        ).into());
 
         let adapter_opts = web_sys::GpuRequestAdapterOptions::new();
         adapter_opts.set_power_preference(web_sys::GpuPowerPreference::HighPerformance);
@@ -108,11 +125,12 @@ impl Surface {
             .dyn_into::<web_sys::HtmlCanvasElement>()
             .map_err(|_| "Not a canvas")?;
 
-        canvas.set_width(width);
-        canvas.set_height(height);
+        // Set canvas buffer size to physical pixels for crisp rendering
+        canvas.set_width(physical_width);
+        canvas.set_height(physical_height);
         canvas.set_id("axeberg-canvas");
 
-        // Style fullscreen
+        // Style fullscreen - CSS handles the display size
         let style = canvas.style();
         let _ = style.set_property("position", "fixed");
         let _ = style.set_property("top", "0");
@@ -176,12 +194,15 @@ impl Surface {
             vertex_usage,
         );
 
-        // Upload initial uniform data
-        let uniform_data = [width as f32, height as f32];
+        // Upload initial uniform data (use physical pixel dimensions)
+        let uniform_data = [physical_width as f32, physical_height as f32];
         let uniform_array = js_sys::Float32Array::from(uniform_data.as_slice());
         let _ = queue.write_buffer_with_u32_and_buffer_source(&uniform_buffer, 0, &uniform_array);
 
-        web_sys::console::log_1(&format!("[surface] WebGPU surface initialized: {}x{}", width, height).into());
+        web_sys::console::log_1(&format!(
+            "[surface] WebGPU surface initialized: {}x{} (physical), DPR: {}",
+            physical_width, physical_height, device_pixel_ratio
+        ).into());
 
         Ok(Self {
             device,
@@ -189,8 +210,9 @@ impl Surface {
             context,
             canvas,
             _format: format,
-            width,
-            height,
+            width: physical_width,
+            height: physical_height,
+            device_pixel_ratio,
             rect_pipeline,
             glyph_pipeline,
             rect_buffer,
@@ -204,14 +226,28 @@ impl Surface {
     }
 
     /// Resize the surface
+    ///
+    /// width/height are CSS pixel dimensions. They will be scaled by device pixel ratio.
     pub fn resize(&mut self, width: u32, height: u32) {
-        self.width = width;
-        self.height = height;
-        self.canvas.set_width(width);
-        self.canvas.set_height(height);
+        // Recalculate DPR in case it changed (e.g., moved to different monitor)
+        if let Some(window) = web_sys::window() {
+            self.device_pixel_ratio = window.device_pixel_ratio();
+        }
 
-        // Update uniform buffer
-        let uniform_data = [width as f32, height as f32];
+        let physical_width = ((width as f64) * self.device_pixel_ratio).round() as u32;
+        let physical_height = ((height as f64) * self.device_pixel_ratio).round() as u32;
+
+        if physical_width == self.width && physical_height == self.height {
+            return;
+        }
+
+        self.width = physical_width;
+        self.height = physical_height;
+        self.canvas.set_width(physical_width);
+        self.canvas.set_height(physical_height);
+
+        // Update uniform buffer with physical dimensions
+        let uniform_data = [physical_width as f32, physical_height as f32];
         let uniform_array = js_sys::Float32Array::from(uniform_data.as_slice());
         let _ = self.queue.write_buffer_with_u32_and_buffer_source(&self.uniform_buffer, 0, &uniform_array);
     }
@@ -244,19 +280,24 @@ impl Surface {
     }
 
     /// Draw a filled rectangle
+    ///
+    /// Coordinates are in CSS pixels and will be scaled by DPR internally.
     pub fn draw_rect(&mut self, frame: &mut Frame, rect: Rect, color: Color) {
         if frame.rects.len() >= self.max_rects {
             return;
         }
 
+        let dpr = self.device_pixel_ratio as f32;
         frame.rects.push(RectInstance {
-            pos: [rect.x, rect.y],
-            size: [rect.width, rect.height],
+            pos: [rect.x * dpr, rect.y * dpr],
+            size: [rect.width * dpr, rect.height * dpr],
             color: [color.r, color.g, color.b, color.a],
         });
     }
 
     /// Draw text
+    ///
+    /// Coordinates and font_size are in CSS pixels and will be scaled by DPR internally.
     pub fn draw_text(
         &mut self,
         frame: &mut Frame,
@@ -266,8 +307,16 @@ impl Surface {
         color: Color,
         font_size: f32,
     ) {
-        let scale = font_size / 16.0;
+        let dpr = self.device_pixel_ratio as f32;
+
+        // Scale font size by DPR for crisp rendering
+        let physical_font_size = font_size * dpr;
+        let scale = physical_font_size / 16.0;
         let glyph_width = 8.0 * scale;
+
+        // Scale position by DPR
+        let physical_x = x * dpr;
+        let physical_y = y * dpr;
 
         for (i, c) in text.chars().enumerate() {
             if frame.glyphs.len() >= self.max_glyphs {
@@ -280,7 +329,7 @@ impl Surface {
             }
 
             frame.glyphs.push(GlyphInstance {
-                pos: [x + (i as f32 * glyph_width), y],
+                pos: [physical_x + (i as f32 * glyph_width), physical_y],
                 glyph: glyph_index,
                 scale,
                 color: [color.r, color.g, color.b, color.a],
