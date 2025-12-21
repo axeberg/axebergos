@@ -91,6 +91,7 @@ impl ProgramRegistry {
         reg.register("uniq", prog_uniq);
         reg.register("tee", prog_tee);
         reg.register("clear", prog_clear);
+        reg.register("save", prog_save);
 
         reg
     }
@@ -938,6 +939,40 @@ fn prog_tee(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 /// clear - clear screen (outputs ANSI escape)
 fn prog_clear(_args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
     stdout.push_str("\x1b[2J\x1b[H");
+    0
+}
+
+/// save - persist filesystem to OPFS
+fn prog_save(_args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
+    // Queue the async save operation
+    #[cfg(target_arch = "wasm32")]
+    {
+        use crate::vfs::Persistence;
+        wasm_bindgen_futures::spawn_local(async {
+            let data = match syscall::vfs_snapshot() {
+                Ok(d) => d,
+                Err(e) => {
+                    crate::console_log!("[save] Snapshot failed: {}", e);
+                    return;
+                }
+            };
+
+            let fs = match crate::vfs::MemoryFs::from_json(&data) {
+                Ok(f) => f,
+                Err(e) => {
+                    crate::console_log!("[save] Deserialize failed: {}", e);
+                    return;
+                }
+            };
+
+            if let Err(e) = Persistence::save(&fs).await {
+                crate::console_log!("[save] Save failed: {}", e);
+            } else {
+                crate::console_log!("[save] Filesystem saved to OPFS");
+            }
+        });
+    }
+    stdout.push_str("Saving filesystem...");
     0
 }
 

@@ -3,15 +3,20 @@
 //! This module bridges the kernel to the browser's event loop:
 //! - requestAnimationFrame drives the tick loop
 //! - DOM events are captured and pushed to the event queue
+//! - beforeunload saves state to OPFS
 //!
 //! The goal: make the browser disappear. You're running an OS.
 
 use crate::compositor;
 use crate::console_log;
-use crate::kernel::{self, events};
+use crate::kernel::{self, events, syscall};
+use crate::vfs::Persistence;
 use std::cell::RefCell;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
+
+/// Auto-save interval in milliseconds (30 seconds)
+const AUTO_SAVE_INTERVAL_MS: f64 = 30_000.0;
 
 /// State for the animation frame loop
 struct RuntimeState {
@@ -21,6 +26,10 @@ struct RuntimeState {
     running: bool,
     /// Frame count
     frame_count: u64,
+    /// Last auto-save timestamp
+    last_save_time: f64,
+    /// Is save in progress?
+    save_in_progress: bool,
 }
 
 thread_local! {
@@ -28,6 +37,8 @@ thread_local! {
         frame_closure: None,
         running: false,
         frame_count: 0,
+        last_save_time: 0.0,
+        save_in_progress: false,
     });
 }
 
@@ -90,17 +101,47 @@ fn request_animation_frame() {
 
 /// Called every frame by requestAnimationFrame
 fn frame_tick(timestamp: f64) {
-    let should_continue = STATE.with(|state| {
+    let (should_continue, should_save) = STATE.with(|state| {
         let mut state = state.borrow_mut();
         if !state.running {
-            return false;
+            return (false, false);
         }
         state.frame_count += 1;
-        true
+
+        // Check if it's time for auto-save
+        let should_save = !state.save_in_progress
+            && (timestamp - state.last_save_time) >= AUTO_SAVE_INTERVAL_MS;
+
+        if should_save {
+            state.save_in_progress = true;
+            state.last_save_time = timestamp;
+        }
+
+        (true, should_save)
     });
 
     if !should_continue {
         return;
+    }
+
+    // Trigger auto-save if needed
+    if should_save {
+        wasm_bindgen_futures::spawn_local(async {
+            match save_state().await {
+                Ok(()) => {
+                    // Mark save as complete
+                    STATE.with(|state| {
+                        state.borrow_mut().save_in_progress = false;
+                    });
+                }
+                Err(e) => {
+                    console_log!("[runtime] Auto-save failed: {}", e);
+                    STATE.with(|state| {
+                        state.borrow_mut().save_in_progress = false;
+                    });
+                }
+            }
+        });
     }
 
     // Push a frame event
@@ -209,7 +250,40 @@ fn setup_event_listeners() {
         closure.forget();
     }
 
+    // Before unload - save state to OPFS
+    {
+        let closure = Closure::wrap(Box::new(move |_event: web_sys::BeforeUnloadEvent| {
+            // Sync VFS to OPFS
+            wasm_bindgen_futures::spawn_local(async {
+                if let Err(e) = save_state().await {
+                    console_log!("[runtime] Failed to save state: {}", e);
+                }
+            });
+        }) as Box<dyn FnMut(_)>);
+
+        let _ = window.add_event_listener_with_callback(
+            "beforeunload",
+            closure.as_ref().unchecked_ref(),
+        );
+        closure.forget();
+    }
+
     console_log!("[runtime] Event listeners installed");
+}
+
+/// Save VFS state to OPFS
+async fn save_state() -> Result<(), String> {
+    // Get VFS snapshot
+    let data = syscall::vfs_snapshot().map_err(|e| e.to_string())?;
+
+    // Restore into a MemoryFs to pass to Persistence::save
+    let fs = crate::vfs::MemoryFs::from_json(&data).map_err(|e| e.to_string())?;
+
+    // Save to OPFS
+    Persistence::save(&fs).await?;
+
+    console_log!("[runtime] State saved to OPFS");
+    Ok(())
 }
 
 /// Extract modifiers from keyboard event

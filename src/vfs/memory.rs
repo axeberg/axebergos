@@ -1,9 +1,10 @@
 //! In-memory filesystem implementation
 //!
 //! Simple, fast, ephemeral. Good for development and as a cache layer.
-//! Data lives only as long as the page is open.
+//! Supports serialization for persistence to OPFS.
 
 use super::{DirEntry, FileHandle, FileSystem, Metadata, OpenOptions};
+use serde::{Deserialize, Serialize};
 use slab::Slab;
 use std::collections::HashMap;
 use std::io::{self, SeekFrom};
@@ -17,10 +18,19 @@ struct OpenFile {
 }
 
 /// A stored file or directory
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 enum Node {
     File(Vec<u8>),
     Directory,
+}
+
+/// Serializable snapshot of the filesystem
+#[derive(Serialize, Deserialize)]
+pub struct FsSnapshot {
+    /// All files and directories
+    nodes: HashMap<String, Node>,
+    /// Format version for future compatibility
+    version: u32,
 }
 
 /// In-memory filesystem
@@ -88,6 +98,50 @@ impl MemoryFs {
 impl Default for MemoryFs {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Snapshot version - increment when format changes
+const SNAPSHOT_VERSION: u32 = 1;
+
+impl MemoryFs {
+    /// Create a snapshot of the filesystem for persistence
+    pub fn snapshot(&self) -> FsSnapshot {
+        FsSnapshot {
+            nodes: self.nodes.clone(),
+            version: SNAPSHOT_VERSION,
+        }
+    }
+
+    /// Restore filesystem from a snapshot
+    pub fn restore(snapshot: FsSnapshot) -> io::Result<Self> {
+        if snapshot.version != SNAPSHOT_VERSION {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "Snapshot version mismatch: expected {}, got {}",
+                    SNAPSHOT_VERSION, snapshot.version
+                ),
+            ));
+        }
+
+        Ok(Self {
+            nodes: snapshot.nodes,
+            handles: Slab::new(),
+        })
+    }
+
+    /// Serialize to JSON bytes
+    pub fn to_json(&self) -> io::Result<Vec<u8>> {
+        serde_json::to_vec(&self.snapshot())
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    }
+
+    /// Deserialize from JSON bytes
+    pub fn from_json(data: &[u8]) -> io::Result<Self> {
+        let snapshot: FsSnapshot = serde_json::from_slice(data)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        Self::restore(snapshot)
     }
 }
 

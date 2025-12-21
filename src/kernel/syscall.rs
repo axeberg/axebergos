@@ -176,6 +176,11 @@ impl Kernel {
         &mut self.vfs
     }
 
+    /// Replace the VFS (for restoring from persistence)
+    pub fn set_vfs(&mut self, vfs: MemoryFs) {
+        self.vfs = vfs;
+    }
+
     /// Get the currently running process
     pub fn current_process(&self) -> Option<&Process> {
         self.current.and_then(|pid| self.processes.get(&pid))
@@ -1319,6 +1324,20 @@ pub fn trace_event(category: TraceCategory, name: &str, detail: Option<&str>) {
             kernel.tracer_mut().trace_instant(now, category, name);
         }
     })
+}
+
+// ========== PERSISTENCE API ==========
+
+/// Get a JSON snapshot of the VFS for persistence
+pub fn vfs_snapshot() -> std::io::Result<Vec<u8>> {
+    KERNEL.with(|k| k.borrow().vfs().to_json())
+}
+
+/// Restore VFS from a JSON snapshot
+pub fn vfs_restore(data: &[u8]) -> std::io::Result<()> {
+    let vfs = MemoryFs::from_json(data)?;
+    KERNEL.with(|k| k.borrow_mut().set_vfs(vfs));
+    Ok(())
 }
 
 #[cfg(test)]

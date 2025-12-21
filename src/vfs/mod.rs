@@ -6,8 +6,10 @@
 //! Design: trait-based abstraction, keeping it simple.
 
 pub mod memory;
+pub mod persist;
 
-pub use memory::MemoryFs;
+pub use memory::{FsSnapshot, MemoryFs};
+pub use persist::Persistence;
 
 use std::io;
 

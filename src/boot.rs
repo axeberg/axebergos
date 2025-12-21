@@ -4,9 +4,11 @@
 //! boot should be immediate, comprehensible, and joyful.
 
 use crate::compositor;
+use crate::console_log;
 use crate::kernel::syscall::{self, OpenFlags};
 use crate::kernel::{self, Priority};
 use crate::runtime;
+use crate::vfs::Persistence;
 
 /// Boot the system
 pub fn boot() {
@@ -14,19 +16,49 @@ pub fn boot() {
     let init_pid = syscall::spawn_process("init");
     syscall::set_current_process(init_pid);
 
-    // Initialize the filesystem with content
-    init_filesystem();
-
-    // Start the compositor (Critical priority)
+    // Initialize filesystem and compositor (async)
     kernel::spawn_with_priority(
         async {
-            wasm_bindgen_futures::spawn_local(init_compositor());
+            wasm_bindgen_futures::spawn_local(async {
+                // Try to restore persisted filesystem
+                match restore_or_init_filesystem().await {
+                    Ok(restored) => {
+                        if restored {
+                            console_log!("[boot] Restored filesystem from OPFS");
+                        } else {
+                            console_log!("[boot] Initialized fresh filesystem");
+                        }
+                    }
+                    Err(e) => {
+                        console_log!("[boot] Filesystem error: {}, using fresh", e);
+                        init_filesystem();
+                    }
+                }
+
+                // Initialize compositor
+                init_compositor().await;
+            });
         },
         Priority::Critical,
     );
 
     // Start the runtime loop (this returns immediately, loop runs via rAF)
     runtime::start();
+}
+
+/// Try to restore filesystem from OPFS, or initialize fresh
+async fn restore_or_init_filesystem() -> Result<bool, String> {
+    // Try to load from OPFS
+    if let Some(fs) = Persistence::load().await? {
+        // Restore the VFS
+        let data = fs.to_json().map_err(|e| e.to_string())?;
+        syscall::vfs_restore(&data).map_err(|e| e.to_string())?;
+        Ok(true)
+    } else {
+        // Fresh install - initialize filesystem
+        init_filesystem();
+        Ok(false)
+    }
 }
 
 /// Set up initial filesystem structure using syscalls
@@ -55,7 +87,11 @@ Available commands:
   head <file>    - Show first lines
   tail <file>    - Show last lines
   clear          - Clear screen
+  save           - Persist filesystem now
   help           - Show this help
+
+Your files are automatically saved every 30 seconds and
+when you close the browser. Use 'save' to save immediately.
 
 Keyboard shortcuts:
   Ctrl+C  - Cancel current input

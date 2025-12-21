@@ -28,6 +28,10 @@ pin-project-lite = "0.2"
 # For the VFS - efficient handle allocation
 slab = "0.4"
 
+# Serialization for persistence
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
 [dependencies.web-sys]
 version = "0.3"
 features = [
@@ -44,6 +48,20 @@ features = [
     "HtmlCanvasElement",
     "CanvasRenderingContext2d",
     "CssStyleDeclaration",
+    # OPFS (Origin Private File System) for persistence
+    "Navigator",
+    "StorageManager",
+    "FileSystemDirectoryHandle",
+    "FileSystemFileHandle",
+    "FileSystemWritableFileStream",
+    "FileSystemGetFileOptions",
+    "FileSystemGetDirectoryOptions",
+    "FileSystemCreateWritableOptions",
+    "Blob",
+    "File",
+    "ReadableStream",
+    # For beforeunload
+    "BeforeUnloadEvent",
 ]
 
 # Dev server (native only, not compiled to WASM)
