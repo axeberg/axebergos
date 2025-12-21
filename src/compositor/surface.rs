@@ -594,6 +594,7 @@ fn create_font_texture(
 
     let copy_texture = web_sys::GpuImageCopyTexture::new(&texture);
     let data_layout = web_sys::GpuImageDataLayout::new();
+    data_layout.set_offset(0.0);
     data_layout.set_bytes_per_row(width);
     data_layout.set_rows_per_image(height);
 
@@ -604,7 +605,10 @@ fn create_font_texture(
     size_array.push(&wasm_bindgen::JsValue::from(1u32));
 
     let array = js_sys::Uint8Array::from(font_data.as_slice());
-    let _ = queue.write_texture_with_buffer_source_and_u32_sequence(&copy_texture, &array, &data_layout, &size_array);
+    web_sys::console::log_1(&format!("[surface] Uploading font texture: {} bytes", font_data.len()).into());
+    if let Err(e) = queue.write_texture_with_buffer_source_and_u32_sequence(&copy_texture, &array, &data_layout, &size_array) {
+        web_sys::console::error_1(&format!("[surface] Font texture upload failed: {:?}", e).into());
+    }
 
     let sampler_desc = web_sys::GpuSamplerDescriptor::new();
     sampler_desc.set_mag_filter(web_sys::GpuFilterMode::Nearest);

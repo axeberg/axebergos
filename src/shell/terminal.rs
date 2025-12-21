@@ -74,7 +74,9 @@ pub struct Terminal {
 
 impl Terminal {
     pub fn new() -> Self {
+        #[cfg(all(target_arch = "wasm32", not(test)))]
         crate::console_log!("[terminal] Creating terminal...");
+
         let mut term = Self {
             lines: VecDeque::with_capacity(MAX_LINES),
             input: String::new(),
@@ -88,6 +90,8 @@ impl Terminal {
             scroll_offset: 0,
             active: true,
         };
+
+        #[cfg(all(target_arch = "wasm32", not(test)))]
         crate::console_log!("[terminal] Terminal created, cwd: {}", term.executor.state.cwd.display());
 
         // Welcome message

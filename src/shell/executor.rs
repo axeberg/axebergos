@@ -131,8 +131,9 @@ impl Executor {
     pub fn new() -> Self {
         let state = ShellState::new();
         // Sync kernel process cwd with shell's initial cwd
-        if let Err(e) = syscall::chdir(&state.cwd.display().to_string()) {
-            crate::console_log!("[shell] Warning: Failed to set initial cwd: {:?}", e);
+        if let Err(_e) = syscall::chdir(&state.cwd.display().to_string()) {
+            #[cfg(all(target_arch = "wasm32", not(test)))]
+            crate::console_log!("[shell] Warning: Failed to set initial cwd: {:?}", _e);
         }
         Self {
             state,
@@ -148,13 +149,23 @@ impl Executor {
             return ExecResult::success();
         }
 
+        #[cfg(all(target_arch = "wasm32", not(test)))]
+        crate::console_log!("[exec] Running: {}", line);
+
         // Parse the command
         let pipeline = match super::parse(line) {
             Ok(p) => p,
             Err(e) => return ExecResult::success().with_error(format!("parse error: {}", e)),
         };
 
-        self.execute_pipeline(&pipeline)
+        let result = self.execute_pipeline(&pipeline);
+
+        #[cfg(all(target_arch = "wasm32", not(test)))]
+        if !result.error.is_empty() {
+            crate::console_log!("[exec] Error: {}", result.error);
+        }
+
+        result
     }
 
     /// Execute a parsed pipeline
