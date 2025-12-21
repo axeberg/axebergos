@@ -131,7 +131,9 @@ impl Executor {
     pub fn new() -> Self {
         let state = ShellState::new();
         // Sync kernel process cwd with shell's initial cwd
-        let _ = syscall::chdir(&state.cwd.display().to_string());
+        if let Err(e) = syscall::chdir(&state.cwd.display().to_string()) {
+            crate::console_log!("[shell] Warning: Failed to set initial cwd: {:?}", e);
+        }
         Self {
             state,
             registry: ProgramRegistry::new(),

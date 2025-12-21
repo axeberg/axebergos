@@ -15,6 +15,7 @@ pub fn boot() {
     // Create init process (PID 1)
     let init_pid = syscall::spawn_process("init");
     syscall::set_current_process(init_pid);
+    console_log!("[boot] Created init process: {:?}", init_pid);
 
     // Initialize filesystem and compositor (async)
     kernel::spawn_with_priority(

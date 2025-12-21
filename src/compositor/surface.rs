@@ -181,6 +181,8 @@ impl Surface {
         let uniform_array = js_sys::Float32Array::from(uniform_data.as_slice());
         let _ = queue.write_buffer_with_u32_and_buffer_source(&uniform_buffer, 0, &uniform_array);
 
+        web_sys::console::log_1(&format!("[surface] WebGPU surface initialized: {}x{}", width, height).into());
+
         Ok(Self {
             device,
             queue,

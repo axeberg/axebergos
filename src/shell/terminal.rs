@@ -74,6 +74,7 @@ pub struct Terminal {
 
 impl Terminal {
     pub fn new() -> Self {
+        crate::console_log!("[terminal] Creating terminal...");
         let mut term = Self {
             lines: VecDeque::with_capacity(MAX_LINES),
             input: String::new(),
@@ -87,6 +88,7 @@ impl Terminal {
             scroll_offset: 0,
             active: true,
         };
+        crate::console_log!("[terminal] Terminal created, cwd: {}", term.executor.state.cwd.display());
 
         // Welcome message
         term.print("Welcome to axeberg!");
