@@ -129,8 +129,11 @@ pub struct Executor {
 
 impl Executor {
     pub fn new() -> Self {
+        let state = ShellState::new();
+        // Sync kernel process cwd with shell's initial cwd
+        let _ = syscall::chdir(&state.cwd.display().to_string());
         Self {
-            state: ShellState::new(),
+            state,
             registry: ProgramRegistry::new(),
         }
     }
@@ -403,7 +406,13 @@ impl Executor {
                 let old = self.state.cwd.display().to_string();
                 self.state.set_env("OLDPWD", &old);
 
-                // Change directory
+                // Update kernel process cwd (for relative path resolution)
+                if let Err(e) = syscall::chdir(&path_str) {
+                    self.state.last_status = 1;
+                    return ExecResult::success().with_error(format!("cd: {}: {}", path_str, e));
+                }
+
+                // Change directory in shell state
                 self.state.cwd = path.clone();
                 self.state.set_env("PWD", &path_str);
                 self.state.last_status = 0;
