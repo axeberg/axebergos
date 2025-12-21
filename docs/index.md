@@ -1,87 +1,114 @@
-# axeberg Kernel Documentation
+# axeberg Documentation
 
-Welcome to the axeberg kernel documentation. axeberg is a personal mini-OS written in Rust, compiled to WebAssembly, and running in the browser.
+Welcome to axeberg — a personal mini-OS written in Rust, compiled to WebAssembly, running entirely in your browser.
+
+## What is axeberg?
+
+axeberg is an operating system you can understand. The entire codebase is designed to be comprehensible by one person, with clean abstractions and comprehensive tests.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         Your Browser                             │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │                      axeberg OS                          │    │
+│  │  ┌─────────────────────────────────────────────────┐    │    │
+│  │  │                    Shell                         │    │    │
+│  │  │     $ cat file.txt | grep hello | wc -l         │    │    │
+│  │  └─────────────────────────┬───────────────────────┘    │    │
+│  │                            │                             │    │
+│  │                            ▼                             │    │
+│  │  ┌─────────────────────────────────────────────────┐    │    │
+│  │  │              WASM Command Loader                 │    │    │
+│  │  │   /bin/cat.wasm → /bin/grep.wasm → /bin/wc.wasm │    │    │
+│  │  └─────────────────────────┬───────────────────────┘    │    │
+│  │                            │                             │    │
+│  │                            ▼                             │    │
+│  │  ┌─────────────────────────────────────────────────┐    │    │
+│  │  │                    Kernel                        │    │    │
+│  │  │  ┌─────────┐  ┌─────────┐  ┌─────────────────┐  │    │    │
+│  │  │  │Syscalls │  │ Process │  │    VFS          │  │    │    │
+│  │  │  │Interface│  │ Manager │  │ (In-Memory FS)  │  │    │    │
+│  │  │  └────┬────┘  └────┬────┘  └────────┬────────┘  │    │    │
+│  │  │       └────────────┴────────────────┘            │    │    │
+│  │  │                                                   │    │    │
+│  │  │  ┌─────────┐ ┌─────────┐ ┌───────┐ ┌─────────┐  │    │    │
+│  │  │  │Executor │ │   IPC   │ │Timers │ │ Signals │  │    │    │
+│  │  │  │ (Async) │ │(Channel)│ │(Queue)│ │ (POSIX) │  │    │    │
+│  │  │  └─────────┘ └─────────┘ └───────┘ └─────────┘  │    │    │
+│  │  └───────────────────────────────────────────────────┘    │    │
+│  │                            │                             │    │
+│  │                            ▼                             │    │
+│  │  ┌─────────────────────────────────────────────────┐    │    │
+│  │  │              Compositor (Canvas2D)               │    │    │
+│  │  │                    Terminal                       │    │    │
+│  │  └───────────────────────────────────────────────────┘    │    │
+│  └─────────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 ## Philosophy
 
 Inspired by [Radiant Computer](https://radiant.computer/) and [Oxide's Hubris](https://hubris.oxide.computer/):
 
-- **Tractable**: The entire system should be comprehensible by one person
-- **Immediate**: Changes take effect instantly, no waiting
-- **Personal**: Your computing environment, under your control
-- **First Principles**: Simple, elegant solutions built from the ground up
-
-## Architecture Overview
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                        Browser/WASM                          │
-├─────────────────────────────────────────────────────────────┤
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐         │
-│  │  Compositor │  │   Runtime   │  │    Boot     │         │
-│  │  (Canvas2D) │  │ (rAF loop)  │  │  Sequence   │         │
-│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘         │
-│         │                │                │                 │
-│  ┌──────┴────────────────┴────────────────┴──────┐         │
-│  │                    Kernel                      │         │
-│  │  ┌─────────┐  ┌─────────┐  ┌─────────┐       │         │
-│  │  │ Syscall │  │ Process │  │  Memory │       │         │
-│  │  │Interface│  │ Manager │  │ Manager │       │         │
-│  │  └────┬────┘  └────┬────┘  └────┬────┘       │         │
-│  │       │            │            │             │         │
-│  │  ┌────┴────────────┴────────────┴────┐       │         │
-│  │  │          Object Table             │       │         │
-│  │  │   (Files, Pipes, Console, etc.)   │       │         │
-│  │  └────────────────┬──────────────────┘       │         │
-│  │                   │                           │         │
-│  │  ┌────────────────┴──────────────────┐       │         │
-│  │  │              VFS                   │       │         │
-│  │  │    (In-memory filesystem)          │       │         │
-│  │  └────────────────────────────────────┘       │         │
-│  │                                               │         │
-│  │  ┌─────────┐ ┌─────────┐ ┌───────┐ ┌───────┐ │         │
-│  │  │Executor │ │   IPC   │ │Timers │ │Signals│ │         │
-│  │  │(Async)  │ │(Channel)│ │(Queue)│ │(POSIX)│ │         │
-│  │  └─────────┘ └─────────┘ └───────┘ └───────┘ │         │
-│  │                                               │         │
-│  │  ┌───────────────────────────────────────┐   │         │
-│  │  │               Tracer                   │   │         │
-│  │  │  (Events, Stats, Instrumentation)      │   │         │
-│  │  └───────────────────────────────────────┘   │         │
-│  └───────────────────────────────────────────────┘         │
-└─────────────────────────────────────────────────────────────┘
-```
+| Principle | What it means |
+|-----------|---------------|
+| **Tractable** | The entire system should be comprehensible by one person |
+| **Immediate** | Changes take effect instantly, no waiting |
+| **Personal** | Your computing environment, under your control |
+| **First Principles** | Simple, elegant solutions built from the ground up |
 
 ## Documentation Sections
 
+### Getting Started
+
+- **[Quick Start](#quick-start)** - Build and run in 60 seconds
+- **[Architecture Overview](#architecture-overview)** - How the pieces fit together
+
 ### Kernel
 
-- [Kernel Overview](kernel/overview.md) - High-level architecture
-- [Syscall Interface](kernel/syscalls.md) - The syscall API
-- [Process Model](kernel/processes.md) - Processes and isolation
-- [Memory Management](kernel/memory.md) - Allocation and shared memory
-- [Object Table](kernel/objects.md) - Kernel objects and handles
-- [Executor](kernel/executor.md) - Async task execution
-- [IPC](kernel/ipc.md) - Inter-process communication
-- [Timers](kernel/timers.md) - Timer scheduling and async sleep
-- [Signals](kernel/signals.md) - POSIX-like signal system
-- [Tracing](kernel/tracing.md) - Instrumentation and debugging
+The kernel is the core of axeberg, managing processes, memory, and system resources.
+
+| Document | Description |
+|----------|-------------|
+| [Kernel Overview](kernel/overview.md) | High-level architecture |
+| [Syscall Interface](kernel/syscalls.md) | The syscall API |
+| [WASM Modules](kernel/wasm-modules.md) | **Command executable format and ABI** |
+| [Process Model](kernel/processes.md) | Processes and isolation |
+| [Memory Management](kernel/memory.md) | Allocation and shared memory |
+| [Object Table](kernel/objects.md) | Kernel objects and handles |
+| [Executor](kernel/executor.md) | Async task execution |
+| [IPC](kernel/ipc.md) | Inter-process communication |
+| [Timers](kernel/timers.md) | Timer scheduling and async sleep |
+| [Signals](kernel/signals.md) | POSIX-like signal system |
+| [Tracing](kernel/tracing.md) | Instrumentation and debugging |
 
 ### Userspace
 
-- [VFS](userspace/vfs.md) - Virtual filesystem
-- [Compositor](userspace/compositor.md) - Window management
-- [Standard I/O](userspace/stdio.md) - Console and pipes
+User-facing components that run on top of the kernel.
+
+| Document | Description |
+|----------|-------------|
+| [Shell](userspace/shell.md) | **Command-line interpreter** |
+| [VFS](userspace/vfs.md) | Virtual filesystem |
+| [Compositor](userspace/compositor.md) | Window management |
+| [Standard I/O](userspace/stdio.md) | Console and pipes |
 
 ### Development
 
-- [Building](development/building.md) - Build and run instructions
-- [Testing](development/testing.md) - Test suite overview
-- [Contributing](development/contributing.md) - Development guidelines
+| Document | Description |
+|----------|-------------|
+| [Building](development/building.md) | Build and run instructions |
+| [Testing](development/testing.md) | Test suite overview |
+| [Contributing](development/contributing.md) | Development guidelines |
+| [Invariants](development/invariants.md) | System invariants and their tests |
 
 ## Quick Start
 
 ```bash
+# Clone the repository
+git clone https://github.com/axeberg/axebergos.git
+cd axebergos
+
 # Build the WASM binary
 wasm-pack build --target web
 
@@ -92,52 +119,112 @@ cargo run --bin serve
 open http://localhost:8080
 ```
 
-## Design Decisions
+You'll see a terminal where you can run commands like:
 
-### Why Monolithic?
+```bash
+$ help                    # Show available commands
+$ ls                      # List files
+$ cat /etc/welcome.txt    # Read a file
+$ echo "hello" > test.txt # Write to a file
+$ cat test.txt | wc       # Pipe commands
+```
 
-axeberg uses a monolithic kernel architecture despite being inspired by microkernels like Hubris. This is pragmatic for our environment:
+## Architecture Overview
 
-1. **WASM Constraints**: No hardware MMU, no privilege levels, single address space
-2. **Microkernel Benefits Lost**: Memory isolation impossible in WASM
-3. **Simplicity Wins**: Direct function calls are faster than message passing
-4. **Modularity via Design**: Clean interfaces between components, not IPC
+### How Commands Execute
 
-### Why Async?
+When you type `cat file.txt | grep hello`:
 
-The browser's event loop drives everything. We use cooperative async multitasking:
+1. **Terminal** captures your input
+2. **Parser** tokenizes and builds a pipeline structure
+3. **Executor** iterates through the pipeline:
+   - For each command, looks up in registry or loads WASM module
+   - Connects stdout → stdin between commands (pipes)
+   - Applies any redirections (`>`, `<`)
+4. **Programs** read from VFS, write to stdout/stderr
+5. **Results** flow back to terminal for display
 
-1. `requestAnimationFrame` calls `kernel::tick()`
-2. Tasks yield at natural points
-3. No preemption (not needed for our use case)
-4. Priority-based scheduling (Critical > Normal > Background)
+### Key Design Decisions
 
-### Why Reference Counting?
+| Decision | Why |
+|----------|-----|
+| **Monolithic kernel** | WASM has no MMU/privilege levels; microkernel IPC overhead not worth it |
+| **Async cooperative** | Browser event loop drives everything; tasks yield voluntarily |
+| **WASM command modules** | Isolation, extensibility, polyglot support |
+| **Reference-counted objects** | Simple lifetime management, works with Rust ownership |
+| **In-memory VFS** | Fast, simple; OPFS persistence planned for later |
 
-Kernel objects (files, pipes, windows) use reference counting:
+### Test Coverage
 
-1. Multiple processes can share objects
-2. Objects are freed when no references remain
-3. Simple, predictable lifetime management
-4. Works well with Rust's ownership model
-
-## Test Coverage
-
-The kernel has comprehensive tests covering:
+The kernel has 380+ tests covering:
 
 - Executor scheduling and priorities
 - Process creation and lifecycle
 - Memory allocation and limits
 - Shared memory operations
 - File operations via VFS
+- WASM module validation and loading
+- Shell parsing and execution
 - IPC channels
 - Object reference counting
 
 Run tests with: `cargo test`
 
+## Project Structure
+
+```
+axebergos/
+├── src/
+│   ├── boot.rs              # System initialization
+│   ├── runtime.rs           # Event loop integration
+│   ├── kernel/
+│   │   ├── mod.rs           # Kernel entry points
+│   │   ├── syscall.rs       # Syscall implementations
+│   │   ├── process.rs       # Process management
+│   │   ├── memory.rs        # Memory management
+│   │   ├── wasm/            # WASM module loader
+│   │   │   ├── mod.rs       # ABI documentation
+│   │   │   ├── abi.rs       # ABI types
+│   │   │   ├── loader.rs    # Module validation/loading
+│   │   │   ├── runtime.rs   # Syscall runtime
+│   │   │   └── WasmLoader.tla  # TLA+ specification
+│   │   └── ...
+│   ├── shell/
+│   │   ├── parser.rs        # Command parsing
+│   │   ├── executor.rs      # Pipeline execution
+│   │   ├── builtins.rs      # Built-in commands
+│   │   └── terminal.rs      # Terminal emulator
+│   ├── vfs/
+│   │   ├── mod.rs           # VFS traits
+│   │   └── memory.rs        # In-memory filesystem
+│   └── compositor/
+│       ├── mod.rs           # Window management
+│       └── surface.rs       # Canvas rendering
+├── docs/                    # This documentation
+├── index.html               # Browser entry point
+└── Cargo.toml
+```
+
+## Formal Specifications
+
+Critical subsystems have TLA+ specifications:
+
+| Spec | Location | What it models |
+|------|----------|----------------|
+| WASM Loader | `src/kernel/wasm/WasmLoader.tla` | Command lifecycle, syscall semantics, memory safety |
+
 ## Version
 
-axeberg v0.1.0 - Early development
+**axeberg v0.1.0** - Early development
+
+Current capabilities:
+- ✅ Working shell with pipes and redirects
+- ✅ 15 Unix-like commands (cat, ls, grep, etc.)
+- ✅ In-memory filesystem
+- ✅ WASM module ABI defined and loader implemented
+- 🚧 Actual WASM command execution (in progress)
+- 🚧 File browser GUI (planned)
+- 🚧 Persistent storage via OPFS (planned)
 
 ## License
 
