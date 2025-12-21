@@ -332,7 +332,29 @@ fn builtin_help() -> BuiltinResult {
   env            List environment variables
   true           Return success
   false          Return failure
-  help           Show this help"
+  help           Show this help
+
+File commands:
+  ls [path]      List directory contents
+  cat [file]     Print file contents
+  mkdir <dir>    Create directory
+  touch <file>   Create empty file
+  rm [-r] <path> Remove file or directory
+  cp <src> <dst> Copy file
+  mv <src> <dst> Move/rename file
+
+Text processing:
+  grep <pat>     Search for pattern
+  head [-n N]    Show first N lines
+  tail [-n N]    Show last N lines
+  sort [-r]      Sort lines
+  uniq [-c]      Filter duplicate lines
+  wc [-lwc]      Count lines/words/chars
+  tee <file>     Copy stdin to file and stdout
+
+Other:
+  clear          Clear screen
+  save           Persist filesystem to storage"
             .to_string(),
     )
 }
