@@ -14,7 +14,7 @@ pub use layout::{Layout, LayoutNode, Split};
 pub use surface::Surface;
 pub use window::{Window, WindowId};
 
-use crate::kernel::{events, TaskId};
+use crate::kernel::TaskId;
 use crate::shell::Terminal;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -249,23 +249,6 @@ impl Compositor {
         }
     }
 
-    /// Get window at screen position
-    pub fn window_at(&self, x: f32, y: f32) -> Option<WindowId> {
-        for (id, window) in &self.windows {
-            if window.bounds.contains(x, y) {
-                return Some(*id);
-            }
-        }
-        None
-    }
-
-    /// Handle mouse click
-    pub fn handle_click(&mut self, x: f64, y: f64, _button: events::MouseButton) {
-        if let Some(id) = self.window_at(x as f32, y as f32) {
-            self.focused = Some(id);
-        }
-    }
-
     /// Render a frame
     pub fn render(&mut self) {
         let Some(ref mut surface) = self.surface else {
@@ -445,11 +428,6 @@ pub fn render() {
 /// Handle resize event
 pub fn resize(width: u32, height: u32) {
     COMPOSITOR.with(|c| c.borrow_mut().resize(width, height))
-}
-
-/// Handle click event
-pub fn handle_click(x: f64, y: f64, button: events::MouseButton) {
-    COMPOSITOR.with(|c| c.borrow_mut().handle_click(x, y, button))
 }
 
 /// Create a terminal window on the global compositor

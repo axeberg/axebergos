@@ -124,9 +124,6 @@ fn process_compositor_events() {
     // Drain events and forward to compositor
     for event in events::drain_events() {
         match event {
-            events::Event::Input(events::InputEvent::MouseDown { x, y, button }) => {
-                compositor::handle_click(x, y, button);
-            }
             events::Event::Input(events::InputEvent::Resize { width, height }) => {
                 compositor::resize(width, height);
             }
@@ -154,56 +151,6 @@ fn setup_event_listeners() {
         Some(d) => d,
         None => return,
     };
-
-    // Mouse move
-    {
-        let closure = Closure::wrap(Box::new(|event: web_sys::MouseEvent| {
-            events::push_input(events::InputEvent::MouseMove {
-                x: event.client_x() as f64,
-                y: event.client_y() as f64,
-            });
-        }) as Box<dyn FnMut(_)>);
-
-        let _ = document.add_event_listener_with_callback(
-            "mousemove",
-            closure.as_ref().unchecked_ref(),
-        );
-        closure.forget(); // Leak intentionally - lives for page lifetime
-    }
-
-    // Mouse down
-    {
-        let closure = Closure::wrap(Box::new(|event: web_sys::MouseEvent| {
-            events::push_input(events::InputEvent::MouseDown {
-                x: event.client_x() as f64,
-                y: event.client_y() as f64,
-                button: mouse_button(event.button()),
-            });
-        }) as Box<dyn FnMut(_)>);
-
-        let _ = document.add_event_listener_with_callback(
-            "mousedown",
-            closure.as_ref().unchecked_ref(),
-        );
-        closure.forget();
-    }
-
-    // Mouse up
-    {
-        let closure = Closure::wrap(Box::new(|event: web_sys::MouseEvent| {
-            events::push_input(events::InputEvent::MouseUp {
-                x: event.client_x() as f64,
-                y: event.client_y() as f64,
-                button: mouse_button(event.button()),
-            });
-        }) as Box<dyn FnMut(_)>);
-
-        let _ = document.add_event_listener_with_callback(
-            "mouseup",
-            closure.as_ref().unchecked_ref(),
-        );
-        closure.forget();
-    }
 
     // Key down
     {
@@ -263,16 +210,6 @@ fn setup_event_listeners() {
     }
 
     console_log!("[runtime] Event listeners installed");
-}
-
-/// Convert JS mouse button to our type
-fn mouse_button(button: i16) -> events::MouseButton {
-    match button {
-        0 => events::MouseButton::Left,
-        1 => events::MouseButton::Middle,
-        2 => events::MouseButton::Right,
-        n => events::MouseButton::Other(n as u16),
-    }
 }
 
 /// Extract modifiers from keyboard event

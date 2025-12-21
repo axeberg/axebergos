@@ -10,26 +10,12 @@ use std::collections::VecDeque;
 /// Input events from the browser
 #[derive(Debug, Clone)]
 pub enum InputEvent {
-    /// Mouse moved to position
-    MouseMove { x: f64, y: f64 },
-    /// Mouse button pressed
-    MouseDown { x: f64, y: f64, button: MouseButton },
-    /// Mouse button released
-    MouseUp { x: f64, y: f64, button: MouseButton },
     /// Key pressed
     KeyDown { key: String, code: String, modifiers: Modifiers },
     /// Key released
     KeyUp { key: String, code: String, modifiers: Modifiers },
     /// Window resized
     Resize { width: u32, height: u32 },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MouseButton {
-    Left,
-    Middle,
-    Right,
-    Other(u16),
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -160,17 +146,17 @@ mod tests {
     fn test_event_queue_push_pop() {
         let queue = EventQueue::new();
 
-        queue.push_input(InputEvent::MouseMove { x: 10.0, y: 20.0 });
-        queue.push_input(InputEvent::MouseMove { x: 30.0, y: 40.0 });
+        queue.push_input(InputEvent::Resize { width: 800, height: 600 });
+        queue.push_input(InputEvent::Resize { width: 1024, height: 768 });
 
         assert_eq!(queue.len(), 2);
         assert!(!queue.is_empty());
 
         let event = queue.pop().unwrap();
         match event {
-            Event::Input(InputEvent::MouseMove { x, y }) => {
-                assert_eq!(x, 10.0);
-                assert_eq!(y, 20.0);
+            Event::Input(InputEvent::Resize { width, height }) => {
+                assert_eq!(width, 800);
+                assert_eq!(height, 600);
             }
             _ => panic!("Wrong event type"),
         }
@@ -182,9 +168,9 @@ mod tests {
     fn test_event_queue_drain() {
         let queue = EventQueue::new();
 
-        queue.push_input(InputEvent::MouseMove { x: 1.0, y: 1.0 });
-        queue.push_input(InputEvent::MouseMove { x: 2.0, y: 2.0 });
-        queue.push_input(InputEvent::MouseMove { x: 3.0, y: 3.0 });
+        queue.push_input(InputEvent::Resize { width: 1, height: 1 });
+        queue.push_input(InputEvent::Resize { width: 2, height: 2 });
+        queue.push_input(InputEvent::Resize { width: 3, height: 3 });
 
         let events = queue.drain();
         assert_eq!(events.len(), 3);
@@ -222,11 +208,6 @@ mod tests {
     fn test_input_event_types() {
         let queue = EventQueue::new();
 
-        queue.push_input(InputEvent::MouseDown {
-            x: 100.0,
-            y: 200.0,
-            button: MouseButton::Left,
-        });
         queue.push_input(InputEvent::KeyDown {
             key: "a".to_string(),
             code: "KeyA".to_string(),
@@ -242,15 +223,7 @@ mod tests {
             height: 1080,
         });
 
-        assert_eq!(queue.len(), 3);
-
-        // Verify mouse down
-        match queue.pop() {
-            Some(Event::Input(InputEvent::MouseDown { button, .. })) => {
-                assert_eq!(button, MouseButton::Left);
-            }
-            _ => panic!("Expected MouseDown"),
-        }
+        assert_eq!(queue.len(), 2);
 
         // Verify key down
         match queue.pop() {
