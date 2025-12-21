@@ -256,21 +256,26 @@ impl Compositor {
         };
 
         // Begin frame
-        let Some(frame) = surface.begin_frame() else {
+        let Some(mut frame) = surface.begin_frame() else {
             return;
         };
 
         // Clear to background
         surface.clear(&frame, Color::BACKGROUND);
 
+        // Collect window data to avoid borrow issues
+        let window_data: Vec<_> = self.windows.iter()
+            .map(|(id, w)| (*id, w.clone_for_render()))
+            .collect();
+
         // Draw each window
-        for (id, window) in &self.windows {
+        for (id, window) in &window_data {
             let is_focused = self.focused == Some(*id);
-            render_window(surface, &frame, window, is_focused);
+            render_window(surface, &mut frame, window, is_focused);
 
             // Render terminal content if this window has a terminal
             if let Some(terminal) = self.terminals.get(id) {
-                render_terminal(surface, &frame, window, terminal, is_focused);
+                render_terminal(surface, &mut frame, window, terminal, is_focused);
             }
         }
 
@@ -301,7 +306,7 @@ impl Default for Compositor {
 }
 
 /// Render a single window (standalone to avoid borrow issues)
-fn render_window(surface: &mut Surface, frame: &surface::Frame, window: &Window, focused: bool) {
+fn render_window(surface: &mut Surface, frame: &mut surface::Frame, window: &Window, focused: bool) {
     let border_color = if focused {
         Color::ACCENT
     } else {
@@ -343,7 +348,7 @@ const TERM_PADDING: f32 = 8.0;
 /// Render terminal content inside a window
 fn render_terminal(
     surface: &mut Surface,
-    frame: &surface::Frame,
+    frame: &mut surface::Frame,
     window: &Window,
     terminal: &Terminal,
     focused: bool,

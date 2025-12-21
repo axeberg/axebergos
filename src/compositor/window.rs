@@ -49,6 +49,18 @@ impl Window {
         }
     }
 
+    /// Clone the window data needed for rendering
+    pub fn clone_for_render(&self) -> Self {
+        Self {
+            id: self.id,
+            title: self.title.clone(),
+            owner: self.owner,
+            bounds: self.bounds,
+            visible: self.visible,
+            dirty: self.dirty,
+        }
+    }
+
     /// Mark window as needing redraw
     pub fn invalidate(&mut self) {
         self.dirty = true;

@@ -177,5 +177,5 @@ async fn get_opfs_root() -> Result<web_sys::FileSystemDirectoryHandle, String> {
         .await
         .map_err(|e| format!("Failed to get OPFS root: {:?}", e))?
         .dyn_into()
-        .map_err(|_| "Failed to cast to FileSystemDirectoryHandle")
+        .map_err(|_| "Failed to cast to FileSystemDirectoryHandle".to_string())
 }
