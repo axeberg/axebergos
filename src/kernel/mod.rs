@@ -22,6 +22,7 @@ pub mod syscall;
 pub mod task;
 pub mod timer;
 pub mod trace;
+pub mod wasm;
 
 #[cfg(test)]
 mod invariants_test;
