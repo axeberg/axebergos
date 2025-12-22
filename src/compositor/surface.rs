@@ -129,7 +129,7 @@ impl Surface {
             ..Default::default()
         });
 
-        // Create surface from canvas
+        // Create surface from canvas using SurfaceTarget::Canvas (web-only variant)
         let surface = instance
             .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
             .map_err(|e| format!("Failed to create surface: {:?}", e))?;
