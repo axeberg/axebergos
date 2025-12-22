@@ -145,6 +145,8 @@ features = [
     "ReadableStream",
     # For beforeunload
     "BeforeUnloadEvent",
+    # Clipboard API for copy/paste
+    "Clipboard",
 ]
 
 # Dev server (native only, not compiled to WASM)

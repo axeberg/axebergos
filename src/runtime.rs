@@ -176,6 +176,15 @@ fn process_compositor_events() {
                 // Forward to compositor (terminal windows handle keyboard input)
                 compositor::handle_key(&key, &code, modifiers.ctrl, modifiers.alt);
             }
+            events::Event::Input(events::InputEvent::MouseDown { x, y, button }) => {
+                compositor::handle_mouse_down(x, y, button);
+            }
+            events::Event::Input(events::InputEvent::MouseMove { x, y }) => {
+                compositor::handle_mouse_move(x, y);
+            }
+            events::Event::Input(events::InputEvent::MouseUp { x, y, button }) => {
+                compositor::handle_mouse_up(x, y, button);
+            }
             _ => {}
         }
     }
@@ -263,6 +272,59 @@ fn setup_event_listeners() {
 
         let _ = window.add_event_listener_with_callback(
             "beforeunload",
+            closure.as_ref().unchecked_ref(),
+        );
+        closure.forget();
+    }
+
+    // Mouse down - start selection
+    {
+        let closure = Closure::wrap(Box::new(|event: web_sys::MouseEvent| {
+            events::push_input(events::InputEvent::MouseDown {
+                x: event.client_x() as f32,
+                y: event.client_y() as f32,
+                button: event.button() as u16,
+            });
+        }) as Box<dyn FnMut(_)>);
+
+        let _ = document.add_event_listener_with_callback(
+            "mousedown",
+            closure.as_ref().unchecked_ref(),
+        );
+        closure.forget();
+    }
+
+    // Mouse move - update selection
+    {
+        let closure = Closure::wrap(Box::new(|event: web_sys::MouseEvent| {
+            // Only track if left button is held (buttons & 1)
+            if event.buttons() & 1 != 0 {
+                events::push_input(events::InputEvent::MouseMove {
+                    x: event.client_x() as f32,
+                    y: event.client_y() as f32,
+                });
+            }
+        }) as Box<dyn FnMut(_)>);
+
+        let _ = document.add_event_listener_with_callback(
+            "mousemove",
+            closure.as_ref().unchecked_ref(),
+        );
+        closure.forget();
+    }
+
+    // Mouse up - finish selection
+    {
+        let closure = Closure::wrap(Box::new(|event: web_sys::MouseEvent| {
+            events::push_input(events::InputEvent::MouseUp {
+                x: event.client_x() as f32,
+                y: event.client_y() as f32,
+                button: event.button() as u16,
+            });
+        }) as Box<dyn FnMut(_)>);
+
+        let _ = document.add_event_listener_with_callback(
+            "mouseup",
             closure.as_ref().unchecked_ref(),
         );
         closure.forget();

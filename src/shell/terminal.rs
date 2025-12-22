@@ -5,9 +5,109 @@
 //! - Command line input with editing
 //! - Connection to shell executor
 //! - Keyboard event handling
+//! - Text selection with clipboard support
 
 use crate::shell::Executor;
 use std::collections::VecDeque;
+
+/// A position in the terminal grid (row, column)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TermPos {
+    /// Line index (0 = first line in buffer)
+    pub line: usize,
+    /// Column index (0 = first character)
+    pub col: usize,
+}
+
+impl TermPos {
+    pub fn new(line: usize, col: usize) -> Self {
+        Self { line, col }
+    }
+
+    /// Returns true if self comes before other in reading order
+    pub fn before(&self, other: &TermPos) -> bool {
+        self.line < other.line || (self.line == other.line && self.col < other.col)
+    }
+}
+
+impl PartialOrd for TermPos {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for TermPos {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match self.line.cmp(&other.line) {
+            std::cmp::Ordering::Equal => self.col.cmp(&other.col),
+            ord => ord,
+        }
+    }
+}
+
+/// Selection state for text highlighting
+#[derive(Debug, Clone)]
+pub struct Selection {
+    /// Where the selection started (anchor point)
+    pub anchor: TermPos,
+    /// Current end of selection (moves with mouse)
+    pub end: TermPos,
+    /// Is selection currently active (mouse held down)?
+    pub active: bool,
+}
+
+impl Selection {
+    pub fn new(pos: TermPos) -> Self {
+        Self {
+            anchor: pos,
+            end: pos,
+            active: true,
+        }
+    }
+
+    /// Get the selection range in reading order (start, end)
+    pub fn range(&self) -> (TermPos, TermPos) {
+        if self.anchor.before(&self.end) {
+            (self.anchor, self.end)
+        } else {
+            (self.end, self.anchor)
+        }
+    }
+
+    /// Check if a position is within the selection
+    pub fn contains(&self, pos: TermPos) -> bool {
+        let (start, end) = self.range();
+        pos >= start && pos <= end
+    }
+
+    /// Check if a specific line/col is selected
+    pub fn is_selected(&self, line: usize, col: usize) -> bool {
+        let (start, end) = self.range();
+
+        if line < start.line || line > end.line {
+            return false;
+        }
+
+        if start.line == end.line {
+            // Single line selection
+            col >= start.col && col < end.col
+        } else if line == start.line {
+            // First line of multi-line selection
+            col >= start.col
+        } else if line == end.line {
+            // Last line of multi-line selection
+            col < end.col
+        } else {
+            // Middle line - fully selected
+            true
+        }
+    }
+
+    /// Check if selection is empty (start == end)
+    pub fn is_empty(&self) -> bool {
+        self.anchor == self.end
+    }
+}
 
 /// Maximum lines to keep in scrollback buffer.
 /// When exceeded, oldest lines are discarded from the top (FIFO).
@@ -70,6 +170,9 @@ pub struct Terminal {
 
     /// Is the terminal active/focused?
     active: bool,
+
+    /// Current text selection (if any)
+    selection: Option<Selection>,
 }
 
 impl Terminal {
@@ -89,6 +192,7 @@ impl Terminal {
             visible_rows: 24,
             scroll_offset: 0,
             active: true,
+            selection: None,
         };
 
         #[cfg(all(target_arch = "wasm32", not(test)))]
@@ -408,6 +512,124 @@ impl Terminal {
     /// Get line count
     pub fn line_count(&self) -> usize {
         self.lines.len()
+    }
+
+    // ==================== Selection Methods ====================
+
+    /// Start a selection at the given position (mouse down)
+    pub fn start_selection(&mut self, line: usize, col: usize) {
+        // Convert visible line index to absolute line index
+        let abs_line = self.visible_line_to_absolute(line);
+        self.selection = Some(Selection::new(TermPos::new(abs_line, col)));
+    }
+
+    /// Update selection end point (mouse move while held)
+    pub fn update_selection(&mut self, line: usize, col: usize) {
+        // Calculate absolute line first to avoid borrow issues
+        let abs_line = self.visible_line_to_absolute(line);
+
+        if let Some(ref mut sel) = self.selection {
+            if sel.active {
+                sel.end = TermPos::new(abs_line, col);
+            }
+        }
+    }
+
+    /// Finish selection (mouse up)
+    pub fn finish_selection(&mut self) {
+        if let Some(ref mut sel) = self.selection {
+            sel.active = false;
+            // Clear selection if it's empty
+            if sel.is_empty() {
+                self.selection = None;
+            }
+        }
+    }
+
+    /// Clear any existing selection
+    pub fn clear_selection(&mut self) {
+        self.selection = None;
+    }
+
+    /// Get the current selection (if any)
+    pub fn selection(&self) -> Option<&Selection> {
+        self.selection.as_ref()
+    }
+
+    /// Check if a character at (visible_line, col) is selected
+    pub fn is_char_selected(&self, visible_line: usize, col: usize) -> bool {
+        if let Some(ref sel) = self.selection {
+            let abs_line = self.visible_line_to_absolute(visible_line);
+            sel.is_selected(abs_line, col)
+        } else {
+            false
+        }
+    }
+
+    /// Convert visible line index to absolute line index in the buffer
+    fn visible_line_to_absolute(&self, visible_line: usize) -> usize {
+        let total = self.lines.len();
+        let start = total.saturating_sub(self.visible_rows + self.scroll_offset);
+        start + visible_line
+    }
+
+    /// Get the selected text as a string
+    pub fn get_selected_text(&self) -> Option<String> {
+        let sel = self.selection.as_ref()?;
+        if sel.is_empty() {
+            return None;
+        }
+
+        let (start, end) = sel.range();
+        let mut result = String::new();
+
+        for (abs_idx, line) in self.lines.iter().enumerate() {
+            if abs_idx < start.line || abs_idx > end.line {
+                continue;
+            }
+
+            let text = &line.text;
+            let line_start = if abs_idx == start.line { start.col } else { 0 };
+            let line_end = if abs_idx == end.line {
+                end.col.min(text.len())
+            } else {
+                text.len()
+            };
+
+            if line_start < text.len() {
+                // Get the substring using character indices
+                let chars: Vec<char> = text.chars().collect();
+                let substr: String = chars
+                    .get(line_start..line_end.min(chars.len()))
+                    .map(|c| c.iter().collect())
+                    .unwrap_or_default();
+                result.push_str(&substr);
+            }
+
+            // Add newline between lines (but not after the last line)
+            if abs_idx < end.line {
+                result.push('\n');
+            }
+        }
+
+        if result.is_empty() {
+            None
+        } else {
+            Some(result)
+        }
+    }
+
+    /// Get text of a specific line by absolute index
+    pub fn get_line_text(&self, abs_line: usize) -> Option<&str> {
+        self.lines.get(abs_line).map(|l| l.text.as_str())
+    }
+
+    /// Get visible lines with their absolute indices for rendering
+    pub fn visible_lines_indexed(&self) -> impl Iterator<Item = (usize, &TerminalLine)> {
+        let total = self.lines.len();
+        let start = total.saturating_sub(self.visible_rows + self.scroll_offset);
+        let end = total.saturating_sub(self.scroll_offset);
+        self.lines.range(start..end).enumerate().map(move |(i, line)| (start + i, line))
     }
 }
 

@@ -16,6 +16,12 @@ pub enum InputEvent {
     KeyUp { key: String, code: String, modifiers: Modifiers },
     /// Window resized
     Resize { width: u32, height: u32 },
+    /// Mouse button pressed
+    MouseDown { x: f32, y: f32, button: u16 },
+    /// Mouse moved
+    MouseMove { x: f32, y: f32 },
+    /// Mouse button released
+    MouseUp { x: f32, y: f32, button: u16 },
 }
 
 #[derive(Debug, Clone, Copy, Default)]

@@ -215,10 +215,83 @@ impl Compositor {
     pub fn handle_key(&mut self, key: &str, code: &str, ctrl: bool, alt: bool) -> bool {
         if let Some(focused_id) = self.focused {
             if let Some(terminal) = self.terminals.get_mut(&focused_id) {
+                // Handle Ctrl+C for copy when there's a selection
+                if ctrl && key == "c" {
+                    if let Some(text) = terminal.get_selected_text() {
+                        self.copy_to_clipboard(&text);
+                        return true;
+                    }
+                }
                 return terminal.handle_key(key, code, ctrl, alt);
             }
         }
         false
+    }
+
+    /// Handle mouse down event (start selection)
+    pub fn handle_mouse_down(&mut self, x: f32, y: f32, _button: u16) {
+        // Find which window was clicked and get its content rect
+        let mut target: Option<(WindowId, Rect)> = None;
+        for (id, window) in &self.windows {
+            if window.bounds.contains(x, y) {
+                target = Some((*id, window.content_rect()));
+                break;
+            }
+        }
+
+        if let Some((id, content)) = target {
+            self.focused = Some(id);
+
+            // If this is a terminal window, start selection
+            if let Some(terminal) = self.terminals.get_mut(&id) {
+                if let Some((line, col)) = hit_test_terminal(&content, x, y) {
+                    terminal.clear_selection();
+                    terminal.start_selection(line, col);
+                }
+            }
+        }
+    }
+
+    /// Handle mouse move event (update selection)
+    pub fn handle_mouse_move(&mut self, x: f32, y: f32) {
+        if let Some(focused_id) = self.focused {
+            // Get content rect first
+            let content = self.windows.get(&focused_id).map(|w| w.content_rect());
+
+            if let Some(content) = content {
+                if let Some(terminal) = self.terminals.get_mut(&focused_id) {
+                    if let Some((line, col)) = hit_test_terminal(&content, x, y) {
+                        terminal.update_selection(line, col);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Handle mouse up event (finish selection)
+    pub fn handle_mouse_up(&mut self, _x: f32, _y: f32, _button: u16) {
+        if let Some(focused_id) = self.focused {
+            if let Some(terminal) = self.terminals.get_mut(&focused_id) {
+                terminal.finish_selection();
+            }
+        }
+    }
+
+    /// Copy text to clipboard (WASM-specific)
+    fn copy_to_clipboard(&self, text: &str) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            if let Some(window) = web_sys::window() {
+                if let Some(navigator) = Some(window.navigator()) {
+                    let clipboard = navigator.clipboard();
+                    let _ = clipboard.write_text(text);
+                }
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = text; // Suppress unused warning
+        }
     }
 
     /// Handle resize
@@ -343,7 +416,35 @@ fn render_window(surface: &mut Surface, frame: &mut surface::Frame, window: &Win
 /// Terminal rendering constants
 const TERM_FONT_SIZE: f32 = 14.0;
 const TERM_LINE_HEIGHT: f32 = 18.0;
+const TERM_CHAR_WIDTH: f32 = 8.4; // Approximate monospace character width
 const TERM_PADDING: f32 = 8.0;
+
+/// Selection highlight color (semi-transparent blue)
+const SELECTION_COLOR: Color = Color::rgba(0.3, 0.5, 0.8, 0.4);
+
+/// Convert screen coordinates to terminal line/column
+fn hit_test_terminal(content: &Rect, x: f32, y: f32) -> Option<(usize, usize)> {
+    // Check if within content area (excluding title bar)
+    let text_area = Rect::new(
+        content.x + TERM_PADDING,
+        content.y + 24.0 + TERM_PADDING, // After title bar
+        content.width - TERM_PADDING * 2.0,
+        content.height - 24.0 - TERM_PADDING * 2.0,
+    );
+
+    if !text_area.contains(x, y) {
+        return None;
+    }
+
+    // Calculate line and column
+    let rel_y = y - text_area.y;
+    let rel_x = x - text_area.x;
+
+    let line = (rel_y / TERM_LINE_HEIGHT) as usize;
+    let col = (rel_x / TERM_CHAR_WIDTH) as usize;
+
+    Some((line, col))
+}
 
 /// Render terminal content inside a window
 fn render_terminal(
@@ -358,15 +459,54 @@ fn render_terminal(
     // Calculate visible rows
     let visible_rows = ((content.height - TERM_PADDING * 2.0) / TERM_LINE_HEIGHT) as usize;
 
-    // Draw scrollback lines
+    // Draw scrollback lines with selection highlighting
     let mut y = content.y + TERM_PADDING + TERM_LINE_HEIGHT;
-    for line in terminal.visible_lines().take(visible_rows.saturating_sub(1)) {
+    let base_x = content.x + TERM_PADDING;
+
+    for (visible_idx, line) in terminal.visible_lines().enumerate().take(visible_rows.saturating_sub(1)) {
+        let text = &line.text;
+        let chars: Vec<char> = text.chars().collect();
+
+        // Draw selection highlight first (behind text)
+        if terminal.selection().is_some() {
+            let mut sel_start: Option<usize> = None;
+
+            for (col, _) in chars.iter().enumerate() {
+                let is_selected = terminal.is_char_selected(visible_idx, col);
+
+                match (sel_start, is_selected) {
+                    (None, true) => {
+                        // Start of selection
+                        sel_start = Some(col);
+                    }
+                    (Some(start), false) => {
+                        // End of selection - draw highlight
+                        let sel_x = base_x + start as f32 * TERM_CHAR_WIDTH;
+                        let sel_width = (col - start) as f32 * TERM_CHAR_WIDTH;
+                        let sel_rect = Rect::new(sel_x, y - TERM_LINE_HEIGHT + 2.0, sel_width, TERM_LINE_HEIGHT);
+                        surface.draw_rect(frame, sel_rect, SELECTION_COLOR);
+                        sel_start = None;
+                    }
+                    _ => {}
+                }
+            }
+
+            // Handle selection that extends to end of line
+            if let Some(start) = sel_start {
+                let sel_x = base_x + start as f32 * TERM_CHAR_WIDTH;
+                let sel_width = (chars.len() - start) as f32 * TERM_CHAR_WIDTH;
+                let sel_rect = Rect::new(sel_x, y - TERM_LINE_HEIGHT + 2.0, sel_width, TERM_LINE_HEIGHT);
+                surface.draw_rect(frame, sel_rect, SELECTION_COLOR);
+            }
+        }
+
+        // Draw the text
         let color = if line.is_input {
             Color::rgb(0.6, 0.8, 0.6) // Greenish for user input
         } else {
             Color::TEXT
         };
-        surface.draw_text(frame, &line.text, content.x + TERM_PADDING, y, color, TERM_FONT_SIZE);
+        surface.draw_text(frame, text, base_x, y, color, TERM_FONT_SIZE);
         y += TERM_LINE_HEIGHT;
     }
 
@@ -378,18 +518,18 @@ fn render_terminal(
     surface.draw_text(
         frame,
         prompt,
-        content.x + TERM_PADDING,
+        base_x,
         input_y,
         Color::rgb(0.5, 0.7, 0.9), // Blueish prompt
         TERM_FONT_SIZE,
     );
 
     // Draw input text
-    let prompt_width = prompt.len() as f32 * 8.4; // Approximate char width
+    let prompt_width = prompt.len() as f32 * TERM_CHAR_WIDTH;
     surface.draw_text(
         frame,
         input,
-        content.x + TERM_PADDING + prompt_width,
+        base_x + prompt_width,
         input_y,
         Color::TEXT,
         TERM_FONT_SIZE,
@@ -397,7 +537,7 @@ fn render_terminal(
 
     // Draw cursor (blinking effect could be added via frame count)
     if focused {
-        let cursor_x = content.x + TERM_PADDING + prompt_width + (cursor_pos as f32 * 8.4);
+        let cursor_x = base_x + prompt_width + (cursor_pos as f32 * TERM_CHAR_WIDTH);
         let cursor_rect = Rect::new(cursor_x, input_y - TERM_LINE_HEIGHT + 4.0, 2.0, TERM_LINE_HEIGHT);
         surface.draw_rect(frame, cursor_rect, Color::ACCENT);
     }
@@ -443,4 +583,19 @@ pub fn create_terminal_window(title: &str, owner: TaskId) -> WindowId {
 /// Handle keyboard event - forwards to focused terminal
 pub fn handle_key(key: &str, code: &str, ctrl: bool, alt: bool) -> bool {
     COMPOSITOR.with(|c| c.borrow_mut().handle_key(key, code, ctrl, alt))
+}
+
+/// Handle mouse down event
+pub fn handle_mouse_down(x: f32, y: f32, button: u16) {
+    COMPOSITOR.with(|c| c.borrow_mut().handle_mouse_down(x, y, button))
+}
+
+/// Handle mouse move event
+pub fn handle_mouse_move(x: f32, y: f32) {
+    COMPOSITOR.with(|c| c.borrow_mut().handle_mouse_move(x, y))
+}
+
+/// Handle mouse up event
+pub fn handle_mouse_up(x: f32, y: f32, button: u16) {
+    COMPOSITOR.with(|c| c.borrow_mut().handle_mouse_up(x, y, button))
 }
