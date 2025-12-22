@@ -1,7 +1,7 @@
 //! Terminal using xterm.js
 //!
-//! This replaces the custom wgpu compositor with xterm.js for proper
-//! terminal emulation including fonts, colors, scrollback, and selection.
+//! Direct wasm_bindgen bindings to xterm.js loaded via script tag.
+//! This avoids the bundler requirement of xterm-js-rs.
 
 #![cfg(target_arch = "wasm32")]
 
@@ -9,13 +9,54 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
-use xterm_js_rs::addons::fit::FitAddon;
-use xterm_js_rs::{OnKeyEvent, Terminal, TerminalOptions, Theme};
 
 use crate::shell;
 
+// Direct bindings to xterm.js globals (loaded via script tag)
+#[wasm_bindgen]
+extern "C" {
+    /// The xterm.js Terminal class (global `Terminal`)
+    #[wasm_bindgen(js_name = Terminal)]
+    type XTerm;
+
+    #[wasm_bindgen(constructor, js_class = "Terminal")]
+    fn new(options: &JsValue) -> XTerm;
+
+    #[wasm_bindgen(method)]
+    fn open(this: &XTerm, element: &web_sys::HtmlElement);
+
+    #[wasm_bindgen(method)]
+    fn write(this: &XTerm, data: &str);
+
+    #[wasm_bindgen(method)]
+    fn writeln(this: &XTerm, data: &str);
+
+    #[wasm_bindgen(method)]
+    fn clear(this: &XTerm);
+
+    #[wasm_bindgen(method)]
+    fn focus(this: &XTerm);
+
+    #[wasm_bindgen(method, js_name = loadAddon)]
+    fn load_addon(this: &XTerm, addon: &JsValue);
+
+    #[wasm_bindgen(method, js_name = onKey)]
+    fn on_key(this: &XTerm, callback: &js_sys::Function);
+
+    /// The xterm-addon-fit FitAddon class (global `FitAddon`)
+    #[wasm_bindgen(js_name = FitAddon)]
+    type XTermFitAddon;
+
+    #[wasm_bindgen(constructor, js_class = "FitAddon")]
+    fn new_fit() -> XTermFitAddon;
+
+    #[wasm_bindgen(method)]
+    fn fit(this: &XTermFitAddon);
+}
+
 thread_local! {
-    static TERMINAL: RefCell<Option<Rc<Terminal>>> = RefCell::new(None);
+    static TERMINAL: RefCell<Option<Rc<XTerm>>> = RefCell::new(None);
+    static FIT_ADDON: RefCell<Option<Rc<XTermFitAddon>>> = RefCell::new(None);
     static INPUT_BUFFER: RefCell<String> = RefCell::new(String::new());
     static CURSOR_POS: RefCell<usize> = RefCell::new(0);
 }
@@ -24,22 +65,29 @@ const PROMPT: &str = "$ ";
 
 /// Initialize the xterm.js terminal
 pub fn init() -> Result<(), JsValue> {
-    let terminal = Terminal::new(
-        TerminalOptions::new()
-            .with_cursor_blink(true)
-            .with_cursor_width(2)
-            .with_font_size(14)
-            .with_font_family("'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace")
-            .with_draw_bold_text_in_bright_colors(true)
-            .with_right_click_selects_word(true)
-            .with_theme(
-                Theme::new()
-                    .with_foreground("#c0caf5")      // Tokyo Night text
-                    .with_background("#1a1b26")      // Tokyo Night bg
-                    .with_cursor("#7aa2f7")          // Tokyo Night blue
-                    .with_cursor_accent("#1a1b26")
-            ),
-    );
+    // Create terminal options
+    let options = js_sys::Object::new();
+    js_sys::Reflect::set(&options, &"cursorBlink".into(), &true.into())?;
+    js_sys::Reflect::set(&options, &"cursorWidth".into(), &2.into())?;
+    js_sys::Reflect::set(&options, &"fontSize".into(), &14.into())?;
+    js_sys::Reflect::set(
+        &options,
+        &"fontFamily".into(),
+        &"'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace".into(),
+    )?;
+    js_sys::Reflect::set(&options, &"drawBoldTextInBrightColors".into(), &true.into())?;
+    js_sys::Reflect::set(&options, &"rightClickSelectsWord".into(), &true.into())?;
+
+    // Theme
+    let theme = js_sys::Object::new();
+    js_sys::Reflect::set(&theme, &"foreground".into(), &"#c0caf5".into())?;
+    js_sys::Reflect::set(&theme, &"background".into(), &"#1a1b26".into())?;
+    js_sys::Reflect::set(&theme, &"cursor".into(), &"#7aa2f7".into())?;
+    js_sys::Reflect::set(&theme, &"cursorAccent".into(), &"#1a1b26".into())?;
+    js_sys::Reflect::set(&options, &"theme".into(), &theme)?;
+
+    // Create terminal
+    let terminal = XTerm::new(&options.into());
 
     // Create container div
     let window = web_sys::window().ok_or("no window")?;
@@ -49,9 +97,8 @@ pub fn init() -> Result<(), JsValue> {
     container.set_id("terminal");
 
     // Style the container to fill the screen
-    let style = container.dyn_ref::<web_sys::HtmlElement>()
-        .ok_or("not html element")?
-        .style();
+    let html_container: web_sys::HtmlElement = container.dyn_into()?;
+    let style = html_container.style();
     style.set_property("position", "fixed")?;
     style.set_property("top", "0")?;
     style.set_property("left", "0")?;
@@ -59,14 +106,17 @@ pub fn init() -> Result<(), JsValue> {
     style.set_property("height", "100%")?;
     style.set_property("background", "#1a1b26")?;
 
-    document.body().ok_or("no body")?.append_child(&container)?;
+    document
+        .body()
+        .ok_or("no body")?
+        .append_child(&html_container)?;
 
     // Open terminal in container
-    terminal.open(container.dyn_into()?);
+    terminal.open(&html_container);
 
     // Add fit addon to auto-resize
-    let fit_addon = FitAddon::new();
-    terminal.load_addon(fit_addon.clone().dyn_into()?);
+    let fit_addon = XTermFitAddon::new_fit();
+    terminal.load_addon(&fit_addon.unchecked_ref());
     fit_addon.fit();
 
     // Welcome message
@@ -75,34 +125,48 @@ pub fn init() -> Result<(), JsValue> {
     terminal.writeln("");
     write_prompt(&terminal);
 
-    // Store terminal globally
+    // Store terminal and fit addon globally
     let term_rc = Rc::new(terminal);
+    let fit_rc = Rc::new(fit_addon);
+
     TERMINAL.with(|t| {
         *t.borrow_mut() = Some(term_rc.clone());
+    });
+    FIT_ADDON.with(|f| {
+        *f.borrow_mut() = Some(fit_rc.clone());
     });
 
     // Set up keyboard handler
     setup_keyboard_handler(term_rc.clone());
 
     // Set up resize handler
-    setup_resize_handler(fit_addon);
+    setup_resize_handler(fit_rc);
+
+    // Focus terminal
+    term_rc.focus();
 
     Ok(())
 }
 
-fn write_prompt(term: &Terminal) {
+fn write_prompt(term: &XTerm) {
     term.write(PROMPT);
 }
 
-fn setup_keyboard_handler(term: Rc<Terminal>) {
-    // Clone term for use inside the closure
+fn setup_keyboard_handler(term: Rc<XTerm>) {
     let term_for_closure = term.clone();
 
-    let callback = Closure::wrap(Box::new(move |e: OnKeyEvent| {
-        let event = e.dom_event();
-        let key = event.key();
-        let key_code = event.key_code();
-        let ctrl = event.ctrl_key();
+    let callback = Closure::wrap(Box::new(move |event: JsValue| {
+        // event is { key: string, domEvent: KeyboardEvent }
+        let dom_event: web_sys::KeyboardEvent = js_sys::Reflect::get(&event, &"domEvent".into())
+            .unwrap()
+            .unchecked_into();
+        let key: String = js_sys::Reflect::get(&event, &"key".into())
+            .unwrap()
+            .as_string()
+            .unwrap_or_default();
+
+        let key_code = dom_event.key_code();
+        let ctrl = dom_event.ctrl_key();
 
         INPUT_BUFFER.with(|buf| {
             CURSOR_POS.with(|pos| {
@@ -216,7 +280,7 @@ fn setup_keyboard_handler(term: Rc<Terminal>) {
     callback.forget();
 }
 
-fn setup_resize_handler(fit_addon: FitAddon) {
+fn setup_resize_handler(fit_addon: Rc<XTermFitAddon>) {
     let callback = Closure::wrap(Box::new(move || {
         fit_addon.fit();
     }) as Box<dyn FnMut()>);

@@ -35,10 +35,6 @@ serde_json = "1.0"
 # getrandom needs js feature for WASM
 getrandom = { version = "0.2", features = ["js"] }
 
-# xterm.js bindings for terminal emulation (WASM only)
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-xterm-js-rs = { version = "0.1", features = ["xterm-addon-fit"] }
-
 [dependencies.web-sys]
 version = "0.3"
 features = [
