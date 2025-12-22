@@ -59,6 +59,11 @@ thread_local! {
     static FIT_ADDON: RefCell<Option<Rc<XTermFitAddon>>> = RefCell::new(None);
     static INPUT_BUFFER: RefCell<String> = RefCell::new(String::new());
     static CURSOR_POS: RefCell<usize> = RefCell::new(0);
+    // Command history
+    static HISTORY: RefCell<Vec<String>> = RefCell::new(Vec::new());
+    static HISTORY_POS: RefCell<usize> = RefCell::new(0);
+    // Buffer to restore when navigating past end of history
+    static SAVED_BUFFER: RefCell<String> = RefCell::new(String::new());
 }
 
 const PROMPT: &str = "$ ";
@@ -152,6 +157,16 @@ fn write_prompt(term: &XTerm) {
     term.write(PROMPT);
 }
 
+/// Replace the current input line with new text
+fn replace_line(term: &XTerm, buffer: &mut String, cursor: &mut usize, new_text: &str) {
+    // Clear current line and write new content
+    term.write("\x1b[2K\r"); // Clear line, move to start
+    term.write(PROMPT);
+    term.write(new_text);
+    *buffer = new_text.to_string();
+    *cursor = buffer.len();
+}
+
 fn setup_keyboard_handler(term: Rc<XTerm>) {
     let term_for_closure = term.clone();
 
@@ -179,6 +194,21 @@ fn setup_keyboard_handler(term: Rc<XTerm>) {
                         term_for_closure.writeln("");
                         if !buffer.is_empty() {
                             let input = buffer.clone();
+
+                            // Add to history (avoid duplicates of last command)
+                            HISTORY.with(|h| {
+                                let mut history = h.borrow_mut();
+                                if history.last() != Some(&input) {
+                                    history.push(input.clone());
+                                }
+                                // Reset history position to end
+                                HISTORY_POS.with(|p| {
+                                    *p.borrow_mut() = history.len();
+                                });
+                            });
+                            // Clear saved buffer
+                            SAVED_BUFFER.with(|s| s.borrow_mut().clear());
+
                             buffer.clear();
                             *cursor = 0;
 
@@ -219,6 +249,55 @@ fn setup_keyboard_handler(term: Rc<XTerm>) {
                             term_for_closure.write("\x1b[C");
                             *cursor += 1;
                         }
+                    }
+                    // Up arrow - previous history
+                    38 => {
+                        HISTORY.with(|h| {
+                            HISTORY_POS.with(|p| {
+                                SAVED_BUFFER.with(|s| {
+                                    let history = h.borrow();
+                                    let mut pos = p.borrow_mut();
+
+                                    if history.is_empty() {
+                                        return;
+                                    }
+
+                                    // Save current buffer if at end of history
+                                    if *pos == history.len() {
+                                        *s.borrow_mut() = buffer.clone();
+                                    }
+
+                                    if *pos > 0 {
+                                        *pos -= 1;
+                                        let cmd = &history[*pos];
+                                        replace_line(&term_for_closure, &mut buffer, &mut cursor, cmd);
+                                    }
+                                });
+                            });
+                        });
+                    }
+                    // Down arrow - next history
+                    40 => {
+                        HISTORY.with(|h| {
+                            HISTORY_POS.with(|p| {
+                                SAVED_BUFFER.with(|s| {
+                                    let history = h.borrow();
+                                    let mut pos = p.borrow_mut();
+
+                                    if *pos < history.len() {
+                                        *pos += 1;
+                                        if *pos == history.len() {
+                                            // Restore saved buffer
+                                            let saved = s.borrow().clone();
+                                            replace_line(&term_for_closure, &mut buffer, &mut cursor, &saved);
+                                        } else {
+                                            let cmd = &history[*pos];
+                                            replace_line(&term_for_closure, &mut buffer, &mut cursor, cmd);
+                                        }
+                                    }
+                                });
+                            });
+                        });
                     }
                     // Ctrl+C
                     67 if ctrl => {
