@@ -22,6 +22,7 @@ struct OpenFile {
 enum Node {
     File(Vec<u8>),
     Directory,
+    Symlink(String),
 }
 
 /// Serializable snapshot of the filesystem
@@ -333,11 +334,22 @@ impl FileSystem for MemoryFs {
                 size: data.len() as u64,
                 is_dir: false,
                 is_file: true,
+                is_symlink: false,
+                symlink_target: None,
             }),
             Some(Node::Directory) => Ok(Metadata {
                 size: 0,
                 is_dir: true,
                 is_file: false,
+                is_symlink: false,
+                symlink_target: None,
+            }),
+            Some(Node::Symlink(target)) => Ok(Metadata {
+                size: target.len() as u64,
+                is_dir: false,
+                is_file: false,
+                is_symlink: true,
+                symlink_target: Some(target.clone()),
             }),
             None => Err(io::Error::new(io::ErrorKind::NotFound, "Path not found")),
         }
@@ -363,7 +375,7 @@ impl FileSystem for MemoryFs {
 
         match self.nodes.get(&path) {
             Some(Node::Directory) => {}
-            Some(Node::File(_)) => {
+            Some(Node::File(_)) | Some(Node::Symlink(_)) => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     "Not a directory",
@@ -399,6 +411,7 @@ impl FileSystem for MemoryFs {
                 Some(DirEntry {
                     name: relative.to_string(),
                     is_dir: matches!(node, Node::Directory),
+                    is_symlink: matches!(node, Node::Symlink(_)),
                 })
             })
             .collect();
@@ -410,7 +423,7 @@ impl FileSystem for MemoryFs {
         let path = Self::normalize_path(path);
 
         match self.nodes.get(&path) {
-            Some(Node::File(_)) => {
+            Some(Node::File(_)) | Some(Node::Symlink(_)) => {
                 self.nodes.remove(&path);
                 Ok(())
             }
@@ -446,7 +459,7 @@ impl FileSystem for MemoryFs {
                 self.nodes.remove(&path);
                 Ok(())
             }
-            Some(Node::File(_)) => Err(io::Error::new(
+            Some(Node::File(_)) | Some(Node::Symlink(_)) => Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "Not a directory",
             )),
@@ -521,9 +534,10 @@ impl FileSystem for MemoryFs {
         let from = Self::normalize_path(from);
         let to = Self::normalize_path(to);
 
-        // Get source data
-        let data = match self.nodes.get(&from) {
-            Some(Node::File(data)) => data.clone(),
+        // Get source data (for symlinks, copy the link itself)
+        let node_to_copy = match self.nodes.get(&from) {
+            Some(Node::File(data)) => Node::File(data.clone()),
+            Some(Node::Symlink(target)) => Node::Symlink(target.clone()),
             Some(Node::Directory) => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -533,13 +547,17 @@ impl FileSystem for MemoryFs {
             None => return Err(io::Error::new(io::ErrorKind::NotFound, "Source not found")),
         };
 
+        let size = match &node_to_copy {
+            Node::File(data) => data.len() as u64,
+            Node::Symlink(target) => target.len() as u64,
+            Node::Directory => 0,
+        };
+
         // Ensure parent exists
         self.ensure_parent(&to)?;
 
-        let size = data.len() as u64;
-
         // Insert copy at destination
-        self.nodes.insert(to, Node::File(data));
+        self.nodes.insert(to, node_to_copy);
 
         Ok(size)
     }
@@ -547,6 +565,38 @@ impl FileSystem for MemoryFs {
     fn exists(&self, path: &str) -> bool {
         let path = Self::normalize_path(path);
         self.nodes.contains_key(&path)
+    }
+
+    fn symlink(&mut self, target: &str, link_path: &str) -> io::Result<()> {
+        let link_path = Self::normalize_path(link_path);
+
+        // Check if link path already exists
+        if self.nodes.contains_key(&link_path) {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "Path already exists",
+            ));
+        }
+
+        // Ensure parent directory exists
+        self.ensure_parent(&link_path)?;
+
+        // Create the symlink (target is stored as-is, can be relative or absolute)
+        self.nodes.insert(link_path, Node::Symlink(target.to_string()));
+        Ok(())
+    }
+
+    fn read_link(&self, path: &str) -> io::Result<String> {
+        let path = Self::normalize_path(path);
+
+        match self.nodes.get(&path) {
+            Some(Node::Symlink(target)) => Ok(target.clone()),
+            Some(_) => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Not a symbolic link",
+            )),
+            None => Err(io::Error::new(io::ErrorKind::NotFound, "Path not found")),
+        }
     }
 }
 

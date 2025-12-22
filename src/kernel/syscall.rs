@@ -107,6 +107,8 @@ pub struct FileMetadata {
     pub size: u64,
     pub is_dir: bool,
     pub is_file: bool,
+    pub is_symlink: bool,
+    pub symlink_target: Option<String>,
 }
 
 pub type SyscallResult<T> = Result<T, SyscallError>;
@@ -607,6 +609,8 @@ impl Kernel {
             size: meta.size,
             is_dir: meta.is_dir,
             is_file: meta.is_file,
+            is_symlink: meta.is_symlink,
+            symlink_target: meta.symlink_target,
         })
     }
 
@@ -648,6 +652,25 @@ impl Kernel {
         let to_str = to_resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
         let size = self.vfs.copy_file(from_str, to_str)?;
         Ok(size)
+    }
+
+    /// Create a symbolic link
+    pub fn sys_symlink(&mut self, target: &str, link_path: &str) -> SyscallResult<()> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let link_resolved = self.resolve_path(current, link_path)?;
+        let link_str = link_resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
+        // Target is stored as-is (can be relative or absolute)
+        self.vfs.symlink(target, link_str)?;
+        Ok(())
+    }
+
+    /// Read the target of a symbolic link
+    pub fn sys_read_link(&self, path: &str) -> SyscallResult<String> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let resolved = self.resolve_path(current, path)?;
+        let path_str = resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
+        let target = self.vfs.read_link(path_str)?;
+        Ok(target)
     }
 
     // ========== MEMORY SYSCALLS ==========
@@ -1086,6 +1109,16 @@ pub fn rename(from: &str, to: &str) -> SyscallResult<()> {
 /// Copy a file
 pub fn copy_file(from: &str, to: &str) -> SyscallResult<u64> {
     KERNEL.with(|k| k.borrow_mut().sys_copy_file(from, to))
+}
+
+/// Create a symbolic link
+pub fn symlink(target: &str, link_path: &str) -> SyscallResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_symlink(target, link_path))
+}
+
+/// Read the target of a symbolic link
+pub fn read_link(path: &str) -> SyscallResult<String> {
+    KERNEL.with(|k| k.borrow().sys_read_link(path))
 }
 
 /// Read entire file contents as string (convenience function)

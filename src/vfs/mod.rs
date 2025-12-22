@@ -68,6 +68,8 @@ pub struct Metadata {
     pub size: u64,
     pub is_dir: bool,
     pub is_file: bool,
+    pub is_symlink: bool,
+    pub symlink_target: Option<String>,
 }
 
 /// Directory entry
@@ -75,6 +77,7 @@ pub struct Metadata {
 pub struct DirEntry {
     pub name: String,
     pub is_dir: bool,
+    pub is_symlink: bool,
 }
 
 /// The FileSystem trait - implement this for different backends
@@ -117,6 +120,12 @@ pub trait FileSystem {
 
     /// Check if path exists
     fn exists(&self, path: &str) -> bool;
+
+    /// Create a symbolic link
+    fn symlink(&mut self, target: &str, link_path: &str) -> io::Result<()>;
+
+    /// Read the target of a symbolic link
+    fn read_link(&self, path: &str) -> io::Result<String>;
 }
 
 /// Convenience wrapper for reading entire file to string

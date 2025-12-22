@@ -27,6 +27,8 @@ pub struct ShellState {
     pub cwd: PathBuf,
     /// Environment variables
     pub env: HashMap<String, String>,
+    /// Shell aliases
+    pub aliases: HashMap<String, String>,
     /// Last command exit code
     pub last_status: i32,
 }
@@ -36,6 +38,7 @@ impl ShellState {
         Self {
             cwd: PathBuf::from("/home"),
             env: HashMap::new(),
+            aliases: HashMap::new(),
             last_status: 0,
         }
     }
@@ -54,6 +57,21 @@ impl ShellState {
     pub fn unset_env(&mut self, name: &str) -> bool {
         self.env.remove(name).is_some()
     }
+
+    /// Get an alias
+    pub fn get_alias(&self, name: &str) -> Option<&str> {
+        self.aliases.get(name).map(|s| s.as_str())
+    }
+
+    /// Set an alias
+    pub fn set_alias(&mut self, name: impl Into<String>, value: impl Into<String>) {
+        self.aliases.insert(name.into(), value.into());
+    }
+
+    /// Remove an alias
+    pub fn unalias(&mut self, name: &str) -> bool {
+        self.aliases.remove(name).is_some()
+    }
 }
 
 impl Default for ShellState {
@@ -67,6 +85,7 @@ pub fn is_builtin(name: &str) -> bool {
     matches!(
         name,
         "cd" | "pwd" | "exit" | "echo" | "export" | "unset" | "env" | "true" | "false" | "help"
+            | "alias" | "unalias"
     )
 }
 
@@ -83,6 +102,8 @@ pub fn execute(name: &str, args: &[String], state: &ShellState) -> BuiltinResult
         "true" => BuiltinResult::Ok,
         "false" => BuiltinResult::Error("".into()),
         "help" => builtin_help(),
+        "alias" => builtin_alias(args, state),
+        "unalias" => builtin_unalias(args),
         _ => BuiltinResult::Error(format!("{}: not a builtin", name)),
     }
 }
@@ -342,6 +363,9 @@ File commands:
   rm [-r] <path> Remove file or directory
   cp <src> <dst> Copy file
   mv <src> <dst> Move/rename file
+  ln -s <target> <link> Create symbolic link
+  readlink <link> Show symlink target
+  tree [path]    Show directory tree
 
 Text processing:
   grep <pat>     Search for pattern
@@ -352,11 +376,79 @@ Text processing:
   wc [-lwc]      Count lines/words/chars
   tee <file>     Copy stdin to file and stdout
 
+Shell:
+  alias [name=value] Define or list aliases
+  unalias <name>   Remove an alias
+
 Other:
   clear          Clear screen
+  history [N]    Show command history
+  sleep <N>      Wait N seconds
   save           Persist filesystem to storage"
             .to_string(),
     )
+}
+
+/// alias - define or list aliases
+fn builtin_alias(args: &[String], state: &ShellState) -> BuiltinResult {
+    if args.is_empty() {
+        // List all aliases
+        if state.aliases.is_empty() {
+            return BuiltinResult::Ok;
+        }
+        let mut output = String::new();
+        let mut aliases: Vec<_> = state.aliases.iter().collect();
+        aliases.sort_by(|a, b| a.0.cmp(b.0));
+        for (name, value) in aliases {
+            // Quote value if it contains spaces
+            if value.contains(' ') {
+                output.push_str(&format!("alias {}='{}'\n", name, value));
+            } else {
+                output.push_str(&format!("alias {}={}\n", name, value));
+            }
+        }
+        return BuiltinResult::Success(output.trim_end().to_string());
+    }
+
+    // Set aliases
+    let mut to_set = Vec::new();
+    for arg in args {
+        if let Some(eq_pos) = arg.find('=') {
+            let name = &arg[..eq_pos];
+            let value = &arg[eq_pos + 1..];
+            // Strip quotes if present
+            let value = value.trim_matches('\'').trim_matches('"');
+            if name.is_empty() {
+                return BuiltinResult::Error("alias: invalid alias name".into());
+            }
+            to_set.push((name.to_string(), value.to_string()));
+        } else {
+            // Show specific alias
+            if let Some(value) = state.aliases.get(arg) {
+                return BuiltinResult::Success(format!("alias {}='{}'", arg, value));
+            } else {
+                return BuiltinResult::Error(format!("alias: {}: not found", arg));
+            }
+        }
+    }
+
+    // Return aliases to set (caller will apply them)
+    if to_set.is_empty() {
+        BuiltinResult::Ok
+    } else {
+        let pairs: Vec<String> = to_set.iter().map(|(n, v)| format!("{}={}", n, v)).collect();
+        BuiltinResult::Success(format!("__ALIAS__:{}", pairs.join("\x00")))
+    }
+}
+
+/// unalias - remove alias
+fn builtin_unalias(args: &[String]) -> BuiltinResult {
+    if args.is_empty() {
+        return BuiltinResult::Error("unalias: usage: unalias name [name ...]".into());
+    }
+
+    // Return aliases to remove (caller will apply them)
+    BuiltinResult::Success(format!("__UNALIAS__:{}", args.join("\x00")))
 }
 
 #[cfg(test)]

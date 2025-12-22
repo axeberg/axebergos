@@ -1009,3 +1009,8 @@ pub fn clear() {
         }
     });
 }
+
+/// Get command history
+pub fn get_history() -> Vec<String> {
+    HISTORY.with(|h| h.borrow().clone())
+}

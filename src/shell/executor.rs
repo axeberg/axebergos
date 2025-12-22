@@ -92,6 +92,11 @@ impl ProgramRegistry {
         reg.register("tee", prog_tee);
         reg.register("clear", prog_clear);
         reg.register("save", prog_save);
+        reg.register("tree", prog_tree);
+        reg.register("sleep", prog_sleep);
+        reg.register("history", prog_history);
+        reg.register("ln", prog_ln);
+        reg.register("readlink", prog_readlink);
 
         reg
     }
@@ -149,11 +154,14 @@ impl Executor {
             return ExecResult::success();
         }
 
+        // Expand aliases in the line
+        let line = self.expand_aliases(line);
+
         #[cfg(all(target_arch = "wasm32", not(test)))]
         crate::console_log!("[exec] Running: {}", line);
 
         // Parse the command
-        let pipeline = match super::parse(line) {
+        let pipeline = match super::parse(&line) {
             Ok(p) => p,
             Err(e) => return ExecResult::success().with_error(format!("parse error: {}", e)),
         };
@@ -205,12 +213,16 @@ impl Executor {
                 String::new()
             };
 
+            // Expand command substitution $(cmd), then glob patterns
+            let subst_args = self.expand_substitutions(&cmd.args);
+            let expanded_args = self.expand_args(&subst_args);
+
             // Prepare args with input if needed
             let args: Vec<String> = if input.is_empty() {
-                cmd.args.clone()
+                expanded_args
             } else {
                 // For programs that read stdin, we pass input via a special mechanism
-                let mut args = cmd.args.clone();
+                let mut args = expanded_args;
                 args.insert(0, format!("__STDIN__:{}", input));
                 args
             };
@@ -275,9 +287,13 @@ impl Executor {
             let mut stdout = String::new();
             let mut stderr = String::new();
 
+            // Expand command substitution $(cmd), then glob patterns
+            let subst_args = self.expand_substitutions(&cmd.args);
+            let expanded_args = self.expand_args(&subst_args);
+
             if builtins::is_builtin(&cmd.program) {
                 // Builtins in a pipeline get the pipe input as implicit stdin
-                let result = builtins::execute(&cmd.program, &cmd.args, &self.state);
+                let result = builtins::execute(&cmd.program, &expanded_args, &self.state);
                 match result {
                     BuiltinResult::Success(s) => {
                         stdout = s;
@@ -300,7 +316,7 @@ impl Executor {
                 }
             } else if let Some(prog) = self.registry.get(&cmd.program) {
                 // Pass pipe input via special arg
-                let mut args = cmd.args.clone();
+                let mut args = expanded_args;
                 if !pipe_input.is_empty() {
                     args.insert(0, format!("__STDIN__:{}", pipe_input));
                 }
@@ -347,7 +363,10 @@ impl Executor {
 
     /// Execute a built-in command
     fn execute_builtin(&mut self, cmd: &SimpleCommand) -> ExecResult {
-        let result = builtins::execute(&cmd.program, &cmd.args, &self.state);
+        // Expand command substitution $(cmd), then glob patterns
+        let subst_args = self.expand_substitutions(&cmd.args);
+        let expanded_args = self.expand_args(&subst_args);
+        let result = builtins::execute(&cmd.program, &expanded_args, &self.state);
 
         match result {
             BuiltinResult::Success(mut output) => {
@@ -366,6 +385,22 @@ impl Executor {
                     let vars = &output["__UNSET__:".len()..];
                     for var in vars.split('\x00') {
                         self.state.unset_env(var);
+                    }
+                    output.clear();
+                } else if output.starts_with("__ALIAS__:") {
+                    let pairs = &output["__ALIAS__:".len()..];
+                    for pair in pairs.split('\x00') {
+                        if let Some(eq) = pair.find('=') {
+                            let name = &pair[..eq];
+                            let value = &pair[eq + 1..];
+                            self.state.set_alias(name, value);
+                        }
+                    }
+                    output.clear();
+                } else if output.starts_with("__UNALIAS__:") {
+                    let names = &output["__UNALIAS__:".len()..];
+                    for name in names.split('\x00') {
+                        self.state.unalias(name);
                     }
                     output.clear();
                 }
@@ -494,6 +529,441 @@ impl Executor {
 
         Ok(())
     }
+
+    /// Expand glob patterns in arguments
+    fn expand_args(&self, args: &[String]) -> Vec<String> {
+        let mut expanded = Vec::new();
+        for arg in args {
+            if is_glob_pattern(arg) {
+                let matches = expand_glob(arg, &self.state.cwd.display().to_string());
+                if matches.is_empty() {
+                    // No match - keep the original pattern (bash behavior)
+                    expanded.push(arg.clone());
+                } else {
+                    expanded.extend(matches);
+                }
+            } else {
+                expanded.push(arg.clone());
+            }
+        }
+        expanded
+    }
+
+    /// Expand command substitution $(cmd) and `cmd` in arguments
+    fn expand_substitutions(&mut self, args: &[String]) -> Vec<String> {
+        args.iter()
+            .map(|arg| self.expand_substitution_in_arg(arg))
+            .collect()
+    }
+
+    /// Expand command substitutions in a single argument
+    fn expand_substitution_in_arg(&mut self, arg: &str) -> String {
+        let mut result = String::new();
+        let mut chars = arg.chars().peekable();
+
+        while let Some(c) = chars.next() {
+            if c == '$' && chars.peek() == Some(&'(') {
+                // $(...) substitution
+                chars.next(); // consume '('
+                if let Some(cmd) = self.extract_nested_paren(&mut chars) {
+                    let output = self.execute_substitution(&cmd);
+                    result.push_str(&output);
+                } else {
+                    // Malformed - just keep it as-is
+                    result.push_str("$(");
+                }
+            } else if c == '`' {
+                // Backtick substitution
+                let mut cmd = String::new();
+                let mut found_closing = false;
+                while let Some(bc) = chars.next() {
+                    if bc == '`' {
+                        found_closing = true;
+                        break;
+                    }
+                    // Handle escaped backtick
+                    if bc == '\\' && chars.peek() == Some(&'`') {
+                        cmd.push(chars.next().unwrap());
+                    } else {
+                        cmd.push(bc);
+                    }
+                }
+                if found_closing {
+                    let output = self.execute_substitution(&cmd);
+                    result.push_str(&output);
+                } else {
+                    // Malformed - keep as-is
+                    result.push('`');
+                    result.push_str(&cmd);
+                }
+            } else {
+                result.push(c);
+            }
+        }
+
+        result
+    }
+
+    /// Extract content from nested parentheses, handling nesting
+    fn extract_nested_paren(&self, chars: &mut std::iter::Peekable<std::str::Chars>) -> Option<String> {
+        let mut content = String::new();
+        let mut depth = 1;
+
+        while let Some(c) = chars.next() {
+            match c {
+                '(' => {
+                    depth += 1;
+                    content.push(c);
+                }
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(content);
+                    }
+                    content.push(c);
+                }
+                _ => content.push(c),
+            }
+        }
+
+        None // Unbalanced
+    }
+
+    /// Execute a command for substitution and return its output
+    fn execute_substitution(&mut self, cmd: &str) -> String {
+        // Parse and execute the command
+        match super::parser::parse(cmd) {
+            Ok(pipeline) => {
+                let result = self.execute_pipeline(&pipeline);
+                // Trim trailing newline for substitution (bash behavior)
+                result.output.trim_end_matches('\n').to_string()
+            }
+            Err(_) => String::new(),
+        }
+    }
+
+    /// Expand aliases in a command line
+    fn expand_aliases(&self, line: &str) -> String {
+        // Split line into potential command segments (separated by |, ;, &&, ||)
+        // For simplicity, we'll just expand the first word of each pipe segment
+        let mut result = String::new();
+        let mut current_segment = String::new();
+        let mut in_quote = false;
+        let mut quote_char = ' ';
+        let mut chars = line.chars().peekable();
+
+        while let Some(c) = chars.next() {
+            match c {
+                '"' | '\'' if !in_quote => {
+                    in_quote = true;
+                    quote_char = c;
+                    current_segment.push(c);
+                }
+                c if in_quote && c == quote_char => {
+                    in_quote = false;
+                    current_segment.push(c);
+                }
+                '|' | ';' if !in_quote => {
+                    // End of segment, expand and add
+                    result.push_str(&self.expand_alias_in_segment(&current_segment));
+                    result.push(c);
+                    current_segment.clear();
+                }
+                '&' if !in_quote && chars.peek() == Some(&'&') => {
+                    chars.next();
+                    result.push_str(&self.expand_alias_in_segment(&current_segment));
+                    result.push_str("&&");
+                    current_segment.clear();
+                }
+                _ => {
+                    current_segment.push(c);
+                }
+            }
+        }
+
+        // Handle last segment
+        if !current_segment.is_empty() {
+            result.push_str(&self.expand_alias_in_segment(&current_segment));
+        }
+
+        result
+    }
+
+    /// Expand alias in a single command segment
+    fn expand_alias_in_segment(&self, segment: &str) -> String {
+        let trimmed = segment.trim_start();
+        if trimmed.is_empty() {
+            return segment.to_string();
+        }
+
+        // Find the first word (the command)
+        let first_word_end = trimmed
+            .find(|c: char| c.is_whitespace())
+            .unwrap_or(trimmed.len());
+        let first_word = &trimmed[..first_word_end];
+        let rest = &trimmed[first_word_end..];
+
+        // Check if it's an alias
+        if let Some(alias_value) = self.state.aliases.get(first_word) {
+            // Preserve leading whitespace from original segment
+            let leading_ws = &segment[..segment.len() - trimmed.len()];
+            format!("{}{}{}", leading_ws, alias_value, rest)
+        } else {
+            segment.to_string()
+        }
+    }
+}
+
+/// Check if a string contains glob pattern characters
+fn is_glob_pattern(s: &str) -> bool {
+    s.contains('*') || s.contains('?') || s.contains('[')
+}
+
+/// Match a pattern against a filename (not full path)
+fn glob_match(pattern: &str, name: &str) -> bool {
+    glob_match_chars(&mut pattern.chars().peekable(), &mut name.chars().peekable())
+}
+
+fn glob_match_chars(
+    pattern: &mut std::iter::Peekable<std::str::Chars>,
+    name: &mut std::iter::Peekable<std::str::Chars>,
+) -> bool {
+    while let Some(p) = pattern.next() {
+        match p {
+            '*' => {
+                // Handle ** for recursive matching
+                if pattern.peek() == Some(&'*') {
+                    pattern.next();
+                    // ** matches any characters including /
+                    // Try matching rest of pattern at every position
+                    let rest_pattern: String = pattern.collect();
+                    let rest_name: String = name.collect();
+                    if rest_pattern.is_empty() {
+                        return true;
+                    }
+                    for i in 0..=rest_name.len() {
+                        if glob_match(&rest_pattern, &rest_name[i..]) {
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+                // * matches zero or more characters except /
+                let rest_pattern: String = pattern.collect();
+                if rest_pattern.is_empty() {
+                    // Pattern ends with * - match if name has no more /
+                    return !name.any(|c| c == '/');
+                }
+                // Try matching rest at every position
+                let rest_name: String = name.collect();
+                for (i, c) in rest_name.char_indices() {
+                    if c == '/' {
+                        // Can't match across /
+                        return glob_match(&rest_pattern, &rest_name[i..]);
+                    }
+                    if glob_match(&rest_pattern, &rest_name[i..]) {
+                        return true;
+                    }
+                }
+                return glob_match(&rest_pattern, "");
+            }
+            '?' => {
+                // ? matches any single character except /
+                match name.next() {
+                    Some(c) if c != '/' => continue,
+                    _ => return false,
+                }
+            }
+            '[' => {
+                // Character class
+                let mut chars_in_class = Vec::new();
+                let mut negated = false;
+
+                if pattern.peek() == Some(&'!') || pattern.peek() == Some(&'^') {
+                    negated = true;
+                    pattern.next();
+                }
+
+                while let Some(c) = pattern.next() {
+                    if c == ']' {
+                        break;
+                    }
+                    if c == '-' && !chars_in_class.is_empty() && pattern.peek() != Some(&']') {
+                        // Range
+                        if let Some(end) = pattern.next() {
+                            let start = *chars_in_class.last().unwrap();
+                            for ch in start..=end {
+                                chars_in_class.push(ch);
+                            }
+                        }
+                    } else {
+                        chars_in_class.push(c);
+                    }
+                }
+
+                match name.next() {
+                    Some(c) => {
+                        let in_class = chars_in_class.contains(&c);
+                        if negated == in_class {
+                            return false;
+                        }
+                    }
+                    None => return false,
+                }
+            }
+            c => {
+                // Literal character
+                if name.next() != Some(c) {
+                    return false;
+                }
+            }
+        }
+    }
+    // Pattern consumed - name should also be consumed
+    name.next().is_none()
+}
+
+/// Expand a glob pattern against the filesystem
+fn expand_glob(pattern: &str, cwd: &str) -> Vec<String> {
+    let mut results = Vec::new();
+
+    // Determine base path and pattern
+    let (base, pat) = if pattern.starts_with('/') {
+        // Absolute path
+        let parts: Vec<&str> = pattern.splitn(2, |c| c == '*' || c == '?' || c == '[').collect();
+        if parts.len() == 1 {
+            // No glob chars - just return if exists
+            if syscall::exists(pattern).unwrap_or(false) {
+                return vec![pattern.to_string()];
+            }
+            return vec![];
+        }
+        // Find the last / before the glob
+        let prefix = parts[0];
+        let last_slash = prefix.rfind('/').unwrap_or(0);
+        (&pattern[..=last_slash], &pattern[last_slash + 1..])
+    } else {
+        // Relative path
+        (cwd, pattern)
+    };
+
+    // Handle recursive patterns (**)
+    if pat.contains("**") {
+        expand_glob_recursive(base, pat, &mut results);
+    } else {
+        expand_glob_simple(base, pat, &mut results);
+    }
+
+    results.sort();
+    results
+}
+
+/// Expand a simple glob pattern (no **) in a directory
+fn expand_glob_simple(dir: &str, pattern: &str, results: &mut Vec<String>) {
+    // Split pattern into segments
+    let segments: Vec<&str> = pattern.split('/').collect();
+    expand_glob_segments(dir, &segments, results);
+}
+
+fn expand_glob_segments(dir: &str, segments: &[&str], results: &mut Vec<String>) {
+    if segments.is_empty() {
+        return;
+    }
+
+    let segment = segments[0];
+    let remaining = &segments[1..];
+
+    // List directory
+    let entries = match syscall::readdir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    for entry in entries {
+        // Skip . and ..
+        if entry == "." || entry == ".." {
+            continue;
+        }
+
+        // Check if entry matches the segment pattern
+        if glob_match(segment, &entry) {
+            let path = if dir.ends_with('/') {
+                format!("{}{}", dir, entry)
+            } else {
+                format!("{}/{}", dir, entry)
+            };
+
+            if remaining.is_empty() {
+                results.push(path);
+            } else {
+                // Check if it's a directory for further matching
+                if let Ok(meta) = syscall::metadata(&path) {
+                    if meta.is_dir {
+                        expand_glob_segments(&path, remaining, results);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Expand a recursive glob pattern (**)
+fn expand_glob_recursive(base: &str, pattern: &str, results: &mut Vec<String>) {
+    // Split on ** to get prefix and suffix
+    let parts: Vec<&str> = pattern.splitn(2, "**").collect();
+    let prefix = parts[0].trim_end_matches('/');
+    let suffix = if parts.len() > 1 { parts[1].trim_start_matches('/') } else { "" };
+
+    // Start directory
+    let start_dir = if prefix.is_empty() {
+        base.to_string()
+    } else if prefix.starts_with('/') {
+        prefix.to_string()
+    } else {
+        format!("{}/{}", base, prefix)
+    };
+
+    // Traverse recursively
+    expand_glob_traverse(&start_dir, suffix, results);
+}
+
+fn expand_glob_traverse(dir: &str, suffix: &str, results: &mut Vec<String>) {
+    let entries = match syscall::readdir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    for entry in entries {
+        if entry == "." || entry == ".." {
+            continue;
+        }
+
+        let path = format!("{}/{}", dir.trim_end_matches('/'), entry);
+
+        // Check if this path matches the suffix
+        if suffix.is_empty() || glob_match(suffix, &entry) {
+            results.push(path.clone());
+        } else if suffix.contains('/') {
+            // Multi-segment suffix - check partial matches
+            let segments: Vec<&str> = suffix.split('/').collect();
+            if glob_match(segments[0], &entry) {
+                // Check if remaining segments match
+                if let Ok(meta) = syscall::metadata(&path) {
+                    if meta.is_dir {
+                        let remaining_suffix = segments[1..].join("/");
+                        expand_glob_segments(&path, &segments[1..], results);
+                    }
+                }
+            }
+        }
+
+        // Recurse into directories
+        if let Ok(meta) = syscall::metadata(&path) {
+            if meta.is_dir {
+                expand_glob_traverse(&path, suffix, results);
+            }
+        }
+    }
 }
 
 impl Default for Executor {
@@ -587,11 +1057,20 @@ fn prog_ls(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
                         format!("{}/{}", path, entry)
                     };
 
-                    let is_dir = syscall::metadata(&full_path)
-                        .map(|m| m.is_dir)
-                        .unwrap_or(false);
+                    let meta = syscall::metadata(&full_path);
+                    let is_dir = meta.as_ref().map(|m| m.is_dir).unwrap_or(false);
+                    let is_symlink = meta.as_ref().map(|m| m.is_symlink).unwrap_or(false);
+                    let symlink_target = meta.as_ref().ok().and_then(|m| m.symlink_target.clone());
 
-                    if is_dir {
+                    if is_symlink {
+                        stdout.push_str(CYAN);
+                        stdout.push_str(&entry);
+                        stdout.push_str(RESET);
+                        if let Some(target) = symlink_target {
+                            stdout.push_str(" -> ");
+                            stdout.push_str(&target);
+                        }
+                    } else if is_dir {
                         stdout.push_str(BLUE);
                         stdout.push_str(&entry);
                         stdout.push_str(RESET);
@@ -1026,6 +1505,238 @@ fn prog_save(_args: &[String], stdout: &mut String, _stderr: &mut String) -> i32
     }
     stdout.push_str("Saving filesystem...");
     0
+}
+
+/// tree - display directory tree
+fn prog_tree(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, paths) = extract_stdin(args);
+
+    let path = if paths.is_empty() { "." } else { paths[0] };
+
+    // ANSI colors
+    const BLUE: &str = "\x1b[34m";
+    const CYAN: &str = "\x1b[36m";
+    const RESET: &str = "\x1b[0m";
+
+    fn print_tree(
+        path: &str,
+        prefix: &str,
+        stdout: &mut String,
+        is_last: bool,
+        dir_count: &mut usize,
+        file_count: &mut usize,
+    ) -> Result<(), String> {
+        let entries = syscall::readdir(path).map_err(|e| e.to_string())?;
+        let mut entries: Vec<_> = entries.into_iter().collect();
+        entries.sort();
+
+        for (i, entry) in entries.iter().enumerate() {
+            let is_last_entry = i == entries.len() - 1;
+            let connector = if is_last_entry { "└── " } else { "├── " };
+            let child_prefix = if is_last_entry { "    " } else { "│   " };
+
+            let full_path = if path == "/" {
+                format!("/{}", entry)
+            } else if path == "." {
+                entry.clone()
+            } else {
+                format!("{}/{}", path, entry)
+            };
+
+            let meta = syscall::metadata(&full_path);
+            let is_dir = meta.as_ref().map(|m| m.is_dir).unwrap_or(false);
+            let is_symlink = meta.as_ref().map(|m| m.is_symlink).unwrap_or(false);
+            let symlink_target = meta.as_ref().ok().and_then(|m| m.symlink_target.clone());
+
+            if is_symlink {
+                *file_count += 1;
+                let target_str = symlink_target.map(|t| format!(" -> {}", t)).unwrap_or_default();
+                stdout.push_str(&format!("{}{}\x1b[36m{}\x1b[0m{}\n", prefix, connector, entry, target_str));
+            } else if is_dir {
+                *dir_count += 1;
+                stdout.push_str(&format!("{}{}{}{}{}\n", prefix, connector, BLUE, entry, RESET));
+                let new_prefix = format!("{}{}", prefix, child_prefix);
+                let _ = print_tree(&full_path, &new_prefix, stdout, is_last_entry, dir_count, file_count);
+            } else {
+                *file_count += 1;
+                stdout.push_str(&format!("{}{}{}\n", prefix, connector, entry));
+            }
+        }
+        Ok(())
+    }
+
+    // Print root
+    let is_dir = syscall::metadata(path).map(|m| m.is_dir).unwrap_or(false);
+    if !is_dir {
+        stderr.push_str(&format!("tree: {}: Not a directory\n", path));
+        return 1;
+    }
+
+    stdout.push_str(&format!("{}{}{}\n", BLUE, path, RESET));
+
+    let mut dir_count = 0usize;
+    let mut file_count = 0usize;
+
+    if let Err(e) = print_tree(path, "", stdout, false, &mut dir_count, &mut file_count) {
+        stderr.push_str(&format!("tree: {}\n", e));
+        return 1;
+    }
+
+    stdout.push_str(&format!("\n{} directories, {} files", dir_count, file_count));
+    0
+}
+
+/// history - display command history
+fn prog_history(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    // Get history from terminal module
+    #[cfg(target_arch = "wasm32")]
+    let history = crate::terminal::get_history();
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let history: Vec<String> = Vec::new();
+
+    // Check for -c (clear) flag
+    if args.iter().any(|a| *a == "-c") {
+        // Can't clear history from here - would need terminal module support
+        stdout.push_str("history: clearing not supported\n");
+        return 0;
+    }
+
+    // Check for count argument
+    let count: Option<usize> = args.first().and_then(|a| a.parse().ok());
+
+    let start = match count {
+        Some(n) => history.len().saturating_sub(n),
+        None => 0,
+    };
+
+    for (i, cmd) in history.iter().enumerate().skip(start) {
+        stdout.push_str(&format!("{:5}  {}\n", i + 1, cmd));
+    }
+
+    if stdout.ends_with('\n') {
+        stdout.pop();
+    }
+
+    0
+}
+
+/// sleep - pause for specified seconds
+fn prog_sleep(args: &[String], _stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if args.is_empty() {
+        stderr.push_str("sleep: missing operand\n");
+        return 1;
+    }
+
+    let seconds: f64 = match args[0].parse() {
+        Ok(n) => n,
+        Err(_) => {
+            stderr.push_str(&format!("sleep: invalid time interval '{}'\n", args[0]));
+            return 1;
+        }
+    };
+
+    // In WASM we can't actually block, but we can note the intent
+    // For now, just return immediately with a message
+    // A proper implementation would use setTimeout via JS interop
+    #[cfg(target_arch = "wasm32")]
+    {
+        // Can't block in WASM - would need async support
+        crate::console_log!("[sleep] Would sleep for {} seconds (non-blocking in WASM)", seconds);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::thread::sleep(std::time::Duration::from_secs_f64(seconds));
+    }
+
+    0
+}
+
+/// ln - create links (symlinks with -s)
+fn prog_ln(args: &[String], _stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    // Parse flags
+    let mut symbolic = false;
+    let mut force = false;
+    let mut targets: Vec<&str> = Vec::new();
+
+    for arg in &args {
+        if *arg == "-s" || *arg == "--symbolic" {
+            symbolic = true;
+        } else if *arg == "-f" || *arg == "--force" {
+            force = true;
+        } else if arg.starts_with('-') {
+            // Handle combined flags like -sf
+            for c in arg[1..].chars() {
+                match c {
+                    's' => symbolic = true,
+                    'f' => force = true,
+                    _ => {
+                        stderr.push_str(&format!("ln: unknown option: -{}\n", c));
+                        return 1;
+                    }
+                }
+            }
+        } else {
+            targets.push(arg);
+        }
+    }
+
+    if targets.len() < 2 {
+        stderr.push_str("ln: missing file operand\n");
+        stderr.push_str("Usage: ln [-sf] TARGET LINK_NAME\n");
+        return 1;
+    }
+
+    if !symbolic {
+        stderr.push_str("ln: hard links not supported, use -s for symbolic links\n");
+        return 1;
+    }
+
+    let target = targets[0];
+    let link_name = targets[1];
+
+    // If force, try to remove existing link
+    if force {
+        let _ = syscall::remove_file(link_name);
+    }
+
+    match syscall::symlink(target, link_name) {
+        Ok(_) => 0,
+        Err(e) => {
+            stderr.push_str(&format!("ln: {}: {}\n", link_name, e));
+            1
+        }
+    }
+}
+
+/// readlink - print value of a symbolic link
+fn prog_readlink(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if args.is_empty() {
+        stderr.push_str("readlink: missing file operand\n");
+        return 1;
+    }
+
+    let path = &args[0];
+
+    match syscall::read_link(path) {
+        Ok(target) => {
+            stdout.push_str(&target);
+            0
+        }
+        Err(e) => {
+            stderr.push_str(&format!("readlink: {}: {}\n", path, e));
+            1
+        }
+    }
 }
 
 #[cfg(test)]
