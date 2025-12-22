@@ -1,18 +1,17 @@
-//! WebGPU rendering surface
+//! WebGPU rendering surface using wgpu
 //!
-//! Uses WebGPU for hardware-accelerated terminal rendering.
-//! Falls back to... nothing. WebGPU or bust.
+//! Uses wgpu for cross-platform WebGPU abstraction.
+//! On WASM, this uses WebGPU via wgpu's web backend.
 
 use super::{Color, Rect};
 use wasm_bindgen::JsCast;
-use wasm_bindgen_futures::JsFuture;
 
 /// A frame being rendered
 pub struct Frame {
-    /// Command encoder for this frame
-    encoder: web_sys::GpuCommandEncoder,
-    /// Current surface texture view
-    view: web_sys::GpuTextureView,
+    /// Surface texture for this frame
+    texture: wgpu::SurfaceTexture,
+    /// Texture view for rendering
+    view: wgpu::TextureView,
     /// Queued rectangles to draw
     rects: Vec<RectInstance>,
     /// Queued text glyphs to draw
@@ -45,13 +44,14 @@ struct GlyphInstance {
     color: [f32; 4],
 }
 
-/// The WebGPU rendering surface
+/// The wgpu rendering surface
 pub struct Surface {
-    device: web_sys::GpuDevice,
-    queue: web_sys::GpuQueue,
-    context: web_sys::GpuCanvasContext,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    surface: wgpu::Surface<'static>,
+    config: wgpu::SurfaceConfiguration,
     canvas: web_sys::HtmlCanvasElement,
-    _format: web_sys::GpuTextureFormat,
+
     /// Physical pixel width (CSS width * DPR)
     width: u32,
     /// Physical pixel height (CSS height * DPR)
@@ -60,17 +60,17 @@ pub struct Surface {
     device_pixel_ratio: f64,
 
     // Pipelines
-    rect_pipeline: web_sys::GpuRenderPipeline,
-    glyph_pipeline: web_sys::GpuRenderPipeline,
+    rect_pipeline: wgpu::RenderPipeline,
+    glyph_pipeline: wgpu::RenderPipeline,
 
     // Buffers
-    rect_buffer: web_sys::GpuBuffer,
-    glyph_buffer: web_sys::GpuBuffer,
-    uniform_buffer: web_sys::GpuBuffer,
+    rect_buffer: wgpu::Buffer,
+    glyph_buffer: wgpu::Buffer,
+    uniform_buffer: wgpu::Buffer,
 
-    // Font texture and bind group
-    font_bind_group: web_sys::GpuBindGroup,
-    uniform_bind_group: web_sys::GpuBindGroup,
+    // Bind groups
+    uniform_bind_group: wgpu::BindGroup,
+    font_bind_group: wgpu::BindGroup,
 
     // Max instances
     max_rects: usize,
@@ -78,46 +78,26 @@ pub struct Surface {
 }
 
 impl Surface {
-    /// Create a new WebGPU surface
+    /// Create a new wgpu surface
     ///
     /// width/height are CSS pixel dimensions. They will be scaled by device pixel ratio
     /// for high-DPI displays.
     pub async fn new(width: u32, height: u32) -> Result<Self, String> {
-        // Get WebGPU adapter
+        // Get device pixel ratio
         let window = web_sys::window().ok_or("No window")?;
-        let navigator = window.navigator();
-        let gpu = navigator.gpu();
-
-        // Get device pixel ratio for high-DPI displays (Retina, etc.)
         let device_pixel_ratio = window.device_pixel_ratio();
         let physical_width = ((width as f64) * device_pixel_ratio).round() as u32;
         let physical_height = ((height as f64) * device_pixel_ratio).round() as u32;
 
-        web_sys::console::log_1(&format!(
-            "[surface] DPR: {}, CSS: {}x{}, Physical: {}x{}",
-            device_pixel_ratio, width, height, physical_width, physical_height
-        ).into());
+        web_sys::console::log_1(
+            &format!(
+                "[surface] DPR: {}, CSS: {}x{}, Physical: {}x{}",
+                device_pixel_ratio, width, height, physical_width, physical_height
+            )
+            .into(),
+        );
 
-        let adapter_opts = web_sys::GpuRequestAdapterOptions::new();
-        adapter_opts.set_power_preference(web_sys::GpuPowerPreference::HighPerformance);
-
-        let adapter: web_sys::GpuAdapter = JsFuture::from(gpu.request_adapter_with_options(&adapter_opts))
-            .await
-            .map_err(|e| format!("Failed to get adapter: {:?}", e))?
-            .dyn_into()
-            .map_err(|_| "Not an adapter")?;
-
-        // Request device
-        let device_desc = web_sys::GpuDeviceDescriptor::new();
-        let device: web_sys::GpuDevice = JsFuture::from(adapter.request_device_with_descriptor(&device_desc))
-            .await
-            .map_err(|e| format!("Failed to get device: {:?}", e))?
-            .dyn_into()
-            .map_err(|_| "Not a device")?;
-
-        let queue = device.queue();
-
-        // Create canvas and configure surface
+        // Create canvas
         let document = window.document().ok_or("No document")?;
         let canvas = document
             .create_element("canvas")
@@ -125,12 +105,11 @@ impl Surface {
             .dyn_into::<web_sys::HtmlCanvasElement>()
             .map_err(|_| "Not a canvas")?;
 
-        // Set canvas buffer size to physical pixels for crisp rendering
         canvas.set_width(physical_width);
         canvas.set_height(physical_height);
         canvas.set_id("axeberg-canvas");
 
-        // Style fullscreen - CSS handles the display size
+        // Style fullscreen
         let style = canvas.style();
         let _ = style.set_property("position", "fixed");
         let _ = style.set_property("top", "0");
@@ -144,72 +123,225 @@ impl Surface {
             .append_child(&canvas)
             .map_err(|_| "Failed to append canvas")?;
 
-        // Get WebGPU context
-        let context: web_sys::GpuCanvasContext = canvas
-            .get_context("webgpu")
-            .map_err(|_| "Failed to get webgpu context")?
-            .ok_or("No webgpu context")?
-            .dyn_into()
-            .map_err(|_| "Not a GpuCanvasContext")?;
+        // Create wgpu instance
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL,
+            ..Default::default()
+        });
 
-        // Configure the surface
-        let format = navigator.gpu().get_preferred_canvas_format();
-        let config = web_sys::GpuCanvasConfiguration::new(&device, format);
-        let _ = context.configure(&config);
+        // Create surface from canvas
+        let surface = instance
+            .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
+            .map_err(|e| format!("Failed to create surface: {:?}", e))?;
+
+        // Request adapter
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: Some(&surface),
+                force_fallback_adapter: false,
+            })
+            .await
+            .map_err(|e| format!("Failed to get adapter: {:?}", e))?;
+
+        web_sys::console::log_1(&format!("[surface] Adapter: {:?}", adapter.get_info()).into());
+
+        // Request device
+        let (device, queue): (wgpu::Device, wgpu::Queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .map_err(|e| format!("Failed to get device: {:?}", e))?;
+
+        // Configure surface
+        let surface_caps = surface.get_capabilities(&adapter);
+        let format = surface_caps
+            .formats
+            .iter()
+            .find(|f| f.is_srgb())
+            .copied()
+            .unwrap_or(surface_caps.formats[0]);
+
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format,
+            width: physical_width,
+            height: physical_height,
+            present_mode: wgpu::PresentMode::Fifo,
+            alpha_mode: surface_caps.alpha_modes[0],
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+        surface.configure(&device, &config);
 
         // Create shaders
-        let rect_shader = create_rect_shader(&device);
-        let glyph_shader = create_glyph_shader(&device);
+        let rect_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Rect Shader"),
+            source: wgpu::ShaderSource::Wgsl(RECT_SHADER.into()),
+        });
 
-        // Create uniform buffer (screen size)
-        let uniform_usage = web_sys::gpu_buffer_usage::UNIFORM | web_sys::gpu_buffer_usage::COPY_DST;
-        let uniform_buffer = create_buffer(&device, 8, uniform_usage);
+        let glyph_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Glyph Shader"),
+            source: wgpu::ShaderSource::Wgsl(GLYPH_SHADER.into()),
+        });
+
+        // Create uniform buffer
+        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Uniform Buffer"),
+            size: 8,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Upload initial uniform data
+        queue.write_buffer(
+            &uniform_buffer,
+            0,
+            bytemuck::cast_slice(&[physical_width as f32, physical_height as f32]),
+        );
 
         // Create uniform bind group layout
-        let uniform_layout = create_uniform_layout(&device);
-        let uniform_bind_group = create_uniform_bind_group(&device, &uniform_layout, &uniform_buffer);
+        let uniform_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Uniform Layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
 
-        // Create font texture and bind group
-        let (font_texture, font_sampler) = create_font_texture(&device, &queue);
-        let font_layout = create_font_layout(&device);
-        let font_bind_group = create_font_bind_group(&device, &font_layout, &font_texture, &font_sampler);
+        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Uniform Bind Group"),
+            layout: &uniform_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buffer.as_entire_binding(),
+            }],
+        });
+
+        // Create font texture
+        let font_data = generate_font_bitmap();
+        let font_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Font Texture"),
+            size: wgpu::Extent3d {
+                width: 128,
+                height: 256,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &font_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &font_data,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(128),
+                rows_per_image: Some(256),
+            },
+            wgpu::Extent3d {
+                width: 128,
+                height: 256,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        let font_view = font_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let font_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
+        // Create font bind group layout
+        let font_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Font Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
+        let font_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Font Bind Group"),
+            layout: &font_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&font_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&font_sampler),
+                },
+            ],
+        });
 
         // Create pipelines
         let rect_pipeline = create_rect_pipeline(&device, &rect_shader, &uniform_layout, format);
-        let glyph_pipeline = create_glyph_pipeline(&device, &glyph_shader, &uniform_layout, &font_layout, format);
+        let glyph_pipeline =
+            create_glyph_pipeline(&device, &glyph_shader, &uniform_layout, &font_layout, format);
 
         // Create instance buffers
         let max_rects = 1024;
         let max_glyphs = 16384;
 
-        let vertex_usage = web_sys::gpu_buffer_usage::VERTEX | web_sys::gpu_buffer_usage::COPY_DST;
-        let rect_buffer = create_buffer(
-            &device,
-            (max_rects * std::mem::size_of::<RectInstance>()) as u32,
-            vertex_usage,
-        );
-        let glyph_buffer = create_buffer(
-            &device,
-            (max_glyphs * std::mem::size_of::<GlyphInstance>()) as u32,
-            vertex_usage,
-        );
+        let rect_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Rect Buffer"),
+            size: (max_rects * std::mem::size_of::<RectInstance>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
 
-        // Upload initial uniform data (use physical pixel dimensions)
-        let uniform_data = [physical_width as f32, physical_height as f32];
-        let uniform_array = js_sys::Float32Array::from(uniform_data.as_slice());
-        let _ = queue.write_buffer_with_u32_and_buffer_source(&uniform_buffer, 0, &uniform_array);
+        let glyph_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Glyph Buffer"),
+            size: (max_glyphs * std::mem::size_of::<GlyphInstance>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
 
-        web_sys::console::log_1(&format!(
-            "[surface] WebGPU surface initialized: {}x{} (physical), DPR: {}",
-            physical_width, physical_height, device_pixel_ratio
-        ).into());
+        web_sys::console::log_1(
+            &format!(
+                "[surface] wgpu surface initialized: {}x{} (physical), DPR: {}",
+                physical_width, physical_height, device_pixel_ratio
+            )
+            .into(),
+        );
 
         Ok(Self {
             device,
             queue,
-            context,
+            surface,
+            config,
             canvas,
-            _format: format,
             width: physical_width,
             height: physical_height,
             device_pixel_ratio,
@@ -218,18 +350,15 @@ impl Surface {
             rect_buffer,
             glyph_buffer,
             uniform_buffer,
-            font_bind_group,
             uniform_bind_group,
+            font_bind_group,
             max_rects,
             max_glyphs,
         })
     }
 
     /// Resize the surface
-    ///
-    /// width/height are CSS pixel dimensions. They will be scaled by device pixel ratio.
     pub fn resize(&mut self, width: u32, height: u32) {
-        // Recalculate DPR in case it changed (e.g., moved to different monitor)
         if let Some(window) = web_sys::window() {
             self.device_pixel_ratio = window.device_pixel_ratio();
         }
@@ -246,42 +375,39 @@ impl Surface {
         self.canvas.set_width(physical_width);
         self.canvas.set_height(physical_height);
 
-        // Update uniform buffer with physical dimensions
-        let uniform_data = [physical_width as f32, physical_height as f32];
-        let uniform_array = js_sys::Float32Array::from(uniform_data.as_slice());
-        let _ = self.queue.write_buffer_with_u32_and_buffer_source(&self.uniform_buffer, 0, &uniform_array);
+        self.config.width = physical_width;
+        self.config.height = physical_height;
+        self.surface.configure(&self.device, &self.config);
+
+        // Update uniform buffer
+        self.queue.write_buffer(
+            &self.uniform_buffer,
+            0,
+            bytemuck::cast_slice(&[physical_width as f32, physical_height as f32]),
+        );
     }
 
     /// Begin a new frame
     pub fn begin_frame(&mut self) -> Option<Frame> {
-        let texture = match self.context.get_current_texture() {
-            Ok(t) => t,
-            Err(_) => return None,
-        };
-        let view = match texture.create_view() {
-            Ok(v) => v,
-            Err(_) => return None,
-        };
-
-        let encoder_desc = web_sys::GpuCommandEncoderDescriptor::new();
-        let encoder = self.device.create_command_encoder_with_descriptor(&encoder_desc);
+        let texture = self.surface.get_current_texture().ok()?;
+        let view = texture
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
 
         Some(Frame {
-            encoder,
+            texture,
             view,
             rects: Vec::new(),
             glyphs: Vec::new(),
         })
     }
 
-    /// Clear the screen with a color (handled in end_frame)
+    /// Clear the screen (handled in end_frame)
     pub fn clear(&mut self, _frame: &Frame, _color: Color) {
         // Clear is done via the load operation in the render pass
     }
 
-    /// Draw a filled rectangle
-    ///
-    /// Coordinates are in CSS pixels and will be scaled by DPR internally.
+    /// Draw a filled rectangle (coordinates in CSS pixels)
     pub fn draw_rect(&mut self, frame: &mut Frame, rect: Rect, color: Color) {
         if frame.rects.len() >= self.max_rects {
             return;
@@ -295,9 +421,7 @@ impl Surface {
         });
     }
 
-    /// Draw text
-    ///
-    /// Coordinates and font_size are in CSS pixels and will be scaled by DPR internally.
+    /// Draw text (coordinates and font_size in CSS pixels)
     pub fn draw_text(
         &mut self,
         frame: &mut Frame,
@@ -308,13 +432,9 @@ impl Surface {
         font_size: f32,
     ) {
         let dpr = self.device_pixel_ratio as f32;
-
-        // Scale font size by DPR for crisp rendering
         let physical_font_size = font_size * dpr;
         let scale = physical_font_size / 16.0;
         let glyph_width = 8.0 * scale;
-
-        // Scale position by DPR
         let physical_x = x * dpr;
         let physical_y = y * dpr;
 
@@ -346,75 +466,98 @@ impl Surface {
         color: Color,
         line_width: f32,
     ) {
-        // Top
-        self.draw_rect(frame, Rect::new(rect.x, rect.y, rect.width, line_width), color);
-        // Bottom
-        self.draw_rect(frame, Rect::new(rect.x, rect.y + rect.height - line_width, rect.width, line_width), color);
-        // Left
-        self.draw_rect(frame, Rect::new(rect.x, rect.y, line_width, rect.height), color);
-        // Right
-        self.draw_rect(frame, Rect::new(rect.x + rect.width - line_width, rect.y, line_width, rect.height), color);
+        self.draw_rect(
+            frame,
+            Rect::new(rect.x, rect.y, rect.width, line_width),
+            color,
+        );
+        self.draw_rect(
+            frame,
+            Rect::new(
+                rect.x,
+                rect.y + rect.height - line_width,
+                rect.width,
+                line_width,
+            ),
+            color,
+        );
+        self.draw_rect(
+            frame,
+            Rect::new(rect.x, rect.y, line_width, rect.height),
+            color,
+        );
+        self.draw_rect(
+            frame,
+            Rect::new(
+                rect.x + rect.width - line_width,
+                rect.y,
+                line_width,
+                rect.height,
+            ),
+            color,
+        );
     }
 
     /// End the frame and submit commands
     pub fn end_frame(&mut self, frame: Frame) {
         // Upload instance data
         if !frame.rects.is_empty() {
-            let rect_data = bytemuck::cast_slice(&frame.rects);
-            let array = js_sys::Uint8Array::from(rect_data);
-            let _ = self.queue.write_buffer_with_u32_and_buffer_source(&self.rect_buffer, 0, &array);
+            self.queue
+                .write_buffer(&self.rect_buffer, 0, bytemuck::cast_slice(&frame.rects));
         }
 
         if !frame.glyphs.is_empty() {
-            let glyph_data = bytemuck::cast_slice(&frame.glyphs);
-            let array = js_sys::Uint8Array::from(glyph_data);
-            let _ = self.queue.write_buffer_with_u32_and_buffer_source(&self.glyph_buffer, 0, &array);
+            self.queue
+                .write_buffer(&self.glyph_buffer, 0, bytemuck::cast_slice(&frame.glyphs));
         }
 
-        // Create render pass
-        let color_attachment = web_sys::GpuRenderPassColorAttachment::new(
-            web_sys::GpuLoadOp::Clear,
-            web_sys::GpuStoreOp::Store,
-            &frame.view,
-        );
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
-        // Set clear color (Tokyo Night background)
-        let clear_color = web_sys::GpuColorDict::new(1.0, 0.15, 0.1, 0.1); // a, b, g, r
-        color_attachment.set_clear_value(&clear_color);
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: None,
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &frame.view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.1,
+                            g: 0.1,
+                            b: 0.15,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
 
-        let color_attachments = js_sys::Array::new();
-        color_attachments.push(&color_attachment);
+            // Draw rectangles
+            if !frame.rects.is_empty() {
+                render_pass.set_pipeline(&self.rect_pipeline);
+                render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                render_pass.set_vertex_buffer(0, self.rect_buffer.slice(..));
+                render_pass.draw(0..6, 0..frame.rects.len() as u32);
+            }
 
-        let pass_desc = web_sys::GpuRenderPassDescriptor::new(&color_attachments);
-        let pass = match frame.encoder.begin_render_pass(&pass_desc) {
-            Ok(p) => p,
-            Err(_) => return,
-        };
-
-        // Draw rectangles
-        if !frame.rects.is_empty() {
-            pass.set_pipeline(&self.rect_pipeline);
-            pass.set_bind_group(0, Some(&self.uniform_bind_group));
-            pass.set_vertex_buffer(0, Some(&self.rect_buffer));
-            pass.draw_with_instance_count(6, frame.rects.len() as u32);
+            // Draw glyphs
+            if !frame.glyphs.is_empty() {
+                render_pass.set_pipeline(&self.glyph_pipeline);
+                render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                render_pass.set_bind_group(1, &self.font_bind_group, &[]);
+                render_pass.set_vertex_buffer(0, self.glyph_buffer.slice(..));
+                render_pass.draw(0..6, 0..frame.glyphs.len() as u32);
+            }
         }
 
-        // Draw glyphs
-        if !frame.glyphs.is_empty() {
-            pass.set_pipeline(&self.glyph_pipeline);
-            pass.set_bind_group(0, Some(&self.uniform_bind_group));
-            pass.set_bind_group(1, Some(&self.font_bind_group));
-            pass.set_vertex_buffer(0, Some(&self.glyph_buffer));
-            pass.draw_with_instance_count(6, frame.glyphs.len() as u32);
-        }
-
-        let _ = pass.end();
-
-        // Submit
-        let command_buffer = frame.encoder.finish();
-        let commands = js_sys::Array::new();
-        commands.push(&command_buffer);
-        self.queue.submit(&commands);
+        self.queue.submit(std::iter::once(encoder.finish()));
+        frame.texture.present();
     }
 
     /// Get dimensions
@@ -423,248 +566,251 @@ impl Surface {
     }
 }
 
-/// Create a GPU buffer
-fn create_buffer(device: &web_sys::GpuDevice, size: u32, usage: u32) -> web_sys::GpuBuffer {
-    let desc = web_sys::GpuBufferDescriptor::new(size as f64, usage);
-    device.create_buffer(&desc).expect("Failed to create buffer")
+/// Rectangle shader
+const RECT_SHADER: &str = r#"
+struct Uniforms {
+    screen_size: vec2f,
 }
 
-/// Create the rectangle shader module
-fn create_rect_shader(device: &web_sys::GpuDevice) -> web_sys::GpuShaderModule {
-    let code = r#"
-        struct Uniforms {
-            screen_size: vec2f,
-        }
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
 
-        @group(0) @binding(0) var<uniform> uniforms: Uniforms;
-
-        struct RectInstance {
-            @location(0) pos: vec2f,
-            @location(1) size: vec2f,
-            @location(2) color: vec4f,
-        }
-
-        struct VertexOutput {
-            @builtin(position) position: vec4f,
-            @location(0) color: vec4f,
-        }
-
-        @vertex
-        fn vs_main(
-            @builtin(vertex_index) vertex_index: u32,
-            instance: RectInstance,
-        ) -> VertexOutput {
-            var positions = array<vec2f, 6>(
-                vec2f(0.0, 0.0),
-                vec2f(1.0, 0.0),
-                vec2f(0.0, 1.0),
-                vec2f(1.0, 0.0),
-                vec2f(1.0, 1.0),
-                vec2f(0.0, 1.0),
-            );
-
-            let local_pos = positions[vertex_index];
-            let world_pos = instance.pos + local_pos * instance.size;
-            let clip_pos = (world_pos / uniforms.screen_size) * 2.0 - 1.0;
-
-            var output: VertexOutput;
-            output.position = vec4f(clip_pos.x, -clip_pos.y, 0.0, 1.0);
-            output.color = instance.color;
-            return output;
-        }
-
-        @fragment
-        fn fs_main(input: VertexOutput) -> @location(0) vec4f {
-            return input.color;
-        }
-    "#;
-
-    let desc = web_sys::GpuShaderModuleDescriptor::new(code);
-    device.create_shader_module(&desc)
+struct RectInstance {
+    @location(0) pos: vec2f,
+    @location(1) size: vec2f,
+    @location(2) color: vec4f,
 }
 
-/// Create the glyph shader module
-fn create_glyph_shader(device: &web_sys::GpuDevice) -> web_sys::GpuShaderModule {
-    let code = r#"
-        struct Uniforms {
-            screen_size: vec2f,
-        }
-
-        @group(0) @binding(0) var<uniform> uniforms: Uniforms;
-        @group(1) @binding(0) var font_texture: texture_2d<f32>;
-        @group(1) @binding(1) var font_sampler: sampler;
-
-        struct GlyphInstance {
-            @location(0) pos: vec2f,
-            @location(1) glyph: u32,
-            @location(2) scale: f32,
-            @location(3) color: vec4f,
-        }
-
-        struct VertexOutput {
-            @builtin(position) position: vec4f,
-            @location(0) uv: vec2f,
-            @location(1) color: vec4f,
-        }
-
-        @vertex
-        fn vs_main(
-            @builtin(vertex_index) vertex_index: u32,
-            instance: GlyphInstance,
-        ) -> VertexOutput {
-            let glyph_size = vec2f(8.0, 16.0) * instance.scale;
-
-            var positions = array<vec2f, 6>(
-                vec2f(0.0, 0.0),
-                vec2f(1.0, 0.0),
-                vec2f(0.0, 1.0),
-                vec2f(1.0, 0.0),
-                vec2f(1.0, 1.0),
-                vec2f(0.0, 1.0),
-            );
-
-            let local_pos = positions[vertex_index];
-            let world_pos = instance.pos + local_pos * glyph_size - vec2f(0.0, glyph_size.y);
-            let clip_pos = (world_pos / uniforms.screen_size) * 2.0 - 1.0;
-
-            let glyph_x = f32(instance.glyph % 16u);
-            let glyph_y = f32(instance.glyph / 16u);
-            let uv_base = vec2f(glyph_x / 16.0, glyph_y / 16.0);
-            let uv_size = vec2f(1.0 / 16.0, 1.0 / 16.0);
-            let uv = uv_base + local_pos * uv_size;
-
-            var output: VertexOutput;
-            output.position = vec4f(clip_pos.x, -clip_pos.y, 0.0, 1.0);
-            output.uv = uv;
-            output.color = instance.color;
-            return output;
-        }
-
-        @fragment
-        fn fs_main(input: VertexOutput) -> @location(0) vec4f {
-            let alpha = textureSample(font_texture, font_sampler, input.uv).r;
-            if (alpha < 0.5) {
-                discard;
-            }
-            return vec4f(input.color.rgb, input.color.a * alpha);
-        }
-    "#;
-
-    let desc = web_sys::GpuShaderModuleDescriptor::new(code);
-    device.create_shader_module(&desc)
+struct VertexOutput {
+    @builtin(position) position: vec4f,
+    @location(0) color: vec4f,
 }
 
-/// Create uniform bind group layout
-fn create_uniform_layout(device: &web_sys::GpuDevice) -> web_sys::GpuBindGroupLayout {
-    let entry = web_sys::GpuBindGroupLayoutEntry::new(0, web_sys::gpu_shader_stage::VERTEX);
-    let buffer_layout = web_sys::GpuBufferBindingLayout::new();
-    buffer_layout.set_type(web_sys::GpuBufferBindingType::Uniform);
-    entry.set_buffer(&buffer_layout);
+@vertex
+fn vs_main(
+    @builtin(vertex_index) vertex_index: u32,
+    instance: RectInstance,
+) -> VertexOutput {
+    var positions = array<vec2f, 6>(
+        vec2f(0.0, 0.0),
+        vec2f(1.0, 0.0),
+        vec2f(0.0, 1.0),
+        vec2f(1.0, 0.0),
+        vec2f(1.0, 1.0),
+        vec2f(0.0, 1.0),
+    );
 
-    let entries = js_sys::Array::new();
-    entries.push(&entry);
+    let local_pos = positions[vertex_index];
+    let world_pos = instance.pos + local_pos * instance.size;
+    let clip_pos = (world_pos / uniforms.screen_size) * 2.0 - 1.0;
 
-    let desc = web_sys::GpuBindGroupLayoutDescriptor::new(&entries);
-    device.create_bind_group_layout(&desc).expect("Failed to create uniform layout")
+    var output: VertexOutput;
+    output.position = vec4f(clip_pos.x, -clip_pos.y, 0.0, 1.0);
+    output.color = instance.color;
+    return output;
 }
 
-/// Create uniform bind group
-fn create_uniform_bind_group(
-    device: &web_sys::GpuDevice,
-    layout: &web_sys::GpuBindGroupLayout,
-    buffer: &web_sys::GpuBuffer,
-) -> web_sys::GpuBindGroup {
-    let buffer_binding = web_sys::GpuBufferBinding::new(buffer);
-    let entry = web_sys::GpuBindGroupEntry::new(0, &buffer_binding);
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4f {
+    return input.color;
+}
+"#;
 
-    let entries = js_sys::Array::new();
-    entries.push(&entry);
-
-    let desc = web_sys::GpuBindGroupDescriptor::new(&entries, layout);
-    device.create_bind_group(&desc)
+/// Glyph shader
+const GLYPH_SHADER: &str = r#"
+struct Uniforms {
+    screen_size: vec2f,
 }
 
-/// Create font texture bind group layout
-fn create_font_layout(device: &web_sys::GpuDevice) -> web_sys::GpuBindGroupLayout {
-    let tex_entry = web_sys::GpuBindGroupLayoutEntry::new(0, web_sys::gpu_shader_stage::FRAGMENT);
-    let tex_layout = web_sys::GpuTextureBindingLayout::new();
-    tex_layout.set_sample_type(web_sys::GpuTextureSampleType::Float);
-    tex_entry.set_texture(&tex_layout);
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+@group(1) @binding(0) var font_texture: texture_2d<f32>;
+@group(1) @binding(1) var font_sampler: sampler;
 
-    let sampler_entry = web_sys::GpuBindGroupLayoutEntry::new(1, web_sys::gpu_shader_stage::FRAGMENT);
-    let sampler_layout = web_sys::GpuSamplerBindingLayout::new();
-    sampler_layout.set_type(web_sys::GpuSamplerBindingType::Filtering);
-    sampler_entry.set_sampler(&sampler_layout);
-
-    let entries = js_sys::Array::new();
-    entries.push(&tex_entry);
-    entries.push(&sampler_entry);
-
-    let desc = web_sys::GpuBindGroupLayoutDescriptor::new(&entries);
-    device.create_bind_group_layout(&desc).expect("Failed to create font layout")
+struct GlyphInstance {
+    @location(0) pos: vec2f,
+    @location(1) glyph: u32,
+    @location(2) scale: f32,
+    @location(3) color: vec4f,
 }
 
-/// Create font bind group
-fn create_font_bind_group(
-    device: &web_sys::GpuDevice,
-    layout: &web_sys::GpuBindGroupLayout,
-    texture: &web_sys::GpuTexture,
-    sampler: &web_sys::GpuSampler,
-) -> web_sys::GpuBindGroup {
-    let view = texture.create_view().expect("Failed to create texture view");
-
-    let tex_entry = web_sys::GpuBindGroupEntry::new(0, &view);
-    let sampler_entry = web_sys::GpuBindGroupEntry::new(1, sampler);
-
-    let entries = js_sys::Array::new();
-    entries.push(&tex_entry);
-    entries.push(&sampler_entry);
-
-    let desc = web_sys::GpuBindGroupDescriptor::new(&entries, layout);
-    device.create_bind_group(&desc)
+struct VertexOutput {
+    @builtin(position) position: vec4f,
+    @location(0) uv: vec2f,
+    @location(1) color: vec4f,
 }
 
-/// Create the font texture (128x256 bitmap = 16x16 grid of 8x16 glyphs)
-fn create_font_texture(
-    device: &web_sys::GpuDevice,
-    queue: &web_sys::GpuQueue,
-) -> (web_sys::GpuTexture, web_sys::GpuSampler) {
-    let width = 128u32;
-    let height = 256u32;
+@vertex
+fn vs_main(
+    @builtin(vertex_index) vertex_index: u32,
+    instance: GlyphInstance,
+) -> VertexOutput {
+    let glyph_size = vec2f(8.0, 16.0) * instance.scale;
 
-    let size = web_sys::GpuExtent3dDict::new(width);
-    size.set_height(height);
+    var positions = array<vec2f, 6>(
+        vec2f(0.0, 0.0),
+        vec2f(1.0, 0.0),
+        vec2f(0.0, 1.0),
+        vec2f(1.0, 0.0),
+        vec2f(1.0, 1.0),
+        vec2f(0.0, 1.0),
+    );
 
-    let tex_usage = web_sys::gpu_texture_usage::TEXTURE_BINDING | web_sys::gpu_texture_usage::COPY_DST;
-    let desc = web_sys::GpuTextureDescriptor::new(web_sys::GpuTextureFormat::R8unorm, &size, tex_usage);
-    let texture = device.create_texture(&desc).expect("Failed to create font texture");
+    let local_pos = positions[vertex_index];
+    let world_pos = instance.pos + local_pos * glyph_size - vec2f(0.0, glyph_size.y);
+    let clip_pos = (world_pos / uniforms.screen_size) * 2.0 - 1.0;
 
-    let font_data = generate_font_bitmap();
+    let glyph_x = f32(instance.glyph % 16u);
+    let glyph_y = f32(instance.glyph / 16u);
+    let uv_base = vec2f(glyph_x / 16.0, glyph_y / 16.0);
+    let uv_size = vec2f(1.0 / 16.0, 1.0 / 16.0);
+    let uv = uv_base + local_pos * uv_size;
 
-    let copy_texture = web_sys::GpuImageCopyTexture::new(&texture);
-    let data_layout = web_sys::GpuImageDataLayout::new();
-    data_layout.set_offset(0.0);
-    data_layout.set_bytes_per_row(width);
-    data_layout.set_rows_per_image(height);
+    var output: VertexOutput;
+    output.position = vec4f(clip_pos.x, -clip_pos.y, 0.0, 1.0);
+    output.uv = uv;
+    output.color = instance.color;
+    return output;
+}
 
-    // Create size array for write_texture
-    let size_array = js_sys::Array::new();
-    size_array.push(&wasm_bindgen::JsValue::from(width));
-    size_array.push(&wasm_bindgen::JsValue::from(height));
-    size_array.push(&wasm_bindgen::JsValue::from(1u32));
-
-    let array = js_sys::Uint8Array::from(font_data.as_slice());
-    web_sys::console::log_1(&format!("[surface] Uploading font texture: {} bytes", font_data.len()).into());
-    if let Err(e) = queue.write_texture_with_buffer_source_and_u32_sequence(&copy_texture, &array, &data_layout, &size_array) {
-        web_sys::console::error_1(&format!("[surface] Font texture upload failed: {:?}", e).into());
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4f {
+    let alpha = textureSample(font_texture, font_sampler, input.uv).r;
+    if (alpha < 0.5) {
+        discard;
     }
+    return vec4f(input.color.rgb, input.color.a * alpha);
+}
+"#;
 
-    let sampler_desc = web_sys::GpuSamplerDescriptor::new();
-    sampler_desc.set_mag_filter(web_sys::GpuFilterMode::Nearest);
-    sampler_desc.set_min_filter(web_sys::GpuFilterMode::Nearest);
-    let sampler = device.create_sampler_with_descriptor(&sampler_desc);
+/// Create rect pipeline
+fn create_rect_pipeline(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    uniform_layout: &wgpu::BindGroupLayout,
+    format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Rect Pipeline Layout"),
+        bind_group_layouts: &[uniform_layout],
+        immediate_size: 0,
+    });
 
-    (texture, sampler)
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("Rect Pipeline"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_main"),
+            buffers: &[wgpu::VertexBufferLayout {
+                array_stride: 32,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &[
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x2,
+                        offset: 0,
+                        shader_location: 0,
+                    },
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x2,
+                        offset: 8,
+                        shader_location: 1,
+                    },
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x4,
+                        offset: 16,
+                        shader_location: 2,
+                    },
+                ],
+            }],
+            compilation_options: Default::default(),
+        },
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+/// Create glyph pipeline
+fn create_glyph_pipeline(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    uniform_layout: &wgpu::BindGroupLayout,
+    font_layout: &wgpu::BindGroupLayout,
+    format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Glyph Pipeline Layout"),
+        bind_group_layouts: &[uniform_layout, font_layout],
+        immediate_size: 0,
+    });
+
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("Glyph Pipeline"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_main"),
+            buffers: &[wgpu::VertexBufferLayout {
+                array_stride: 32,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &[
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x2,
+                        offset: 0,
+                        shader_location: 0,
+                    },
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Uint32,
+                        offset: 8,
+                        shader_location: 1,
+                    },
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32,
+                        offset: 12,
+                        shader_location: 2,
+                    },
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x4,
+                        offset: 16,
+                        shader_location: 3,
+                    },
+                ],
+            }],
+            compilation_options: Default::default(),
+        },
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
 }
 
 /// Generate a simple bitmap font (ASCII 0-255 in 16x16 grid of 8x16 glyphs)
@@ -705,314 +851,197 @@ fn render_glyph(data: &mut [u8], stride: usize, x: usize, y: usize, c: u8) {
 fn get_embedded_font() -> &'static [u8] {
     static FONT: &[u8] = &[
         // Space (32)
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        // ! (33)
-        0x00, 0x00, 0x18, 0x3c, 0x3c, 0x3c, 0x18, 0x18, 0x18, 0x00, 0x18, 0x18, 0x00, 0x00, 0x00, 0x00,
-        // " (34)
-        0x00, 0x66, 0x66, 0x66, 0x24, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        // # (35)
-        0x00, 0x00, 0x00, 0x6c, 0x6c, 0xfe, 0x6c, 0x6c, 0x6c, 0xfe, 0x6c, 0x6c, 0x00, 0x00, 0x00, 0x00,
-        // $ (36)
-        0x18, 0x18, 0x7c, 0xc6, 0xc2, 0xc0, 0x7c, 0x06, 0x06, 0x86, 0xc6, 0x7c, 0x18, 0x18, 0x00, 0x00,
-        // % (37)
-        0x00, 0x00, 0x00, 0x00, 0xc2, 0xc6, 0x0c, 0x18, 0x30, 0x60, 0xc6, 0x86, 0x00, 0x00, 0x00, 0x00,
-        // & (38)
-        0x00, 0x00, 0x38, 0x6c, 0x6c, 0x38, 0x76, 0xdc, 0xcc, 0xcc, 0xcc, 0x76, 0x00, 0x00, 0x00, 0x00,
-        // ' (39)
-        0x00, 0x30, 0x30, 0x30, 0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        // ( (40)
-        0x00, 0x00, 0x0c, 0x18, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0x18, 0x0c, 0x00, 0x00, 0x00, 0x00,
-        // ) (41)
-        0x00, 0x00, 0x30, 0x18, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x18, 0x30, 0x00, 0x00, 0x00, 0x00,
-        // * (42)
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x66, 0x3c, 0xff, 0x3c, 0x66, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        // + (43)
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x7e, 0x18, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        // , (44)
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x18, 0x30, 0x00, 0x00, 0x00,
-        // - (45)
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        // . (46)
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x00, 0x00, 0x00, 0x00,
-        // / (47)
-        0x00, 0x00, 0x00, 0x00, 0x02, 0x06, 0x0c, 0x18, 0x30, 0x60, 0xc0, 0x80, 0x00, 0x00, 0x00, 0x00,
-        // 0 (48)
-        0x00, 0x00, 0x7c, 0xc6, 0xc6, 0xce, 0xde, 0xf6, 0xe6, 0xc6, 0xc6, 0x7c, 0x00, 0x00, 0x00, 0x00,
-        // 1 (49)
-        0x00, 0x00, 0x18, 0x38, 0x78, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x7e, 0x00, 0x00, 0x00, 0x00,
-        // 2 (50)
-        0x00, 0x00, 0x7c, 0xc6, 0x06, 0x0c, 0x18, 0x30, 0x60, 0xc0, 0xc6, 0xfe, 0x00, 0x00, 0x00, 0x00,
-        // 3 (51)
-        0x00, 0x00, 0x7c, 0xc6, 0x06, 0x06, 0x3c, 0x06, 0x06, 0x06, 0xc6, 0x7c, 0x00, 0x00, 0x00, 0x00,
-        // 4 (52)
-        0x00, 0x00, 0x0c, 0x1c, 0x3c, 0x6c, 0xcc, 0xfe, 0x0c, 0x0c, 0x0c, 0x1e, 0x00, 0x00, 0x00, 0x00,
-        // 5 (53)
-        0x00, 0x00, 0xfe, 0xc0, 0xc0, 0xc0, 0xfc, 0x06, 0x06, 0x06, 0xc6, 0x7c, 0x00, 0x00, 0x00, 0x00,
-        // 6 (54)
-        0x00, 0x00, 0x38, 0x60, 0xc0, 0xc0, 0xfc, 0xc6, 0xc6, 0xc6, 0xc6, 0x7c, 0x00, 0x00, 0x00, 0x00,
-        // 7 (55)
-        0x00, 0x00, 0xfe, 0xc6, 0x06, 0x06, 0x0c, 0x18, 0x30, 0x30, 0x30, 0x30, 0x00, 0x00, 0x00, 0x00,
-        // 8 (56)
-        0x00, 0x00, 0x7c, 0xc6, 0xc6, 0xc6, 0x7c, 0xc6, 0xc6, 0xc6, 0xc6, 0x7c, 0x00, 0x00, 0x00, 0x00,
-        // 9 (57)
-        0x00, 0x00, 0x7c, 0xc6, 0xc6, 0xc6, 0x7e, 0x06, 0x06, 0x06, 0x0c, 0x78, 0x00, 0x00, 0x00, 0x00,
-        // : (58)
-        0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x00, 0x00, 0x00, 0x18, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00,
-        // ; (59)
-        0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x00, 0x00, 0x00, 0x18, 0x18, 0x30, 0x00, 0x00, 0x00, 0x00,
-        // < (60)
-        0x00, 0x00, 0x00, 0x06, 0x0c, 0x18, 0x30, 0x60, 0x30, 0x18, 0x0c, 0x06, 0x00, 0x00, 0x00, 0x00,
-        // = (61)
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x7e, 0x00, 0x00, 0x7e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        // > (62)
-        0x00, 0x00, 0x00, 0x60, 0x30, 0x18, 0x0c, 0x06, 0x0c, 0x18, 0x30, 0x60, 0x00, 0x00, 0x00, 0x00,
-        // ? (63)
-        0x00, 0x00, 0x7c, 0xc6, 0xc6, 0x0c, 0x18, 0x18, 0x18, 0x00, 0x18, 0x18, 0x00, 0x00, 0x00, 0x00,
-        // @ (64)
-        0x00, 0x00, 0x7c, 0xc6, 0xc6, 0xc6, 0xde, 0xde, 0xde, 0xdc, 0xc0, 0x7c, 0x00, 0x00, 0x00, 0x00,
-        // A (65)
-        0x00, 0x00, 0x10, 0x38, 0x6c, 0xc6, 0xc6, 0xfe, 0xc6, 0xc6, 0xc6, 0xc6, 0x00, 0x00, 0x00, 0x00,
-        // B (66)
-        0x00, 0x00, 0xfc, 0x66, 0x66, 0x66, 0x7c, 0x66, 0x66, 0x66, 0x66, 0xfc, 0x00, 0x00, 0x00, 0x00,
-        // C (67)
-        0x00, 0x00, 0x3c, 0x66, 0xc2, 0xc0, 0xc0, 0xc0, 0xc0, 0xc2, 0x66, 0x3c, 0x00, 0x00, 0x00, 0x00,
-        // D (68)
-        0x00, 0x00, 0xf8, 0x6c, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x6c, 0xf8, 0x00, 0x00, 0x00, 0x00,
-        // E (69)
-        0x00, 0x00, 0xfe, 0x66, 0x62, 0x68, 0x78, 0x68, 0x60, 0x62, 0x66, 0xfe, 0x00, 0x00, 0x00, 0x00,
-        // F (70)
-        0x00, 0x00, 0xfe, 0x66, 0x62, 0x68, 0x78, 0x68, 0x60, 0x60, 0x60, 0xf0, 0x00, 0x00, 0x00, 0x00,
-        // G (71)
-        0x00, 0x00, 0x3c, 0x66, 0xc2, 0xc0, 0xc0, 0xde, 0xc6, 0xc6, 0x66, 0x3a, 0x00, 0x00, 0x00, 0x00,
-        // H (72)
-        0x00, 0x00, 0xc6, 0xc6, 0xc6, 0xc6, 0xfe, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0x00, 0x00, 0x00, 0x00,
-        // I (73)
-        0x00, 0x00, 0x3c, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x3c, 0x00, 0x00, 0x00, 0x00,
-        // J (74)
-        0x00, 0x00, 0x1e, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0xcc, 0xcc, 0xcc, 0x78, 0x00, 0x00, 0x00, 0x00,
-        // K (75)
-        0x00, 0x00, 0xe6, 0x66, 0x66, 0x6c, 0x78, 0x78, 0x6c, 0x66, 0x66, 0xe6, 0x00, 0x00, 0x00, 0x00,
-        // L (76)
-        0x00, 0x00, 0xf0, 0x60, 0x60, 0x60, 0x60, 0x60, 0x60, 0x62, 0x66, 0xfe, 0x00, 0x00, 0x00, 0x00,
-        // M (77)
-        0x00, 0x00, 0xc6, 0xee, 0xfe, 0xfe, 0xd6, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0x00, 0x00, 0x00, 0x00,
-        // N (78)
-        0x00, 0x00, 0xc6, 0xe6, 0xf6, 0xfe, 0xde, 0xce, 0xc6, 0xc6, 0xc6, 0xc6, 0x00, 0x00, 0x00, 0x00,
-        // O (79)
-        0x00, 0x00, 0x7c, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0x7c, 0x00, 0x00, 0x00, 0x00,
-        // P (80)
-        0x00, 0x00, 0xfc, 0x66, 0x66, 0x66, 0x7c, 0x60, 0x60, 0x60, 0x60, 0xf0, 0x00, 0x00, 0x00, 0x00,
-        // Q (81)
-        0x00, 0x00, 0x7c, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0xd6, 0xde, 0x7c, 0x0c, 0x0e, 0x00, 0x00,
-        // R (82)
-        0x00, 0x00, 0xfc, 0x66, 0x66, 0x66, 0x7c, 0x6c, 0x66, 0x66, 0x66, 0xe6, 0x00, 0x00, 0x00, 0x00,
-        // S (83)
-        0x00, 0x00, 0x7c, 0xc6, 0xc6, 0x60, 0x38, 0x0c, 0x06, 0xc6, 0xc6, 0x7c, 0x00, 0x00, 0x00, 0x00,
-        // T (84)
-        0x00, 0x00, 0x7e, 0x7e, 0x5a, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x3c, 0x00, 0x00, 0x00, 0x00,
-        // U (85)
-        0x00, 0x00, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0x7c, 0x00, 0x00, 0x00, 0x00,
-        // V (86)
-        0x00, 0x00, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0x6c, 0x38, 0x10, 0x00, 0x00, 0x00, 0x00,
-        // W (87)
-        0x00, 0x00, 0xc6, 0xc6, 0xc6, 0xc6, 0xd6, 0xd6, 0xd6, 0xfe, 0xee, 0x6c, 0x00, 0x00, 0x00, 0x00,
-        // X (88)
-        0x00, 0x00, 0xc6, 0xc6, 0x6c, 0x7c, 0x38, 0x38, 0x7c, 0x6c, 0xc6, 0xc6, 0x00, 0x00, 0x00, 0x00,
-        // Y (89)
-        0x00, 0x00, 0x66, 0x66, 0x66, 0x66, 0x3c, 0x18, 0x18, 0x18, 0x18, 0x3c, 0x00, 0x00, 0x00, 0x00,
-        // Z (90)
-        0x00, 0x00, 0xfe, 0xc6, 0x86, 0x0c, 0x18, 0x30, 0x60, 0xc2, 0xc6, 0xfe, 0x00, 0x00, 0x00, 0x00,
-        // [ (91)
-        0x00, 0x00, 0x3c, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0x3c, 0x00, 0x00, 0x00, 0x00,
-        // \ (92)
-        0x00, 0x00, 0x00, 0x80, 0xc0, 0xe0, 0x70, 0x38, 0x1c, 0x0e, 0x06, 0x02, 0x00, 0x00, 0x00, 0x00,
-        // ] (93)
-        0x00, 0x00, 0x3c, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x3c, 0x00, 0x00, 0x00, 0x00,
-        // ^ (94)
-        0x10, 0x38, 0x6c, 0xc6, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        // _ (95)
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0x00, 0x00,
-        // ` (96)
-        0x30, 0x30, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        // a (97)
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x78, 0x0c, 0x7c, 0xcc, 0xcc, 0xcc, 0x76, 0x00, 0x00, 0x00, 0x00,
-        // b (98)
-        0x00, 0x00, 0xe0, 0x60, 0x60, 0x78, 0x6c, 0x66, 0x66, 0x66, 0x66, 0x7c, 0x00, 0x00, 0x00, 0x00,
-        // c (99)
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x7c, 0xc6, 0xc0, 0xc0, 0xc0, 0xc6, 0x7c, 0x00, 0x00, 0x00, 0x00,
-        // d (100)
-        0x00, 0x00, 0x1c, 0x0c, 0x0c, 0x3c, 0x6c, 0xcc, 0xcc, 0xcc, 0xcc, 0x76, 0x00, 0x00, 0x00, 0x00,
-        // e (101)
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x7c, 0xc6, 0xfe, 0xc0, 0xc0, 0xc6, 0x7c, 0x00, 0x00, 0x00, 0x00,
-        // f (102)
-        0x00, 0x00, 0x38, 0x6c, 0x64, 0x60, 0xf0, 0x60, 0x60, 0x60, 0x60, 0xf0, 0x00, 0x00, 0x00, 0x00,
-        // g (103)
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x76, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0x7c, 0x0c, 0xcc, 0x78, 0x00,
-        // h (104)
-        0x00, 0x00, 0xe0, 0x60, 0x60, 0x6c, 0x76, 0x66, 0x66, 0x66, 0x66, 0xe6, 0x00, 0x00, 0x00, 0x00,
-        // i (105)
-        0x00, 0x00, 0x18, 0x18, 0x00, 0x38, 0x18, 0x18, 0x18, 0x18, 0x18, 0x3c, 0x00, 0x00, 0x00, 0x00,
-        // j (106)
-        0x00, 0x00, 0x06, 0x06, 0x00, 0x0e, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x66, 0x66, 0x3c, 0x00,
-        // k (107)
-        0x00, 0x00, 0xe0, 0x60, 0x60, 0x66, 0x6c, 0x78, 0x78, 0x6c, 0x66, 0xe6, 0x00, 0x00, 0x00, 0x00,
-        // l (108)
-        0x00, 0x00, 0x38, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x3c, 0x00, 0x00, 0x00, 0x00,
-        // m (109)
-        0x00, 0x00, 0x00, 0x00, 0x00, 0xec, 0xfe, 0xd6, 0xd6, 0xd6, 0xd6, 0xc6, 0x00, 0x00, 0x00, 0x00,
-        // n (110)
-        0x00, 0x00, 0x00, 0x00, 0x00, 0xdc, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x00, 0x00, 0x00, 0x00,
-        // o (111)
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x7c, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0x7c, 0x00, 0x00, 0x00, 0x00,
-        // p (112)
-        0x00, 0x00, 0x00, 0x00, 0x00, 0xdc, 0x66, 0x66, 0x66, 0x66, 0x66, 0x7c, 0x60, 0x60, 0xf0, 0x00,
-        // q (113)
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x76, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0x7c, 0x0c, 0x0c, 0x1e, 0x00,
-        // r (114)
-        0x00, 0x00, 0x00, 0x00, 0x00, 0xdc, 0x76, 0x66, 0x60, 0x60, 0x60, 0xf0, 0x00, 0x00, 0x00, 0x00,
-        // s (115)
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x7c, 0xc6, 0x60, 0x38, 0x0c, 0xc6, 0x7c, 0x00, 0x00, 0x00, 0x00,
-        // t (116)
-        0x00, 0x00, 0x10, 0x30, 0x30, 0xfc, 0x30, 0x30, 0x30, 0x30, 0x36, 0x1c, 0x00, 0x00, 0x00, 0x00,
-        // u (117)
-        0x00, 0x00, 0x00, 0x00, 0x00, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0x76, 0x00, 0x00, 0x00, 0x00,
-        // v (118)
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x66, 0x66, 0x66, 0x66, 0x66, 0x3c, 0x18, 0x00, 0x00, 0x00, 0x00,
-        // w (119)
-        0x00, 0x00, 0x00, 0x00, 0x00, 0xc6, 0xc6, 0xd6, 0xd6, 0xd6, 0xfe, 0x6c, 0x00, 0x00, 0x00, 0x00,
-        // x (120)
-        0x00, 0x00, 0x00, 0x00, 0x00, 0xc6, 0x6c, 0x38, 0x38, 0x38, 0x6c, 0xc6, 0x00, 0x00, 0x00, 0x00,
-        // y (121)
-        0x00, 0x00, 0x00, 0x00, 0x00, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0x7e, 0x06, 0x0c, 0xf8, 0x00,
-        // z (122)
-        0x00, 0x00, 0x00, 0x00, 0x00, 0xfe, 0xcc, 0x18, 0x30, 0x60, 0xc6, 0xfe, 0x00, 0x00, 0x00, 0x00,
-        // { (123)
-        0x00, 0x00, 0x0e, 0x18, 0x18, 0x18, 0x70, 0x18, 0x18, 0x18, 0x18, 0x0e, 0x00, 0x00, 0x00, 0x00,
-        // | (124)
-        0x00, 0x00, 0x18, 0x18, 0x18, 0x18, 0x00, 0x18, 0x18, 0x18, 0x18, 0x18, 0x00, 0x00, 0x00, 0x00,
-        // } (125)
-        0x00, 0x00, 0x70, 0x18, 0x18, 0x18, 0x0e, 0x18, 0x18, 0x18, 0x18, 0x70, 0x00, 0x00, 0x00, 0x00,
-        // ~ (126)
-        0x00, 0x00, 0x76, 0xdc, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, // ! (33)
+        0x00, 0x00, 0x18, 0x3c, 0x3c, 0x3c, 0x18, 0x18, 0x18, 0x00, 0x18, 0x18, 0x00, 0x00, 0x00,
+        0x00, // " (34)
+        0x00, 0x66, 0x66, 0x66, 0x24, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, // # (35)
+        0x00, 0x00, 0x00, 0x6c, 0x6c, 0xfe, 0x6c, 0x6c, 0x6c, 0xfe, 0x6c, 0x6c, 0x00, 0x00, 0x00,
+        0x00, // $ (36)
+        0x18, 0x18, 0x7c, 0xc6, 0xc2, 0xc0, 0x7c, 0x06, 0x06, 0x86, 0xc6, 0x7c, 0x18, 0x18, 0x00,
+        0x00, // % (37)
+        0x00, 0x00, 0x00, 0x00, 0xc2, 0xc6, 0x0c, 0x18, 0x30, 0x60, 0xc6, 0x86, 0x00, 0x00, 0x00,
+        0x00, // & (38)
+        0x00, 0x00, 0x38, 0x6c, 0x6c, 0x38, 0x76, 0xdc, 0xcc, 0xcc, 0xcc, 0x76, 0x00, 0x00, 0x00,
+        0x00, // ' (39)
+        0x00, 0x30, 0x30, 0x30, 0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, // ( (40)
+        0x00, 0x00, 0x0c, 0x18, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0x18, 0x0c, 0x00, 0x00, 0x00,
+        0x00, // ) (41)
+        0x00, 0x00, 0x30, 0x18, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x18, 0x30, 0x00, 0x00, 0x00,
+        0x00, // * (42)
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x66, 0x3c, 0xff, 0x3c, 0x66, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, // + (43)
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x7e, 0x18, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, // , (44)
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x18, 0x30, 0x00, 0x00,
+        0x00, // - (45)
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, // . (46)
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x00, 0x00, 0x00,
+        0x00, // / (47)
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x06, 0x0c, 0x18, 0x30, 0x60, 0xc0, 0x80, 0x00, 0x00, 0x00,
+        0x00, // 0 (48)
+        0x00, 0x00, 0x7c, 0xc6, 0xc6, 0xce, 0xde, 0xf6, 0xe6, 0xc6, 0xc6, 0x7c, 0x00, 0x00, 0x00,
+        0x00, // 1 (49)
+        0x00, 0x00, 0x18, 0x38, 0x78, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x7e, 0x00, 0x00, 0x00,
+        0x00, // 2 (50)
+        0x00, 0x00, 0x7c, 0xc6, 0x06, 0x0c, 0x18, 0x30, 0x60, 0xc0, 0xc6, 0xfe, 0x00, 0x00, 0x00,
+        0x00, // 3 (51)
+        0x00, 0x00, 0x7c, 0xc6, 0x06, 0x06, 0x3c, 0x06, 0x06, 0x06, 0xc6, 0x7c, 0x00, 0x00, 0x00,
+        0x00, // 4 (52)
+        0x00, 0x00, 0x0c, 0x1c, 0x3c, 0x6c, 0xcc, 0xfe, 0x0c, 0x0c, 0x0c, 0x1e, 0x00, 0x00, 0x00,
+        0x00, // 5 (53)
+        0x00, 0x00, 0xfe, 0xc0, 0xc0, 0xc0, 0xfc, 0x06, 0x06, 0x06, 0xc6, 0x7c, 0x00, 0x00, 0x00,
+        0x00, // 6 (54)
+        0x00, 0x00, 0x38, 0x60, 0xc0, 0xc0, 0xfc, 0xc6, 0xc6, 0xc6, 0xc6, 0x7c, 0x00, 0x00, 0x00,
+        0x00, // 7 (55)
+        0x00, 0x00, 0xfe, 0xc6, 0x06, 0x06, 0x0c, 0x18, 0x30, 0x30, 0x30, 0x30, 0x00, 0x00, 0x00,
+        0x00, // 8 (56)
+        0x00, 0x00, 0x7c, 0xc6, 0xc6, 0xc6, 0x7c, 0xc6, 0xc6, 0xc6, 0xc6, 0x7c, 0x00, 0x00, 0x00,
+        0x00, // 9 (57)
+        0x00, 0x00, 0x7c, 0xc6, 0xc6, 0xc6, 0x7e, 0x06, 0x06, 0x06, 0x0c, 0x78, 0x00, 0x00, 0x00,
+        0x00, // : (58)
+        0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x00, 0x00, 0x00, 0x18, 0x18, 0x00, 0x00, 0x00, 0x00,
+        0x00, // ; (59)
+        0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x00, 0x00, 0x00, 0x18, 0x18, 0x30, 0x00, 0x00, 0x00,
+        0x00, // < (60)
+        0x00, 0x00, 0x00, 0x06, 0x0c, 0x18, 0x30, 0x60, 0x30, 0x18, 0x0c, 0x06, 0x00, 0x00, 0x00,
+        0x00, // = (61)
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x7e, 0x00, 0x00, 0x7e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, // > (62)
+        0x00, 0x00, 0x00, 0x60, 0x30, 0x18, 0x0c, 0x06, 0x0c, 0x18, 0x30, 0x60, 0x00, 0x00, 0x00,
+        0x00, // ? (63)
+        0x00, 0x00, 0x7c, 0xc6, 0xc6, 0x0c, 0x18, 0x18, 0x18, 0x00, 0x18, 0x18, 0x00, 0x00, 0x00,
+        0x00, // @ (64)
+        0x00, 0x00, 0x7c, 0xc6, 0xc6, 0xc6, 0xde, 0xde, 0xde, 0xdc, 0xc0, 0x7c, 0x00, 0x00, 0x00,
+        0x00, // A (65)
+        0x00, 0x00, 0x10, 0x38, 0x6c, 0xc6, 0xc6, 0xfe, 0xc6, 0xc6, 0xc6, 0xc6, 0x00, 0x00, 0x00,
+        0x00, // B (66)
+        0x00, 0x00, 0xfc, 0x66, 0x66, 0x66, 0x7c, 0x66, 0x66, 0x66, 0x66, 0xfc, 0x00, 0x00, 0x00,
+        0x00, // C (67)
+        0x00, 0x00, 0x3c, 0x66, 0xc2, 0xc0, 0xc0, 0xc0, 0xc0, 0xc2, 0x66, 0x3c, 0x00, 0x00, 0x00,
+        0x00, // D (68)
+        0x00, 0x00, 0xf8, 0x6c, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x6c, 0xf8, 0x00, 0x00, 0x00,
+        0x00, // E (69)
+        0x00, 0x00, 0xfe, 0x66, 0x62, 0x68, 0x78, 0x68, 0x60, 0x62, 0x66, 0xfe, 0x00, 0x00, 0x00,
+        0x00, // F (70)
+        0x00, 0x00, 0xfe, 0x66, 0x62, 0x68, 0x78, 0x68, 0x60, 0x60, 0x60, 0xf0, 0x00, 0x00, 0x00,
+        0x00, // G (71)
+        0x00, 0x00, 0x3c, 0x66, 0xc2, 0xc0, 0xc0, 0xde, 0xc6, 0xc6, 0x66, 0x3a, 0x00, 0x00, 0x00,
+        0x00, // H (72)
+        0x00, 0x00, 0xc6, 0xc6, 0xc6, 0xc6, 0xfe, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0x00, 0x00, 0x00,
+        0x00, // I (73)
+        0x00, 0x00, 0x3c, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x3c, 0x00, 0x00, 0x00,
+        0x00, // J (74)
+        0x00, 0x00, 0x1e, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0xcc, 0xcc, 0xcc, 0x78, 0x00, 0x00, 0x00,
+        0x00, // K (75)
+        0x00, 0x00, 0xe6, 0x66, 0x66, 0x6c, 0x78, 0x78, 0x6c, 0x66, 0x66, 0xe6, 0x00, 0x00, 0x00,
+        0x00, // L (76)
+        0x00, 0x00, 0xf0, 0x60, 0x60, 0x60, 0x60, 0x60, 0x60, 0x62, 0x66, 0xfe, 0x00, 0x00, 0x00,
+        0x00, // M (77)
+        0x00, 0x00, 0xc6, 0xee, 0xfe, 0xfe, 0xd6, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0x00, 0x00, 0x00,
+        0x00, // N (78)
+        0x00, 0x00, 0xc6, 0xe6, 0xf6, 0xfe, 0xde, 0xce, 0xc6, 0xc6, 0xc6, 0xc6, 0x00, 0x00, 0x00,
+        0x00, // O (79)
+        0x00, 0x00, 0x7c, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0x7c, 0x00, 0x00, 0x00,
+        0x00, // P (80)
+        0x00, 0x00, 0xfc, 0x66, 0x66, 0x66, 0x7c, 0x60, 0x60, 0x60, 0x60, 0xf0, 0x00, 0x00, 0x00,
+        0x00, // Q (81)
+        0x00, 0x00, 0x7c, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0xd6, 0xde, 0x7c, 0x0c, 0x0e, 0x00,
+        0x00, // R (82)
+        0x00, 0x00, 0xfc, 0x66, 0x66, 0x66, 0x7c, 0x6c, 0x66, 0x66, 0x66, 0xe6, 0x00, 0x00, 0x00,
+        0x00, // S (83)
+        0x00, 0x00, 0x7c, 0xc6, 0xc6, 0x60, 0x38, 0x0c, 0x06, 0xc6, 0xc6, 0x7c, 0x00, 0x00, 0x00,
+        0x00, // T (84)
+        0x00, 0x00, 0x7e, 0x7e, 0x5a, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x3c, 0x00, 0x00, 0x00,
+        0x00, // U (85)
+        0x00, 0x00, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0x7c, 0x00, 0x00, 0x00,
+        0x00, // V (86)
+        0x00, 0x00, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0x6c, 0x38, 0x10, 0x00, 0x00, 0x00,
+        0x00, // W (87)
+        0x00, 0x00, 0xc6, 0xc6, 0xc6, 0xc6, 0xd6, 0xd6, 0xd6, 0xfe, 0xee, 0x6c, 0x00, 0x00, 0x00,
+        0x00, // X (88)
+        0x00, 0x00, 0xc6, 0xc6, 0x6c, 0x7c, 0x38, 0x38, 0x7c, 0x6c, 0xc6, 0xc6, 0x00, 0x00, 0x00,
+        0x00, // Y (89)
+        0x00, 0x00, 0x66, 0x66, 0x66, 0x66, 0x3c, 0x18, 0x18, 0x18, 0x18, 0x3c, 0x00, 0x00, 0x00,
+        0x00, // Z (90)
+        0x00, 0x00, 0xfe, 0xc6, 0x86, 0x0c, 0x18, 0x30, 0x60, 0xc2, 0xc6, 0xfe, 0x00, 0x00, 0x00,
+        0x00, // [ (91)
+        0x00, 0x00, 0x3c, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0x3c, 0x00, 0x00, 0x00,
+        0x00, // \ (92)
+        0x00, 0x00, 0x00, 0x80, 0xc0, 0xe0, 0x70, 0x38, 0x1c, 0x0e, 0x06, 0x02, 0x00, 0x00, 0x00,
+        0x00, // ] (93)
+        0x00, 0x00, 0x3c, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x3c, 0x00, 0x00, 0x00,
+        0x00, // ^ (94)
+        0x10, 0x38, 0x6c, 0xc6, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, // _ (95)
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0x00,
+        0x00, // ` (96)
+        0x30, 0x30, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, // a (97)
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x78, 0x0c, 0x7c, 0xcc, 0xcc, 0xcc, 0x76, 0x00, 0x00, 0x00,
+        0x00, // b (98)
+        0x00, 0x00, 0xe0, 0x60, 0x60, 0x78, 0x6c, 0x66, 0x66, 0x66, 0x66, 0x7c, 0x00, 0x00, 0x00,
+        0x00, // c (99)
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x7c, 0xc6, 0xc0, 0xc0, 0xc0, 0xc6, 0x7c, 0x00, 0x00, 0x00,
+        0x00, // d (100)
+        0x00, 0x00, 0x1c, 0x0c, 0x0c, 0x3c, 0x6c, 0xcc, 0xcc, 0xcc, 0xcc, 0x76, 0x00, 0x00, 0x00,
+        0x00, // e (101)
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x7c, 0xc6, 0xfe, 0xc0, 0xc0, 0xc6, 0x7c, 0x00, 0x00, 0x00,
+        0x00, // f (102)
+        0x00, 0x00, 0x38, 0x6c, 0x64, 0x60, 0xf0, 0x60, 0x60, 0x60, 0x60, 0xf0, 0x00, 0x00, 0x00,
+        0x00, // g (103)
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x76, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0x7c, 0x0c, 0xcc, 0x78,
+        0x00, // h (104)
+        0x00, 0x00, 0xe0, 0x60, 0x60, 0x6c, 0x76, 0x66, 0x66, 0x66, 0x66, 0xe6, 0x00, 0x00, 0x00,
+        0x00, // i (105)
+        0x00, 0x00, 0x18, 0x18, 0x00, 0x38, 0x18, 0x18, 0x18, 0x18, 0x18, 0x3c, 0x00, 0x00, 0x00,
+        0x00, // j (106)
+        0x00, 0x00, 0x06, 0x06, 0x00, 0x0e, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x66, 0x66, 0x3c,
+        0x00, // k (107)
+        0x00, 0x00, 0xe0, 0x60, 0x60, 0x66, 0x6c, 0x78, 0x78, 0x6c, 0x66, 0xe6, 0x00, 0x00, 0x00,
+        0x00, // l (108)
+        0x00, 0x00, 0x38, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x3c, 0x00, 0x00, 0x00,
+        0x00, // m (109)
+        0x00, 0x00, 0x00, 0x00, 0x00, 0xec, 0xfe, 0xd6, 0xd6, 0xd6, 0xd6, 0xc6, 0x00, 0x00, 0x00,
+        0x00, // n (110)
+        0x00, 0x00, 0x00, 0x00, 0x00, 0xdc, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x00, 0x00, 0x00,
+        0x00, // o (111)
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x7c, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0x7c, 0x00, 0x00, 0x00,
+        0x00, // p (112)
+        0x00, 0x00, 0x00, 0x00, 0x00, 0xdc, 0x66, 0x66, 0x66, 0x66, 0x66, 0x7c, 0x60, 0x60, 0xf0,
+        0x00, // q (113)
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x76, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0x7c, 0x0c, 0x0c, 0x1e,
+        0x00, // r (114)
+        0x00, 0x00, 0x00, 0x00, 0x00, 0xdc, 0x76, 0x66, 0x60, 0x60, 0x60, 0xf0, 0x00, 0x00, 0x00,
+        0x00, // s (115)
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x7c, 0xc6, 0x60, 0x38, 0x0c, 0xc6, 0x7c, 0x00, 0x00, 0x00,
+        0x00, // t (116)
+        0x00, 0x00, 0x10, 0x30, 0x30, 0xfc, 0x30, 0x30, 0x30, 0x30, 0x36, 0x1c, 0x00, 0x00, 0x00,
+        0x00, // u (117)
+        0x00, 0x00, 0x00, 0x00, 0x00, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0x76, 0x00, 0x00, 0x00,
+        0x00, // v (118)
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x66, 0x66, 0x66, 0x66, 0x66, 0x3c, 0x18, 0x00, 0x00, 0x00,
+        0x00, // w (119)
+        0x00, 0x00, 0x00, 0x00, 0x00, 0xc6, 0xc6, 0xd6, 0xd6, 0xd6, 0xfe, 0x6c, 0x00, 0x00, 0x00,
+        0x00, // x (120)
+        0x00, 0x00, 0x00, 0x00, 0x00, 0xc6, 0x6c, 0x38, 0x38, 0x38, 0x6c, 0xc6, 0x00, 0x00, 0x00,
+        0x00, // y (121)
+        0x00, 0x00, 0x00, 0x00, 0x00, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0x7e, 0x06, 0x0c, 0xf8,
+        0x00, // z (122)
+        0x00, 0x00, 0x00, 0x00, 0x00, 0xfe, 0xcc, 0x18, 0x30, 0x60, 0xc6, 0xfe, 0x00, 0x00, 0x00,
+        0x00, // { (123)
+        0x00, 0x00, 0x0e, 0x18, 0x18, 0x18, 0x70, 0x18, 0x18, 0x18, 0x18, 0x0e, 0x00, 0x00, 0x00,
+        0x00, // | (124)
+        0x00, 0x00, 0x18, 0x18, 0x18, 0x18, 0x00, 0x18, 0x18, 0x18, 0x18, 0x18, 0x00, 0x00, 0x00,
+        0x00, // } (125)
+        0x00, 0x00, 0x70, 0x18, 0x18, 0x18, 0x0e, 0x18, 0x18, 0x18, 0x18, 0x70, 0x00, 0x00, 0x00,
+        0x00, // ~ (126)
+        0x00, 0x00, 0x76, 0xdc, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00,
     ];
 
     FONT
-}
-
-/// Create rect pipeline
-fn create_rect_pipeline(
-    device: &web_sys::GpuDevice,
-    shader: &web_sys::GpuShaderModule,
-    uniform_layout: &web_sys::GpuBindGroupLayout,
-    format: web_sys::GpuTextureFormat,
-) -> web_sys::GpuRenderPipeline {
-    let attrs = js_sys::Array::new();
-    attrs.push(&create_vertex_attr(web_sys::GpuVertexFormat::Float32x2, 0, 0));
-    attrs.push(&create_vertex_attr(web_sys::GpuVertexFormat::Float32x2, 8, 1));
-    attrs.push(&create_vertex_attr(web_sys::GpuVertexFormat::Float32x4, 16, 2));
-
-    let buffer_layout = web_sys::GpuVertexBufferLayout::new(32.0, &attrs);
-    buffer_layout.set_step_mode(web_sys::GpuVertexStepMode::Instance);
-
-    let buffers = js_sys::Array::new();
-    buffers.push(&buffer_layout);
-
-    let vertex = web_sys::GpuVertexState::new(shader);
-    vertex.set_entry_point("vs_main");
-    vertex.set_buffers(&buffers);
-
-    let blend_component = web_sys::GpuBlendComponent::new();
-    blend_component.set_src_factor(web_sys::GpuBlendFactor::SrcAlpha);
-    blend_component.set_dst_factor(web_sys::GpuBlendFactor::OneMinusSrcAlpha);
-
-    let blend = web_sys::GpuBlendState::new(&blend_component, &blend_component);
-
-    let target = web_sys::GpuColorTargetState::new(format);
-    target.set_blend(&blend);
-
-    let targets = js_sys::Array::new();
-    targets.push(&target);
-
-    let fragment = web_sys::GpuFragmentState::new(shader, &targets);
-    fragment.set_entry_point("fs_main");
-
-    let layouts = js_sys::Array::new();
-    layouts.push(uniform_layout);
-
-    let layout_desc = web_sys::GpuPipelineLayoutDescriptor::new(&layouts);
-    let layout = device.create_pipeline_layout(&layout_desc);
-
-    let primitive = web_sys::GpuPrimitiveState::new();
-    primitive.set_topology(web_sys::GpuPrimitiveTopology::TriangleList);
-
-    let desc = web_sys::GpuRenderPipelineDescriptor::new(&layout, &vertex);
-    desc.set_fragment(&fragment);
-    desc.set_primitive(&primitive);
-
-    device.create_render_pipeline(&desc).expect("Failed to create rect pipeline")
-}
-
-/// Create glyph pipeline
-fn create_glyph_pipeline(
-    device: &web_sys::GpuDevice,
-    shader: &web_sys::GpuShaderModule,
-    uniform_layout: &web_sys::GpuBindGroupLayout,
-    font_layout: &web_sys::GpuBindGroupLayout,
-    format: web_sys::GpuTextureFormat,
-) -> web_sys::GpuRenderPipeline {
-    let attrs = js_sys::Array::new();
-    attrs.push(&create_vertex_attr(web_sys::GpuVertexFormat::Float32x2, 0, 0));
-    attrs.push(&create_vertex_attr(web_sys::GpuVertexFormat::Uint32, 8, 1));
-    attrs.push(&create_vertex_attr(web_sys::GpuVertexFormat::Float32, 12, 2));
-    attrs.push(&create_vertex_attr(web_sys::GpuVertexFormat::Float32x4, 16, 3));
-
-    let buffer_layout = web_sys::GpuVertexBufferLayout::new(32.0, &attrs);
-    buffer_layout.set_step_mode(web_sys::GpuVertexStepMode::Instance);
-
-    let buffers = js_sys::Array::new();
-    buffers.push(&buffer_layout);
-
-    let vertex = web_sys::GpuVertexState::new(shader);
-    vertex.set_entry_point("vs_main");
-    vertex.set_buffers(&buffers);
-
-    let blend_component = web_sys::GpuBlendComponent::new();
-    blend_component.set_src_factor(web_sys::GpuBlendFactor::SrcAlpha);
-    blend_component.set_dst_factor(web_sys::GpuBlendFactor::OneMinusSrcAlpha);
-
-    let blend = web_sys::GpuBlendState::new(&blend_component, &blend_component);
-
-    let target = web_sys::GpuColorTargetState::new(format);
-    target.set_blend(&blend);
-
-    let targets = js_sys::Array::new();
-    targets.push(&target);
-
-    let fragment = web_sys::GpuFragmentState::new(shader, &targets);
-    fragment.set_entry_point("fs_main");
-
-    let layouts = js_sys::Array::new();
-    layouts.push(uniform_layout);
-    layouts.push(font_layout);
-
-    let layout_desc = web_sys::GpuPipelineLayoutDescriptor::new(&layouts);
-    let layout = device.create_pipeline_layout(&layout_desc);
-
-    let primitive = web_sys::GpuPrimitiveState::new();
-    primitive.set_topology(web_sys::GpuPrimitiveTopology::TriangleList);
-
-    let desc = web_sys::GpuRenderPipelineDescriptor::new(&layout, &vertex);
-    desc.set_fragment(&fragment);
-    desc.set_primitive(&primitive);
-
-    device.create_render_pipeline(&desc).expect("Failed to create glyph pipeline")
-}
-
-/// Create a vertex attribute
-fn create_vertex_attr(
-    format: web_sys::GpuVertexFormat,
-    offset: u32,
-    shader_location: u32,
-) -> web_sys::GpuVertexAttribute {
-    web_sys::GpuVertexAttribute::new(format, offset as f64, shader_location)
 }
