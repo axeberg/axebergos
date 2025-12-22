@@ -7,7 +7,6 @@
 
 use crate::console_log;
 use crate::kernel::syscall::{self, OpenFlags};
-use crate::kernel::{self, Priority};
 use crate::terminal;
 use crate::vfs::Persistence;
 
@@ -18,33 +17,30 @@ pub fn boot() {
     syscall::set_current_process(init_pid);
     console_log!("[boot] Created init process: {:?}", init_pid);
 
-    // Initialize filesystem (async)
-    kernel::spawn_with_priority(
-        async {
-            wasm_bindgen_futures::spawn_local(async {
-                // Try to restore persisted filesystem
-                match restore_or_init_filesystem().await {
-                    Ok(restored) => {
-                        if restored {
-                            console_log!("[boot] Restored filesystem from OPFS");
-                        } else {
-                            console_log!("[boot] Initialized fresh filesystem");
-                        }
-                    }
-                    Err(e) => {
-                        console_log!("[boot] Filesystem error: {}, using fresh", e);
-                        init_filesystem();
-                    }
-                }
+    // Initialize terminal immediately
+    console_log!("[boot] Initializing terminal...");
+    if let Err(e) = terminal::init() {
+        web_sys::console::error_1(&format!("[terminal] Init failed: {:?}", e).into());
+        return;
+    }
+    console_log!("[boot] Terminal initialized");
 
-                // Initialize xterm.js terminal
-                if let Err(e) = terminal::init() {
-                    web_sys::console::error_1(&format!("[terminal] Init failed: {:?}", e).into());
+    // Initialize filesystem asynchronously
+    wasm_bindgen_futures::spawn_local(async {
+        match restore_or_init_filesystem().await {
+            Ok(restored) => {
+                if restored {
+                    console_log!("[boot] Restored filesystem from OPFS");
+                } else {
+                    console_log!("[boot] Initialized fresh filesystem");
                 }
-            });
-        },
-        Priority::Critical,
-    );
+            }
+            Err(e) => {
+                console_log!("[boot] Filesystem error: {}, using fresh", e);
+                init_filesystem();
+            }
+        }
+    });
 }
 
 /// Try to restore filesystem from OPFS, or initialize fresh
