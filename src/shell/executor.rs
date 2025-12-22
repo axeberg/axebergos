@@ -568,12 +568,36 @@ fn prog_ls(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
         paths
     };
 
+    // ANSI color codes
+    const BLUE: &str = "\x1b[34m";   // directories
+    const CYAN: &str = "\x1b[36m";   // symlinks (future)
+    const RESET: &str = "\x1b[0m";
+
     let mut code = 0;
     for path in paths {
         match syscall::readdir(path) {
             Ok(entries) => {
                 for entry in entries {
-                    stdout.push_str(&entry);
+                    // Check if it's a directory
+                    let full_path = if path == "." {
+                        entry.clone()
+                    } else if path == "/" {
+                        format!("/{}", entry)
+                    } else {
+                        format!("{}/{}", path, entry)
+                    };
+
+                    let is_dir = syscall::metadata(&full_path)
+                        .map(|m| m.is_dir)
+                        .unwrap_or(false);
+
+                    if is_dir {
+                        stdout.push_str(BLUE);
+                        stdout.push_str(&entry);
+                        stdout.push_str(RESET);
+                    } else {
+                        stdout.push_str(&entry);
+                    }
                     stdout.push('\n');
                 }
             }
@@ -844,13 +868,19 @@ fn prog_grep(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
         return 1;
     }
 
+    // ANSI color codes
+    const RED: &str = "\x1b[31m";
+    const RESET: &str = "\x1b[0m";
+
     let pattern = args[0];
     let input = stdin.unwrap_or_default();
     let mut found = false;
 
     for line in input.lines() {
         if line.contains(pattern) {
-            stdout.push_str(line);
+            // Highlight all matches in red
+            let highlighted = line.replace(pattern, &format!("{}{}{}", RED, pattern, RESET));
+            stdout.push_str(&highlighted);
             stdout.push('\n');
             found = true;
         }
