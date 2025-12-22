@@ -373,7 +373,6 @@ pub struct FdTable {
     entries: Vec<Option<FdEntry>>,
 }
 
-#[allow(dead_code)] // Fields will be used when VFS integration is complete
 struct FdEntry {
     path: String,
     flags: OpenFlags,
@@ -470,6 +469,58 @@ impl FdTable {
             .get(fd)
             .and_then(|e| e.as_ref())
             .map(|e| e.path.clone())
+    }
+
+    /// Get current position for fd
+    pub fn get_position(&self, fd: i32) -> Option<u64> {
+        if fd < 0 {
+            return None;
+        }
+        let fd = fd as usize;
+        self.entries
+            .get(fd)
+            .and_then(|e| e.as_ref())
+            .map(|e| e.position)
+    }
+
+    /// Set position for fd, returns new position
+    pub fn set_position(&mut self, fd: i32, pos: u64) -> Option<u64> {
+        if fd < 0 {
+            return None;
+        }
+        let fd = fd as usize;
+        if let Some(Some(entry)) = self.entries.get_mut(fd) {
+            entry.position = pos;
+            Some(pos)
+        } else {
+            None
+        }
+    }
+
+    /// Advance position by n bytes, returns new position
+    pub fn advance_position(&mut self, fd: i32, n: u64) -> Option<u64> {
+        if fd < 0 {
+            return None;
+        }
+        let fd = fd as usize;
+        if let Some(Some(entry)) = self.entries.get_mut(fd) {
+            entry.position += n;
+            Some(entry.position)
+        } else {
+            None
+        }
+    }
+
+    /// Get flags for fd
+    pub fn get_flags(&self, fd: i32) -> Option<OpenFlags> {
+        if fd < 0 {
+            return None;
+        }
+        let fd = fd as usize;
+        self.entries
+            .get(fd)
+            .and_then(|e| e.as_ref())
+            .map(|e| e.flags)
     }
 }
 

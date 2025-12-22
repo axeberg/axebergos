@@ -5,6 +5,7 @@
 
 use super::abi::{fd, OpenFlags, SyscallError, StatBuf};
 use super::loader::FdTable;
+use crate::kernel::syscall as ksyscall;
 use std::collections::HashMap;
 
 /// Runtime environment for executing WASM commands
@@ -167,9 +168,18 @@ impl Runtime {
             }
             fd if fd == fd::STDIN => SyscallError::InvalidArgument.code(),
             fd => {
-                if self.fd_table.is_valid(fd) {
-                    // TODO: Write to file via VFS
-                    data.len() as i32
+                if !self.fd_table.is_valid(fd) {
+                    return SyscallError::BadFd.code();
+                }
+
+                // Get file path and write via VFS
+                if let Some(path) = self.fd_table.get_path(fd) {
+                    // For simplicity, we append to file (proper seek support would need more state)
+                    let content = String::from_utf8_lossy(data);
+                    match ksyscall::write_file(&path, &content) {
+                        Ok(()) => data.len() as i32,
+                        Err(_) => SyscallError::Generic.code(),
+                    }
                 } else {
                     SyscallError::BadFd.code()
                 }
@@ -183,9 +193,32 @@ impl Runtime {
             fd if fd == fd::STDIN => self.read_stdin(buf) as i32,
             fd if fd == fd::STDOUT || fd == fd::STDERR => SyscallError::InvalidArgument.code(),
             fd => {
-                if self.fd_table.is_valid(fd) {
-                    // TODO: Read from file via VFS
-                    0 // EOF for now
+                if !self.fd_table.is_valid(fd) {
+                    return SyscallError::BadFd.code();
+                }
+
+                // Get file path and read via VFS
+                if let Some(path) = self.fd_table.get_path(fd) {
+                    match ksyscall::read_file(&path) {
+                        Ok(content) => {
+                            let bytes = content.as_bytes();
+                            let pos = self.fd_table.get_position(fd).unwrap_or(0) as usize;
+
+                            if pos >= bytes.len() {
+                                return 0; // EOF
+                            }
+
+                            let remaining = &bytes[pos..];
+                            let to_read = std::cmp::min(remaining.len(), buf.len());
+                            buf[..to_read].copy_from_slice(&remaining[..to_read]);
+
+                            // Advance position
+                            self.fd_table.advance_position(fd, to_read as u64);
+
+                            to_read as i32
+                        }
+                        Err(_) => SyscallError::NotFound.code(),
+                    }
                 } else {
                     SyscallError::BadFd.code()
                 }
@@ -225,9 +258,17 @@ impl Runtime {
     }
 
     /// Stat syscall
-    pub fn sys_stat(&self, _path: &str) -> Result<StatBuf, SyscallError> {
-        // TODO: Implement via VFS
-        Err(SyscallError::NotFound)
+    pub fn sys_stat(&self, path: &str) -> Result<StatBuf, SyscallError> {
+        match ksyscall::metadata(path) {
+            Ok(meta) => Ok(StatBuf {
+                size: meta.size as u32,
+                is_dir: if meta.is_dir { 1 } else { 0 },
+                modified_time: 0, // VFS doesn't track times yet
+                created_time: 0,
+                reserved: 0,
+            }),
+            Err(_) => Err(SyscallError::NotFound),
+        }
     }
 }
 
