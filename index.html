@@ -4,8 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>axeberg</title>
-    <!-- xterm.js CSS -->
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
+    <!-- ghostty-web includes its own styles -->
     <style>
         :root {
             --bg: #1a1b26;
@@ -76,30 +75,29 @@
     <script type="module">
         const loading = document.getElementById('loading');
 
-        // Dynamically load xterm.js scripts and wait for them
-        async function loadScript(src) {
-            return new Promise((resolve, reject) => {
-                const script = document.createElement('script');
-                script.src = src;
-                script.onload = resolve;
-                script.onerror = () => reject(new Error(`Failed to load ${src}`));
-                document.head.appendChild(script);
-            });
-        }
-
         async function boot() {
             try {
-                // Load xterm.js first
-                await loadScript('https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js');
-                console.log('[axeberg] xterm.js loaded, Terminal =', typeof window.Terminal);
+                // Load ghostty-web
+                console.log('[axeberg] Loading ghostty-web...');
+                const ghostty = await import('https://cdn.jsdelivr.net/npm/ghostty-web@0.1.5/+esm');
 
-                // Load fit addon
-                await loadScript('https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js');
-                // xterm v5 exports FitAddon as { FitAddon: constructor } - expose the constructor directly
-                window.FitAddon = window.FitAddon.FitAddon;
-                console.log('[axeberg] addon-fit loaded, FitAddon =', typeof window.FitAddon);
+                // Initialize ghostty WASM
+                await ghostty.init();
+                console.log('[axeberg] ghostty-web initialized');
 
-                // Now load WASM
+                // Expose Terminal globally for our Rust wasm_bindgen bindings
+                window.Terminal = ghostty.Terminal;
+
+                // ghostty-web has built-in fit, create a stub FitAddon for compatibility
+                window.FitAddon = class FitAddon {
+                    fit() {
+                        // ghostty-web handles sizing internally
+                    }
+                };
+
+                console.log('[axeberg] Terminal =', typeof window.Terminal);
+
+                // Now load our WASM
                 const { default: init } = await import('./pkg/axeberg.js');
                 loading.classList.add('hidden');
                 await init();
