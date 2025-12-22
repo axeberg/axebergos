@@ -66,9 +66,6 @@
             height: 100%;
         }
     </style>
-    <!-- xterm.js loaded as regular scripts (exposes globals) -->
-    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
 </head>
 <body>
     <div id="loading">
@@ -79,16 +76,40 @@
     <script type="module">
         const loading = document.getElementById('loading');
 
-        // Load and run the WASM module
+        // Dynamically load xterm.js scripts and wait for them
+        async function loadScript(src) {
+            return new Promise((resolve, reject) => {
+                const script = document.createElement('script');
+                script.src = src;
+                script.onload = resolve;
+                script.onerror = () => reject(new Error(`Failed to load ${src}`));
+                document.head.appendChild(script);
+            });
+        }
+
         async function boot() {
             try {
+                // Load xterm.js first
+                await loadScript('https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js');
+                console.log('[axeberg] xterm.js loaded, Terminal =', typeof window.Terminal);
+
+                // Load fit addon
+                await loadScript('https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js');
+                console.log('[axeberg] addon-fit loaded, FitAddon =', typeof window.FitAddon);
+
+                // Debug: list xterm-related globals
+                console.log('[axeberg] Available globals:',
+                    Object.keys(window).filter(k => k.toLowerCase().includes('term') || k.toLowerCase().includes('fit'))
+                );
+
+                // Now load WASM
                 const { default: init } = await import('./pkg/axeberg.js');
                 loading.classList.add('hidden');
                 await init();
             } catch (e) {
                 loading.classList.add('hidden');
                 console.error('[axeberg] Failed to load:', e.message);
-                console.error('[axeberg] Run: wasm-pack build --target web');
+                console.error('[axeberg] Stack:', e.stack);
             }
         }
 
