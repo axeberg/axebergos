@@ -41,6 +41,8 @@ pub enum SyscallError {
     BrokenPipe,
     /// Resource busy
     Busy,
+    /// Invalid data (e.g., invalid UTF-8)
+    InvalidData,
     /// No such process
     NoProcess,
     /// Generic I/O error
@@ -63,6 +65,7 @@ impl std::fmt::Display for SyscallError {
             SyscallError::WouldBlock => write!(f, "would block"),
             SyscallError::BrokenPipe => write!(f, "broken pipe"),
             SyscallError::Busy => write!(f, "resource busy"),
+            SyscallError::InvalidData => write!(f, "invalid data"),
             SyscallError::NoProcess => write!(f, "no such process"),
             SyscallError::Io(msg) => write!(f, "I/O error: {}", msg),
             SyscallError::Memory(e) => write!(f, "memory error: {}", e),
@@ -1083,6 +1086,45 @@ pub fn rename(from: &str, to: &str) -> SyscallResult<()> {
 /// Copy a file
 pub fn copy_file(from: &str, to: &str) -> SyscallResult<u64> {
     KERNEL.with(|k| k.borrow_mut().sys_copy_file(from, to))
+}
+
+/// Read entire file contents as string (convenience function)
+pub fn read_file(path: &str) -> SyscallResult<String> {
+    let fd = open(path, OpenFlags::READ)?;
+    let mut contents = Vec::new();
+    let mut buf = [0u8; 4096];
+    loop {
+        let n = read(fd, &mut buf)?;
+        if n == 0 {
+            break;
+        }
+        contents.extend_from_slice(&buf[..n]);
+    }
+    close(fd)?;
+    String::from_utf8(contents).map_err(|_| SyscallError::InvalidData)
+}
+
+/// Write string to file (convenience function)
+pub fn write_file(path: &str, content: &str) -> SyscallResult<()> {
+    let fd = open(path, OpenFlags::WRITE)?;
+    write(fd, content.as_bytes())?;
+    close(fd)?;
+    Ok(())
+}
+
+/// Get file stat (wrapper around metadata)
+pub fn stat(path: &str) -> SyscallResult<FileStat> {
+    let meta = metadata(path)?;
+    Ok(FileStat {
+        is_dir: meta.is_dir,
+        size: meta.size,
+    })
+}
+
+/// Simple stat result
+pub struct FileStat {
+    pub is_dir: bool,
+    pub size: u64,
 }
 
 /// Duplicate a file descriptor

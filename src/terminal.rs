@@ -2,6 +2,17 @@
 //!
 //! Direct wasm_bindgen bindings to xterm.js loaded via script tag.
 //! This avoids the bundler requirement of xterm-js-rs.
+//!
+//! Implements readline-like line editing:
+//! - Ctrl+A/E: start/end of line
+//! - Ctrl+K: kill to end of line
+//! - Ctrl+U: kill to start of line
+//! - Ctrl+W: delete word backward
+//! - Ctrl+Y: yank (paste from kill ring)
+//! - Alt+B/F: word backward/forward
+//! - Alt+D: delete word forward
+//! - Ctrl+R: reverse history search
+//! - Tab: file/command completion
 
 #![cfg(target_arch = "wasm32")]
 
@@ -10,6 +21,7 @@ use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
+use crate::kernel::syscall;
 use crate::shell;
 
 // Direct bindings to xterm.js globals (loaded via script tag)
@@ -64,9 +76,16 @@ thread_local! {
     static HISTORY_POS: RefCell<usize> = RefCell::new(0);
     // Buffer to restore when navigating past end of history
     static SAVED_BUFFER: RefCell<String> = RefCell::new(String::new());
+    // Kill ring for Ctrl+K, Ctrl+W, Ctrl+Y
+    static KILL_RING: RefCell<String> = RefCell::new(String::new());
+    // Reverse search state
+    static SEARCH_MODE: RefCell<bool> = RefCell::new(false);
+    static SEARCH_QUERY: RefCell<String> = RefCell::new(String::new());
+    static SEARCH_RESULT_IDX: RefCell<Option<usize>> = RefCell::new(None);
 }
 
 const PROMPT: &str = "$ ";
+const SEARCH_PROMPT: &str = "(reverse-i-search)`";
 
 /// Initialize the xterm.js terminal
 pub fn init() -> Result<(), JsValue> {
@@ -83,12 +102,30 @@ pub fn init() -> Result<(), JsValue> {
     js_sys::Reflect::set(&options, &"drawBoldTextInBrightColors".into(), &true.into())?;
     js_sys::Reflect::set(&options, &"rightClickSelectsWord".into(), &true.into())?;
 
-    // Theme
+    // Theme - Tokyo Night
     let theme = js_sys::Object::new();
     js_sys::Reflect::set(&theme, &"foreground".into(), &"#c0caf5".into())?;
     js_sys::Reflect::set(&theme, &"background".into(), &"#1a1b26".into())?;
     js_sys::Reflect::set(&theme, &"cursor".into(), &"#7aa2f7".into())?;
     js_sys::Reflect::set(&theme, &"cursorAccent".into(), &"#1a1b26".into())?;
+    js_sys::Reflect::set(&theme, &"selectionBackground".into(), &"#33467c".into())?;
+    // ANSI colors
+    js_sys::Reflect::set(&theme, &"black".into(), &"#15161e".into())?;
+    js_sys::Reflect::set(&theme, &"red".into(), &"#f7768e".into())?;
+    js_sys::Reflect::set(&theme, &"green".into(), &"#9ece6a".into())?;
+    js_sys::Reflect::set(&theme, &"yellow".into(), &"#e0af68".into())?;
+    js_sys::Reflect::set(&theme, &"blue".into(), &"#7aa2f7".into())?;
+    js_sys::Reflect::set(&theme, &"magenta".into(), &"#bb9af7".into())?;
+    js_sys::Reflect::set(&theme, &"cyan".into(), &"#7dcfff".into())?;
+    js_sys::Reflect::set(&theme, &"white".into(), &"#a9b1d6".into())?;
+    js_sys::Reflect::set(&theme, &"brightBlack".into(), &"#414868".into())?;
+    js_sys::Reflect::set(&theme, &"brightRed".into(), &"#f7768e".into())?;
+    js_sys::Reflect::set(&theme, &"brightGreen".into(), &"#9ece6a".into())?;
+    js_sys::Reflect::set(&theme, &"brightYellow".into(), &"#e0af68".into())?;
+    js_sys::Reflect::set(&theme, &"brightBlue".into(), &"#7aa2f7".into())?;
+    js_sys::Reflect::set(&theme, &"brightMagenta".into(), &"#bb9af7".into())?;
+    js_sys::Reflect::set(&theme, &"brightCyan".into(), &"#7dcfff".into())?;
+    js_sys::Reflect::set(&theme, &"brightWhite".into(), &"#c0caf5".into())?;
     js_sys::Reflect::set(&options, &"theme".into(), &theme)?;
 
     // Create terminal
@@ -123,6 +160,9 @@ pub fn init() -> Result<(), JsValue> {
     let fit_addon = XTermFitAddon::new_fit();
     terminal.load_addon(&fit_addon.unchecked_ref());
     fit_addon.fit();
+
+    // Load history from filesystem
+    load_history();
 
     // Welcome message
     terminal.writeln("axeberg v0.1.0");
@@ -159,7 +199,6 @@ fn write_prompt(term: &XTerm) {
 
 /// Replace the current input line with new text
 fn replace_line(term: &XTerm, buffer: &mut String, cursor: &mut usize, new_text: &str) {
-    // Clear current line and write new content
     term.write("\x1b[2K\r"); // Clear line, move to start
     term.write(PROMPT);
     term.write(new_text);
@@ -167,11 +206,306 @@ fn replace_line(term: &XTerm, buffer: &mut String, cursor: &mut usize, new_text:
     *cursor = buffer.len();
 }
 
+/// Redraw the current line (used after buffer modifications)
+fn redraw_line(term: &XTerm, buffer: &str, cursor: usize) {
+    term.write("\x1b[2K\r");
+    term.write(PROMPT);
+    term.write(buffer);
+    let move_back = buffer.len() - cursor;
+    if move_back > 0 {
+        term.write(&format!("\x1b[{}D", move_back));
+    }
+}
+
+/// Find word boundary going backward from position
+fn word_start(buffer: &str, pos: usize) -> usize {
+    if pos == 0 {
+        return 0;
+    }
+    let bytes = buffer.as_bytes();
+    let mut i = pos - 1;
+    // Skip whitespace
+    while i > 0 && bytes[i].is_ascii_whitespace() {
+        i -= 1;
+    }
+    // Skip word chars
+    while i > 0 && !bytes[i - 1].is_ascii_whitespace() {
+        i -= 1;
+    }
+    i
+}
+
+/// Find word boundary going forward from position
+fn word_end(buffer: &str, pos: usize) -> usize {
+    let len = buffer.len();
+    if pos >= len {
+        return len;
+    }
+    let bytes = buffer.as_bytes();
+    let mut i = pos;
+    // Skip current word chars
+    while i < len && !bytes[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    // Skip whitespace
+    while i < len && bytes[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    i
+}
+
+/// Perform tab completion
+fn complete(buffer: &str, cursor: usize) -> Option<(String, usize)> {
+    // Find the word being completed
+    let before_cursor = &buffer[..cursor];
+    let word_start = before_cursor.rfind(|c: char| c.is_whitespace()).map(|i| i + 1).unwrap_or(0);
+    let prefix = &before_cursor[word_start..];
+
+    if prefix.is_empty() {
+        return None;
+    }
+
+    // Check if this looks like a path
+    if prefix.contains('/') || word_start > 0 {
+        // File completion
+        complete_path(prefix, buffer, cursor, word_start)
+    } else {
+        // Command completion (first word)
+        complete_command(prefix, buffer, cursor, word_start)
+    }
+}
+
+fn complete_path(prefix: &str, buffer: &str, cursor: usize, word_start: usize) -> Option<(String, usize)> {
+    let (dir, file_prefix) = if let Some(last_slash) = prefix.rfind('/') {
+        let dir = if last_slash == 0 { "/" } else { &prefix[..last_slash] };
+        (dir.to_string(), &prefix[last_slash + 1..])
+    } else {
+        (".".to_string(), prefix)
+    };
+
+    // List directory contents
+    let entries = syscall::readdir(&dir).ok()?;
+    let matches: Vec<_> = entries
+        .iter()
+        .filter(|e| e.starts_with(file_prefix))
+        .collect();
+
+    if matches.is_empty() {
+        return None;
+    }
+
+    if matches.len() == 1 {
+        // Single match - complete it
+        let completion = matches[0];
+        let full_path = if dir == "." {
+            completion.to_string()
+        } else if dir == "/" {
+            format!("/{}", completion)
+        } else {
+            format!("{}/{}", dir, completion)
+        };
+
+        // Check if it's a directory and add /
+        let stat_path = if full_path.starts_with('/') {
+            full_path.clone()
+        } else {
+            format!("{}/{}", syscall::getcwd().unwrap_or_default().display(), full_path)
+        };
+        let is_dir = syscall::stat(&stat_path).map(|s| s.is_dir).unwrap_or(false);
+        let suffix = if is_dir { "/" } else { " " };
+
+        let new_buffer = format!(
+            "{}{}{}{}",
+            &buffer[..word_start],
+            full_path,
+            suffix,
+            &buffer[cursor..]
+        );
+        let new_cursor = word_start + full_path.len() + suffix.len();
+        Some((new_buffer, new_cursor))
+    } else {
+        // Multiple matches - find common prefix
+        let common = common_prefix(&matches);
+        if common.len() > file_prefix.len() {
+            let full_path = if dir == "." {
+                common.clone()
+            } else if dir == "/" {
+                format!("/{}", common)
+            } else {
+                format!("{}/{}", dir, common)
+            };
+            let new_buffer = format!(
+                "{}{}{}",
+                &buffer[..word_start],
+                full_path,
+                &buffer[cursor..]
+            );
+            let new_cursor = word_start + full_path.len();
+            Some((new_buffer, new_cursor))
+        } else {
+            None
+        }
+    }
+}
+
+fn complete_command(prefix: &str, buffer: &str, cursor: usize, word_start: usize) -> Option<(String, usize)> {
+    // Built-in commands
+    let builtins = [
+        "cd", "pwd", "exit", "echo", "export", "unset", "env", "true", "false", "help",
+        "ls", "cat", "mkdir", "touch", "rm", "cp", "mv", "grep", "head", "tail",
+        "sort", "uniq", "wc", "tee", "clear", "history",
+    ];
+
+    let matches: Vec<_> = builtins.iter().filter(|c| c.starts_with(prefix)).collect();
+
+    if matches.is_empty() {
+        return None;
+    }
+
+    if matches.len() == 1 {
+        let new_buffer = format!(
+            "{}{} {}",
+            &buffer[..word_start],
+            matches[0],
+            &buffer[cursor..]
+        );
+        let new_cursor = word_start + matches[0].len() + 1;
+        Some((new_buffer, new_cursor))
+    } else {
+        let common = common_prefix_str(&matches);
+        if common.len() > prefix.len() {
+            let new_buffer = format!(
+                "{}{}{}",
+                &buffer[..word_start],
+                common,
+                &buffer[cursor..]
+            );
+            let new_cursor = word_start + common.len();
+            Some((new_buffer, new_cursor))
+        } else {
+            None
+        }
+    }
+}
+
+fn common_prefix(strings: &[&String]) -> String {
+    if strings.is_empty() {
+        return String::new();
+    }
+    let first = strings[0].as_str();
+    let mut len = first.len();
+    for s in &strings[1..] {
+        len = first
+            .chars()
+            .zip(s.chars())
+            .take_while(|(a, b)| a == b)
+            .count()
+            .min(len);
+    }
+    first[..len].to_string()
+}
+
+fn common_prefix_str(strings: &[&&str]) -> String {
+    if strings.is_empty() {
+        return String::new();
+    }
+    let first = *strings[0];
+    let mut len = first.len();
+    for s in &strings[1..] {
+        len = first
+            .chars()
+            .zip(s.chars())
+            .take_while(|(a, b)| a == b)
+            .count()
+            .min(len);
+    }
+    first[..len].to_string()
+}
+
+/// Search history backward for query
+fn search_history(query: &str, start_idx: Option<usize>) -> Option<(usize, String)> {
+    HISTORY.with(|h| {
+        let history = h.borrow();
+        let start = start_idx.unwrap_or(history.len());
+        for i in (0..start).rev() {
+            if history[i].contains(query) {
+                return Some((i, history[i].clone()));
+            }
+        }
+        None
+    })
+}
+
+/// Display search prompt
+fn show_search_prompt(term: &XTerm, query: &str, result: Option<&str>) {
+    term.write("\x1b[2K\r");
+    term.write(SEARCH_PROMPT);
+    term.write(query);
+    term.write("': ");
+    if let Some(cmd) = result {
+        term.write(cmd);
+    }
+}
+
+/// Exit search mode and restore normal prompt
+fn exit_search_mode(term: &XTerm, buffer: &mut String, cursor: &mut usize, accept: bool) {
+    SEARCH_MODE.with(|m| *m.borrow_mut() = false);
+
+    if accept {
+        SEARCH_RESULT_IDX.with(|idx| {
+            if let Some(i) = *idx.borrow() {
+                HISTORY.with(|h| {
+                    let history = h.borrow();
+                    if i < history.len() {
+                        *buffer = history[i].clone();
+                        *cursor = buffer.len();
+                    }
+                });
+            }
+        });
+    }
+
+    SEARCH_QUERY.with(|q| q.borrow_mut().clear());
+    SEARCH_RESULT_IDX.with(|idx| *idx.borrow_mut() = None);
+
+    redraw_line(term, buffer, *cursor);
+}
+
+/// Load history from filesystem
+fn load_history() {
+    if let Ok(content) = syscall::read_file("/home/user/.shell_history") {
+        HISTORY.with(|h| {
+            let mut history = h.borrow_mut();
+            for line in content.lines() {
+                if !line.is_empty() {
+                    history.push(line.to_string());
+                }
+            }
+            HISTORY_POS.with(|p| {
+                *p.borrow_mut() = history.len();
+            });
+        });
+    }
+}
+
+/// Save history to filesystem
+fn save_history() {
+    HISTORY.with(|h| {
+        let history = h.borrow();
+        // Keep last 1000 entries
+        let start = history.len().saturating_sub(1000);
+        let content: String = history[start..]
+            .iter()
+            .map(|s| format!("{}\n", s))
+            .collect();
+        let _ = syscall::write_file("/home/user/.shell_history", &content);
+    });
+}
+
 fn setup_keyboard_handler(term: Rc<XTerm>) {
     let term_for_closure = term.clone();
 
     let callback = Closure::wrap(Box::new(move |event: JsValue| {
-        // event is { key: string, domEvent: KeyboardEvent }
         let dom_event: web_sys::KeyboardEvent = js_sys::Reflect::get(&event, &"domEvent".into())
             .unwrap()
             .unchecked_into();
@@ -182,12 +516,85 @@ fn setup_keyboard_handler(term: Rc<XTerm>) {
 
         let key_code = dom_event.key_code();
         let ctrl = dom_event.ctrl_key();
+        let alt = dom_event.alt_key();
+
+        // Check if in search mode
+        let in_search = SEARCH_MODE.with(|m| *m.borrow());
 
         INPUT_BUFFER.with(|buf| {
             CURSOR_POS.with(|pos| {
                 let mut buffer = buf.borrow_mut();
                 let mut cursor = pos.borrow_mut();
 
+                if in_search {
+                    // Search mode key handling
+                    match key_code {
+                        // Escape or Ctrl+G - cancel search
+                        27 | 71 if key_code == 27 || ctrl => {
+                            exit_search_mode(&term_for_closure, &mut buffer, &mut cursor, false);
+                        }
+                        // Enter - accept search result
+                        13 => {
+                            exit_search_mode(&term_for_closure, &mut buffer, &mut cursor, true);
+                        }
+                        // Ctrl+R - search again (previous match)
+                        82 if ctrl => {
+                            SEARCH_QUERY.with(|q| {
+                                let query = q.borrow().clone();
+                                if !query.is_empty() {
+                                    let start = SEARCH_RESULT_IDX.with(|idx| *idx.borrow());
+                                    if let Some((i, cmd)) = search_history(&query, start) {
+                                        SEARCH_RESULT_IDX.with(|idx| *idx.borrow_mut() = Some(i));
+                                        show_search_prompt(&term_for_closure, &query, Some(&cmd));
+                                    }
+                                }
+                            });
+                        }
+                        // Backspace
+                        8 => {
+                            SEARCH_QUERY.with(|q| {
+                                let mut query = q.borrow_mut();
+                                if !query.is_empty() {
+                                    query.pop();
+                                    let query_str = query.clone();
+                                    drop(query);
+                                    if query_str.is_empty() {
+                                        SEARCH_RESULT_IDX.with(|idx| *idx.borrow_mut() = None);
+                                        show_search_prompt(&term_for_closure, "", None);
+                                    } else if let Some((i, cmd)) = search_history(&query_str, None) {
+                                        SEARCH_RESULT_IDX.with(|idx| *idx.borrow_mut() = Some(i));
+                                        show_search_prompt(&term_for_closure, &query_str, Some(&cmd));
+                                    } else {
+                                        show_search_prompt(&term_for_closure, &query_str, None);
+                                    }
+                                }
+                            });
+                        }
+                        // Printable character - add to search
+                        _ => {
+                            if key.len() == 1 && !ctrl && !alt {
+                                let ch = key.chars().next().unwrap();
+                                if ch.is_ascii_graphic() || ch == ' ' {
+                                    SEARCH_QUERY.with(|q| {
+                                        let mut query = q.borrow_mut();
+                                        query.push(ch);
+                                        let query_str = query.clone();
+                                        drop(query);
+                                        if let Some((i, cmd)) = search_history(&query_str, None) {
+                                            SEARCH_RESULT_IDX.with(|idx| *idx.borrow_mut() = Some(i));
+                                            show_search_prompt(&term_for_closure, &query_str, Some(&cmd));
+                                        } else {
+                                            show_search_prompt(&term_for_closure, &query_str, None);
+                                        }
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    return;
+                }
+
+                // Normal mode key handling
                 match key_code {
                     // Enter
                     13 => {
@@ -201,13 +608,18 @@ fn setup_keyboard_handler(term: Rc<XTerm>) {
                                 if history.last() != Some(&input) {
                                     history.push(input.clone());
                                 }
-                                // Reset history position to end
                                 HISTORY_POS.with(|p| {
                                     *p.borrow_mut() = history.len();
                                 });
                             });
-                            // Clear saved buffer
                             SAVED_BUFFER.with(|s| s.borrow_mut().clear());
+
+                            // Save history periodically
+                            HISTORY.with(|h| {
+                                if h.borrow().len() % 10 == 0 {
+                                    save_history();
+                                }
+                            });
 
                             buffer.clear();
                             *cursor = 0;
@@ -220,32 +632,68 @@ fn setup_keyboard_handler(term: Rc<XTerm>) {
                         }
                         write_prompt(&term_for_closure);
                     }
+                    // Tab - completion
+                    9 => {
+                        if let Some((new_buffer, new_cursor)) = complete(&buffer, *cursor) {
+                            *buffer = new_buffer;
+                            *cursor = new_cursor;
+                            redraw_line(&term_for_closure, &buffer, *cursor);
+                        }
+                    }
                     // Backspace
                     8 => {
                         if *cursor > 0 {
                             buffer.remove(*cursor - 1);
                             *cursor -= 1;
-                            // Redraw line
-                            term_for_closure.write("\x1b[2K\r"); // Clear line
-                            term_for_closure.write(PROMPT);
-                            term_for_closure.write(&buffer);
-                            // Move cursor back if needed
-                            let move_back = buffer.len() - *cursor;
-                            if move_back > 0 {
-                                term_for_closure.write(&format!("\x1b[{}D", move_back));
-                            }
+                            redraw_line(&term_for_closure, &buffer, *cursor);
+                        }
+                    }
+                    // Delete
+                    46 => {
+                        if *cursor < buffer.len() {
+                            buffer.remove(*cursor);
+                            redraw_line(&term_for_closure, &buffer, *cursor);
+                        }
+                    }
+                    // Home
+                    36 => {
+                        if *cursor > 0 {
+                            term_for_closure.write(&format!("\x1b[{}D", *cursor));
+                            *cursor = 0;
+                        }
+                    }
+                    // End
+                    35 => {
+                        let move_right = buffer.len() - *cursor;
+                        if move_right > 0 {
+                            term_for_closure.write(&format!("\x1b[{}C", move_right));
+                            *cursor = buffer.len();
                         }
                     }
                     // Left arrow
                     37 => {
-                        if *cursor > 0 {
+                        if alt {
+                            // Alt+Left = word backward
+                            let new_pos = word_start(&buffer, *cursor);
+                            if new_pos < *cursor {
+                                term_for_closure.write(&format!("\x1b[{}D", *cursor - new_pos));
+                                *cursor = new_pos;
+                            }
+                        } else if *cursor > 0 {
                             term_for_closure.write("\x1b[D");
                             *cursor -= 1;
                         }
                     }
                     // Right arrow
                     39 => {
-                        if *cursor < buffer.len() {
+                        if alt {
+                            // Alt+Right = word forward
+                            let new_pos = word_end(&buffer, *cursor);
+                            if new_pos > *cursor {
+                                term_for_closure.write(&format!("\x1b[{}C", new_pos - *cursor));
+                                *cursor = new_pos;
+                            }
+                        } else if *cursor < buffer.len() {
                             term_for_closure.write("\x1b[C");
                             *cursor += 1;
                         }
@@ -256,20 +704,19 @@ fn setup_keyboard_handler(term: Rc<XTerm>) {
                             HISTORY_POS.with(|p| {
                                 SAVED_BUFFER.with(|s| {
                                     let history = h.borrow();
-                                    let mut pos = p.borrow_mut();
+                                    let mut hist_pos = p.borrow_mut();
 
                                     if history.is_empty() {
                                         return;
                                     }
 
-                                    // Save current buffer if at end of history
-                                    if *pos == history.len() {
+                                    if *hist_pos == history.len() {
                                         *s.borrow_mut() = buffer.clone();
                                     }
 
-                                    if *pos > 0 {
-                                        *pos -= 1;
-                                        let cmd = &history[*pos];
+                                    if *hist_pos > 0 {
+                                        *hist_pos -= 1;
+                                        let cmd = &history[*hist_pos];
                                         replace_line(&term_for_closure, &mut buffer, &mut cursor, cmd);
                                     }
                                 });
@@ -282,16 +729,15 @@ fn setup_keyboard_handler(term: Rc<XTerm>) {
                             HISTORY_POS.with(|p| {
                                 SAVED_BUFFER.with(|s| {
                                     let history = h.borrow();
-                                    let mut pos = p.borrow_mut();
+                                    let mut hist_pos = p.borrow_mut();
 
-                                    if *pos < history.len() {
-                                        *pos += 1;
-                                        if *pos == history.len() {
-                                            // Restore saved buffer
+                                    if *hist_pos < history.len() {
+                                        *hist_pos += 1;
+                                        if *hist_pos == history.len() {
                                             let saved = s.borrow().clone();
                                             replace_line(&term_for_closure, &mut buffer, &mut cursor, &saved);
                                         } else {
-                                            let cmd = &history[*pos];
+                                            let cmd = &history[*hist_pos];
                                             replace_line(&term_for_closure, &mut buffer, &mut cursor, cmd);
                                         }
                                     }
@@ -299,31 +745,38 @@ fn setup_keyboard_handler(term: Rc<XTerm>) {
                             });
                         });
                     }
-                    // Ctrl+C
+                    // Ctrl+A - start of line
+                    65 if ctrl => {
+                        if *cursor > 0 {
+                            term_for_closure.write(&format!("\x1b[{}D", *cursor));
+                            *cursor = 0;
+                        }
+                    }
+                    // Ctrl+B - back one char (same as left arrow)
+                    66 if ctrl => {
+                        if *cursor > 0 {
+                            term_for_closure.write("\x1b[D");
+                            *cursor -= 1;
+                        }
+                    }
+                    // Ctrl+C - cancel
                     67 if ctrl => {
                         term_for_closure.writeln("^C");
                         buffer.clear();
                         *cursor = 0;
                         write_prompt(&term_for_closure);
                     }
-                    // Ctrl+L - clear screen
-                    76 if ctrl => {
-                        term_for_closure.clear();
-                        write_prompt(&term_for_closure);
-                        term_for_closure.write(&buffer);
-                    }
-                    // Ctrl+U - clear line
-                    85 if ctrl => {
-                        buffer.clear();
-                        *cursor = 0;
-                        term_for_closure.write("\x1b[2K\r");
-                        write_prompt(&term_for_closure);
-                    }
-                    // Ctrl+A - start of line
-                    65 if ctrl => {
-                        if *cursor > 0 {
-                            term_for_closure.write(&format!("\x1b[{}D", *cursor));
-                            *cursor = 0;
+                    // Ctrl+D - EOF (exit if empty)
+                    68 if ctrl => {
+                        if buffer.is_empty() {
+                            term_for_closure.writeln("exit");
+                            // Could trigger exit here, but we're in browser
+                        } else {
+                            // Delete char at cursor (like Delete key)
+                            if *cursor < buffer.len() {
+                                buffer.remove(*cursor);
+                                redraw_line(&term_for_closure, &buffer, *cursor);
+                            }
                         }
                     }
                     // Ctrl+E - end of line
@@ -334,14 +787,171 @@ fn setup_keyboard_handler(term: Rc<XTerm>) {
                             *cursor = buffer.len();
                         }
                     }
+                    // Ctrl+F - forward one char (same as right arrow)
+                    70 if ctrl => {
+                        if *cursor < buffer.len() {
+                            term_for_closure.write("\x1b[C");
+                            *cursor += 1;
+                        }
+                    }
+                    // Ctrl+K - kill to end of line
+                    75 if ctrl => {
+                        if *cursor < buffer.len() {
+                            let killed = buffer[*cursor..].to_string();
+                            KILL_RING.with(|k| *k.borrow_mut() = killed);
+                            buffer.truncate(*cursor);
+                            redraw_line(&term_for_closure, &buffer, *cursor);
+                        }
+                    }
+                    // Ctrl+L - clear screen
+                    76 if ctrl => {
+                        term_for_closure.clear();
+                        write_prompt(&term_for_closure);
+                        term_for_closure.write(&buffer);
+                        let move_back = buffer.len() - *cursor;
+                        if move_back > 0 {
+                            term_for_closure.write(&format!("\x1b[{}D", move_back));
+                        }
+                    }
+                    // Ctrl+N - next history (same as down arrow)
+                    78 if ctrl => {
+                        HISTORY.with(|h| {
+                            HISTORY_POS.with(|p| {
+                                SAVED_BUFFER.with(|s| {
+                                    let history = h.borrow();
+                                    let mut hist_pos = p.borrow_mut();
+
+                                    if *hist_pos < history.len() {
+                                        *hist_pos += 1;
+                                        if *hist_pos == history.len() {
+                                            let saved = s.borrow().clone();
+                                            replace_line(&term_for_closure, &mut buffer, &mut cursor, &saved);
+                                        } else {
+                                            let cmd = &history[*hist_pos];
+                                            replace_line(&term_for_closure, &mut buffer, &mut cursor, cmd);
+                                        }
+                                    }
+                                });
+                            });
+                        });
+                    }
+                    // Ctrl+P - previous history (same as up arrow)
+                    80 if ctrl => {
+                        HISTORY.with(|h| {
+                            HISTORY_POS.with(|p| {
+                                SAVED_BUFFER.with(|s| {
+                                    let history = h.borrow();
+                                    let mut hist_pos = p.borrow_mut();
+
+                                    if history.is_empty() {
+                                        return;
+                                    }
+
+                                    if *hist_pos == history.len() {
+                                        *s.borrow_mut() = buffer.clone();
+                                    }
+
+                                    if *hist_pos > 0 {
+                                        *hist_pos -= 1;
+                                        let cmd = &history[*hist_pos];
+                                        replace_line(&term_for_closure, &mut buffer, &mut cursor, cmd);
+                                    }
+                                });
+                            });
+                        });
+                    }
+                    // Ctrl+R - reverse search
+                    82 if ctrl => {
+                        SEARCH_MODE.with(|m| *m.borrow_mut() = true);
+                        SEARCH_QUERY.with(|q| q.borrow_mut().clear());
+                        SEARCH_RESULT_IDX.with(|idx| *idx.borrow_mut() = None);
+                        show_search_prompt(&term_for_closure, "", None);
+                    }
+                    // Ctrl+T - transpose characters
+                    84 if ctrl => {
+                        if *cursor > 0 && buffer.len() >= 2 {
+                            let swap_pos = if *cursor == buffer.len() {
+                                *cursor - 1
+                            } else {
+                                *cursor
+                            };
+                            if swap_pos > 0 {
+                                let chars: Vec<char> = buffer.chars().collect();
+                                let mut new_chars = chars.clone();
+                                new_chars.swap(swap_pos - 1, swap_pos);
+                                *buffer = new_chars.into_iter().collect();
+                                if *cursor < buffer.len() {
+                                    *cursor += 1;
+                                }
+                                redraw_line(&term_for_closure, &buffer, *cursor);
+                            }
+                        }
+                    }
+                    // Ctrl+U - kill to start of line
+                    85 if ctrl => {
+                        if *cursor > 0 {
+                            let killed = buffer[..*cursor].to_string();
+                            KILL_RING.with(|k| *k.borrow_mut() = killed);
+                            buffer.drain(..*cursor);
+                            *cursor = 0;
+                            redraw_line(&term_for_closure, &buffer, *cursor);
+                        }
+                    }
+                    // Ctrl+W - delete word backward
+                    87 if ctrl => {
+                        if *cursor > 0 {
+                            let new_pos = word_start(&buffer, *cursor);
+                            let killed = buffer[new_pos..*cursor].to_string();
+                            KILL_RING.with(|k| *k.borrow_mut() = killed);
+                            buffer.drain(new_pos..*cursor);
+                            *cursor = new_pos;
+                            redraw_line(&term_for_closure, &buffer, *cursor);
+                        }
+                    }
+                    // Ctrl+Y - yank (paste from kill ring)
+                    89 if ctrl => {
+                        KILL_RING.with(|k| {
+                            let text = k.borrow().clone();
+                            if !text.is_empty() {
+                                buffer.insert_str(*cursor, &text);
+                                *cursor += text.len();
+                                redraw_line(&term_for_closure, &buffer, *cursor);
+                            }
+                        });
+                    }
+                    // Alt+B - word backward
+                    66 if alt => {
+                        let new_pos = word_start(&buffer, *cursor);
+                        if new_pos < *cursor {
+                            term_for_closure.write(&format!("\x1b[{}D", *cursor - new_pos));
+                            *cursor = new_pos;
+                        }
+                    }
+                    // Alt+D - delete word forward
+                    68 if alt => {
+                        let end_pos = word_end(&buffer, *cursor);
+                        if end_pos > *cursor {
+                            let killed = buffer[*cursor..end_pos].to_string();
+                            KILL_RING.with(|k| *k.borrow_mut() = killed);
+                            buffer.drain(*cursor..end_pos);
+                            redraw_line(&term_for_closure, &buffer, *cursor);
+                        }
+                    }
+                    // Alt+F - word forward
+                    70 if alt => {
+                        let new_pos = word_end(&buffer, *cursor);
+                        if new_pos > *cursor {
+                            term_for_closure.write(&format!("\x1b[{}C", new_pos - *cursor));
+                            *cursor = new_pos;
+                        }
+                    }
                     // Regular printable character
                     _ => {
-                        if key.len() == 1 && !ctrl {
+                        if key.len() == 1 && !ctrl && !alt {
                             let ch = key.chars().next().unwrap();
                             if ch.is_ascii_graphic() || ch == ' ' {
                                 buffer.insert(*cursor, ch);
                                 *cursor += 1;
-                                // Redraw from cursor
                                 term_for_closure.write(&buffer[*cursor - 1..]);
                                 let move_back = buffer.len() - *cursor;
                                 if move_back > 0 {
