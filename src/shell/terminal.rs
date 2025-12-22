@@ -336,7 +336,7 @@ impl Terminal {
                 return true;
             }
             "Tab" => {
-                // TODO: Tab completion
+                self.tab_complete();
                 return true;
             }
             _ => {}
@@ -630,6 +630,167 @@ impl Terminal {
         let start = total.saturating_sub(self.visible_rows + self.scroll_offset);
         let end = total.saturating_sub(self.scroll_offset);
         self.lines.range(start..end).enumerate().map(move |(i, line)| (start + i, line))
+    }
+
+    /// Tab completion for commands and files
+    fn tab_complete(&mut self) {
+        // Clone data we need before any mutable operations
+        let input = self.input[..self.cursor].to_string();
+        let words: Vec<&str> = input.split_whitespace().collect();
+
+        if words.is_empty() {
+            return;
+        }
+
+        // Get the word being completed (last word or partial word)
+        let (prefix, word_start) = if input.ends_with(' ') {
+            // Starting a new word
+            (String::new(), self.cursor)
+        } else {
+            // Completing partial word
+            let last = words.last().unwrap_or(&"").to_string();
+            let start = input.rfind(&last).unwrap_or(self.cursor);
+            (last, start)
+        };
+
+        // Determine what to complete: command (first word) or file (subsequent)
+        let completions = if words.len() == 1 && !input.ends_with(' ') {
+            // Complete command
+            self.complete_command(&prefix)
+        } else {
+            // Complete file path
+            self.complete_file(&prefix)
+        };
+
+        if completions.is_empty() {
+            return;
+        }
+
+        let prefix_len = prefix.len();
+        let current_input = self.input.clone();
+        let current_cursor = self.cursor;
+
+        if completions.len() == 1 {
+            // Single match - insert it
+            let completion = &completions[0];
+            self.input = format!(
+                "{}{}{}",
+                &current_input[..word_start],
+                completion,
+                &current_input[current_cursor..]
+            );
+            self.cursor = word_start + completion.len();
+        } else {
+            // Multiple matches - show them and find common prefix
+            let display = format!("\n{}", completions.join("  "));
+            let prompt_line = format!("\n{}{}", self.prompt, current_input);
+            self.print(&display);
+            self.print(&prompt_line);
+
+            // Insert common prefix
+            let common = Self::common_prefix(&completions);
+            if common.len() > prefix_len {
+                self.input = format!(
+                    "{}{}{}",
+                    &current_input[..word_start],
+                    common,
+                    &current_input[current_cursor..]
+                );
+                self.cursor = word_start + common.len();
+            }
+        }
+    }
+
+    /// Get command completions
+    fn complete_command(&self, prefix: &str) -> Vec<String> {
+        let mut completions = Vec::new();
+
+        // Built-in commands
+        let builtins = [
+            "cd", "pwd", "exit", "echo", "export", "unset", "env", "true", "false",
+            "help", "alias", "unalias",
+        ];
+        for cmd in builtins {
+            if cmd.starts_with(prefix) {
+                completions.push(cmd.to_string());
+            }
+        }
+
+        // Programs from registry
+        for prog in self.executor.registry.list() {
+            if prog.starts_with(prefix) && !completions.contains(&prog.to_string()) {
+                completions.push(prog.to_string());
+            }
+        }
+
+        completions.sort();
+        completions
+    }
+
+    /// Get file completions
+    fn complete_file(&self, prefix: &str) -> Vec<String> {
+        use crate::kernel::syscall;
+
+        let (dir, file_prefix) = if prefix.contains('/') {
+            let last_slash = prefix.rfind('/').unwrap();
+            let dir = if last_slash == 0 { "/" } else { &prefix[..last_slash] };
+            (dir.to_string(), &prefix[last_slash + 1..])
+        } else {
+            (".".to_string(), prefix)
+        };
+
+        let mut completions = Vec::new();
+        if let Ok(entries) = syscall::readdir(&dir) {
+            for entry in entries {
+                if entry.starts_with(file_prefix) {
+                    let path = if dir == "." {
+                        entry.clone()
+                    } else if dir == "/" {
+                        format!("/{}", entry)
+                    } else {
+                        format!("{}/{}", dir, entry)
+                    };
+
+                    // Add trailing slash for directories
+                    if let Ok(meta) = syscall::metadata(&path) {
+                        if meta.is_dir {
+                            completions.push(format!("{}/", path));
+                        } else {
+                            completions.push(path);
+                        }
+                    } else {
+                        completions.push(path);
+                    }
+                }
+            }
+        }
+
+        completions.sort();
+        completions
+    }
+
+    /// Find common prefix of strings
+    fn common_prefix(strings: &[String]) -> String {
+        if strings.is_empty() {
+            return String::new();
+        }
+        if strings.len() == 1 {
+            return strings[0].clone();
+        }
+
+        let first = &strings[0];
+        let mut len = first.len();
+
+        for s in &strings[1..] {
+            len = first
+                .chars()
+                .zip(s.chars())
+                .take_while(|(a, b)| a == b)
+                .count()
+                .min(len);
+        }
+
+        first[..len].to_string()
     }
 }
 

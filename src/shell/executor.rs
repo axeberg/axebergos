@@ -549,13 +549,6 @@ impl Executor {
         expanded
     }
 
-    /// Expand command substitution $(cmd) and `cmd` in arguments
-    fn expand_substitutions(&mut self, args: &[String]) -> Vec<String> {
-        args.iter()
-            .map(|arg| self.expand_substitution_in_arg(arg))
-            .collect()
-    }
-
     /// Expand command substitution in a full line (before parsing)
     fn expand_substitution_in_line(&mut self, line: &str) -> String {
         self.expand_substitution_in_arg(line)
@@ -958,7 +951,6 @@ fn expand_glob_traverse(dir: &str, suffix: &str, results: &mut Vec<String>) {
                 // Check if remaining segments match
                 if let Ok(meta) = syscall::metadata(&path) {
                     if meta.is_dir {
-                        let remaining_suffix = segments[1..].join("/");
                         expand_glob_segments(&path, &segments[1..], results);
                     }
                 }
@@ -1264,8 +1256,11 @@ fn prog_head(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 
     let input = if files.is_empty() {
         stdin.unwrap_or_default()
     } else {
-        // Read first file (simplified)
-        String::new() // TODO: read file
+        // Read first file
+        match syscall::read_file(files[0]) {
+            Ok(content) => content,
+            Err(_) => return 1,
+        }
     };
 
     for (i, line) in input.lines().enumerate() {
@@ -1523,14 +1518,13 @@ fn prog_tree(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 
     // ANSI colors
     const BLUE: &str = "\x1b[34m";
-    const CYAN: &str = "\x1b[36m";
     const RESET: &str = "\x1b[0m";
 
     fn print_tree(
         path: &str,
         prefix: &str,
         stdout: &mut String,
-        is_last: bool,
+        _is_last: bool,
         dir_count: &mut usize,
         file_count: &mut usize,
     ) -> Result<(), String> {

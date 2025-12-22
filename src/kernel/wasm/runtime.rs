@@ -4,7 +4,6 @@
 //! This is the bridge between WASM modules and the axeberg kernel.
 
 use super::abi::{fd, OpenFlags, SyscallError, StatBuf};
-use super::error::WasmResult;
 use super::loader::FdTable;
 use std::collections::HashMap;
 
@@ -225,7 +224,7 @@ impl Runtime {
         &self.cwd
     }
 
-    /// Stat syscall (placeholder)
+    /// Stat syscall
     pub fn sys_stat(&self, _path: &str) -> Result<StatBuf, SyscallError> {
         // TODO: Implement via VFS
         Err(SyscallError::NotFound)

@@ -8,8 +8,8 @@ fn main() {
     println!("axeberg v0.1.0 (WASI CLI)");
     println!("Type 'help' for available commands.\n");
 
-    // Simple REPL for now
-    // TODO: Integrate with axeberg kernel once platform abstraction is complete
+    // Simple REPL using host filesystem
+    // The full kernel/shell is in the WASM web target
 
     let stdin = io::stdin();
     let mut stdout = io::stdout();

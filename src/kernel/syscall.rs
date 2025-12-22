@@ -53,6 +53,8 @@ pub enum SyscallError {
     Signal(SignalError),
     /// Process was interrupted by signal
     Interrupted,
+    /// Not a directory
+    NotADirectory,
 }
 
 impl std::fmt::Display for SyscallError {
@@ -71,6 +73,7 @@ impl std::fmt::Display for SyscallError {
             SyscallError::Memory(e) => write!(f, "memory error: {}", e),
             SyscallError::Signal(e) => write!(f, "signal error: {}", e),
             SyscallError::Interrupted => write!(f, "interrupted by signal"),
+            SyscallError::NotADirectory => write!(f, "not a directory"),
         }
     }
 }
@@ -426,7 +429,12 @@ impl Kernel {
         let current = self.current.ok_or(SyscallError::NoProcess)?;
         let resolved = self.resolve_path(current, path)?;
 
-        // TODO: verify path exists and is a directory
+        // Verify path exists and is a directory
+        let path_str = resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
+        let meta = self.vfs.metadata(path_str)?;
+        if !meta.is_dir {
+            return Err(SyscallError::NotADirectory);
+        }
 
         let process = self.processes.get_mut(&current).unwrap();
         process.cwd = resolved;

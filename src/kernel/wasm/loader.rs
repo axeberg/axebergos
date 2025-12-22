@@ -2,7 +2,7 @@
 //!
 //! Handles loading, validating, and instantiating WASM command modules.
 
-use super::abi::{exports, ArgLayout, OpenFlags};
+use super::abi::{exports, OpenFlags};
 use super::error::{CommandResult, WasmError, WasmResult};
 use super::runtime::Runtime;
 
@@ -373,6 +373,7 @@ pub struct FdTable {
     entries: Vec<Option<FdEntry>>,
 }
 
+#[allow(dead_code)] // Fields will be used when VFS integration is complete
 struct FdEntry {
     path: String,
     flags: OpenFlags,
