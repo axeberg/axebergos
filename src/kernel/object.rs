@@ -5,8 +5,11 @@
 //! a process can only access objects it has handles to.
 
 use super::process::Handle;
-use crate::compositor::WindowId;
 use std::collections::{HashMap, VecDeque};
+
+/// Window identifier (stub - now using xterm.js instead of compositor)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct WindowId(pub u64);
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 

@@ -14,13 +14,13 @@
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
-#[cfg(target_arch = "wasm32")]
-pub mod compositor;
 pub mod kernel;
 pub mod platform;
-pub mod runtime;
 pub mod shell;
 pub mod vfs;
+
+#[cfg(target_arch = "wasm32")]
+pub mod terminal;
 
 #[cfg(target_arch = "wasm32")]
 mod boot;

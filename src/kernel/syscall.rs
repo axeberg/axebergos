@@ -11,14 +11,13 @@ use super::memory::{
     SystemMemoryStats,
 };
 use super::object::{
-    ConsoleObject, FileObject, KernelObject, ObjectTable, PipeObject, WindowObject,
+    ConsoleObject, FileObject, KernelObject, ObjectTable, PipeObject, WindowId, WindowObject,
 };
 pub use super::process::{Fd, Handle, OpenFlags, Pid, Process, ProcessState};
 use super::signal::{resolve_action, Signal, SignalAction, SignalError};
 use super::task::TaskId;
 use super::timer::{TimerId, TimerQueue};
 use super::trace::{TraceCategory, TraceSummary, Tracer};
-use crate::compositor::WindowId;
 use crate::vfs::{FileSystem, MemoryFs, OpenOptions as VfsOpenOptions};
 use std::cell::RefCell;
 use std::collections::HashMap;
