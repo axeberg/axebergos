@@ -157,6 +157,9 @@ impl Executor {
         // Expand aliases in the line
         let line = self.expand_aliases(line);
 
+        // Expand command substitution $(cmd) and `cmd` in the line BEFORE parsing
+        let line = self.expand_substitution_in_line(&line);
+
         #[cfg(all(target_arch = "wasm32", not(test)))]
         crate::console_log!("[exec] Running: {}", line);
 
@@ -213,9 +216,8 @@ impl Executor {
                 String::new()
             };
 
-            // Expand command substitution $(cmd), then glob patterns
-            let subst_args = self.expand_substitutions(&cmd.args);
-            let expanded_args = self.expand_args(&subst_args);
+            // Expand glob patterns in arguments
+            let expanded_args = self.expand_args(&cmd.args);
 
             // Prepare args with input if needed
             let args: Vec<String> = if input.is_empty() {
@@ -287,9 +289,8 @@ impl Executor {
             let mut stdout = String::new();
             let mut stderr = String::new();
 
-            // Expand command substitution $(cmd), then glob patterns
-            let subst_args = self.expand_substitutions(&cmd.args);
-            let expanded_args = self.expand_args(&subst_args);
+            // Expand glob patterns in arguments
+            let expanded_args = self.expand_args(&cmd.args);
 
             if builtins::is_builtin(&cmd.program) {
                 // Builtins in a pipeline get the pipe input as implicit stdin
@@ -363,9 +364,8 @@ impl Executor {
 
     /// Execute a built-in command
     fn execute_builtin(&mut self, cmd: &SimpleCommand) -> ExecResult {
-        // Expand command substitution $(cmd), then glob patterns
-        let subst_args = self.expand_substitutions(&cmd.args);
-        let expanded_args = self.expand_args(&subst_args);
+        // Expand glob patterns in arguments
+        let expanded_args = self.expand_args(&cmd.args);
         let result = builtins::execute(&cmd.program, &expanded_args, &self.state);
 
         match result {
@@ -556,7 +556,12 @@ impl Executor {
             .collect()
     }
 
-    /// Expand command substitutions in a single argument
+    /// Expand command substitution in a full line (before parsing)
+    fn expand_substitution_in_line(&mut self, line: &str) -> String {
+        self.expand_substitution_in_arg(line)
+    }
+
+    /// Expand command substitutions in a single argument/string
     fn expand_substitution_in_arg(&mut self, arg: &str) -> String {
         let mut result = String::new();
         let mut chars = arg.chars().peekable();
@@ -631,8 +636,11 @@ impl Executor {
 
     /// Execute a command for substitution and return its output
     fn execute_substitution(&mut self, cmd: &str) -> String {
+        // Recursively expand any nested substitutions first
+        let expanded_cmd = self.expand_substitution_in_line(cmd);
+
         // Parse and execute the command
-        match super::parser::parse(cmd) {
+        match super::parser::parse(&expanded_cmd) {
             Ok(pipeline) => {
                 let result = self.execute_pipeline(&pipeline);
                 // Trim trailing newline for substitution (bash behavior)
@@ -1923,10 +1931,31 @@ mod tests {
         let mut stdout = String::new();
         let mut stderr = String::new();
         let code = prog_grep(&args, &mut stdout, &mut stderr);
-        assert_eq!(code, 0);
-        assert!(stdout.contains("apple"));
-        assert!(stdout.contains("apricot"));
-        assert!(!stdout.contains("banana"));
+        assert_eq!(code, 0, "grep failed with stderr: {}", stderr);
+        // Output contains ANSI codes highlighting "ap", so check for the pattern and rest of words
+        // Strip ANSI codes for easier checking
+        let plain = strip_ansi(&stdout);
+        assert!(plain.contains("apple"), "stdout missing apple: {:?}", plain);
+        assert!(plain.contains("apricot"), "stdout missing apricot: {:?}", plain);
+        assert!(!plain.contains("banana"), "stdout should not have banana: {:?}", plain);
+    }
+
+    /// Strip ANSI escape codes from a string
+    fn strip_ansi(s: &str) -> String {
+        let mut result = String::new();
+        let mut in_escape = false;
+        for c in s.chars() {
+            if c == '\x1b' {
+                in_escape = true;
+            } else if in_escape {
+                if c == 'm' {
+                    in_escape = false;
+                }
+            } else {
+                result.push(c);
+            }
+        }
+        result
     }
 
     #[test]
@@ -2165,5 +2194,182 @@ mod tests {
         assert_eq!(result.code, 0);
         // wc output should contain line/word/char counts
         assert!(!result.output.is_empty());
+    }
+
+    // ============ Glob Pattern Matching ============
+
+    #[test]
+    fn test_glob_match_star() {
+        assert!(glob_match("*.txt", "file.txt"));
+        assert!(glob_match("*.txt", "another.txt"));
+        assert!(!glob_match("*.txt", "file.rs"));
+        assert!(!glob_match("*.txt", "file.txt.bak"));
+    }
+
+    #[test]
+    fn test_glob_match_question() {
+        assert!(glob_match("file?.txt", "file1.txt"));
+        assert!(glob_match("file?.txt", "fileA.txt"));
+        assert!(!glob_match("file?.txt", "file.txt"));
+        assert!(!glob_match("file?.txt", "file12.txt"));
+    }
+
+    #[test]
+    fn test_glob_match_bracket() {
+        assert!(glob_match("[abc].txt", "a.txt"));
+        assert!(glob_match("[abc].txt", "b.txt"));
+        assert!(!glob_match("[abc].txt", "d.txt"));
+    }
+
+    #[test]
+    fn test_glob_match_bracket_range() {
+        assert!(glob_match("[a-z].txt", "f.txt"));
+        assert!(!glob_match("[a-z].txt", "F.txt"));
+        assert!(glob_match("[0-9].txt", "5.txt"));
+    }
+
+    #[test]
+    fn test_glob_match_complex() {
+        assert!(glob_match("test_*.rs", "test_foo.rs"));
+        assert!(glob_match("src/*/*.rs", "src/shell/mod.rs"));
+    }
+
+    #[test]
+    fn test_glob_expansion_simple() {
+        let mut exec = setup_redirect_test();
+        exec.execute_line("mkdir /tmp/glob");
+        exec.execute_line("touch /tmp/glob/file1.txt");
+        exec.execute_line("touch /tmp/glob/file2.txt");
+        exec.execute_line("touch /tmp/glob/other.rs");
+        exec.execute_line("cd /tmp/glob");
+
+        // ls with glob should expand
+        let result = exec.execute_line("echo *.txt");
+        assert!(result.output.contains("file1.txt"));
+        assert!(result.output.contains("file2.txt"));
+        assert!(!result.output.contains("other.rs"));
+    }
+
+    // ============ Aliases ============
+
+    #[test]
+    fn test_alias_set_and_use() {
+        let mut exec = Executor::new();
+        exec.execute_line("alias ll='ls -la'");
+
+        assert!(exec.state.aliases.contains_key("ll"));
+        assert_eq!(exec.state.get_alias("ll"), Some("ls -la"));
+    }
+
+    #[test]
+    fn test_alias_list() {
+        let mut exec = Executor::new();
+        exec.execute_line("alias foo=bar");
+        exec.execute_line("alias baz=qux");
+
+        let result = exec.execute_line("alias");
+        assert!(result.output.contains("foo"));
+        assert!(result.output.contains("bar"));
+        assert!(result.output.contains("baz"));
+    }
+
+    #[test]
+    fn test_unalias() {
+        let mut exec = Executor::new();
+        exec.execute_line("alias test=echo");
+        assert!(exec.state.aliases.contains_key("test"));
+
+        exec.execute_line("unalias test");
+        assert!(!exec.state.aliases.contains_key("test"));
+    }
+
+    #[test]
+    fn test_alias_expansion() {
+        let mut exec = Executor::new();
+        exec.execute_line("alias greet='echo hello'");
+
+        let result = exec.execute_line("greet world");
+        assert_eq!(result.output, "hello world");
+    }
+
+    // ============ Command Substitution ============
+
+    #[test]
+    fn test_substitution_dollar_paren() {
+        let mut exec = Executor::new();
+        let result = exec.execute_line("echo $(echo hello)");
+        assert_eq!(result.output, "hello");
+    }
+
+    #[test]
+    fn test_substitution_nested() {
+        let mut exec = Executor::new();
+        let result = exec.execute_line("echo $(echo $(echo nested))");
+        assert_eq!(result.output, "nested");
+    }
+
+    #[test]
+    fn test_substitution_in_args() {
+        let mut exec = Executor::new();
+        exec.state.set_env("TEST_VAL", "world");
+        let result = exec.execute_line("echo hello $(echo world)");
+        assert_eq!(result.output, "hello world");
+    }
+
+    // ============ Symlinks ============
+
+    #[test]
+    fn test_symlink_create() {
+        let mut exec = setup_redirect_test();
+        exec.execute_line("echo content > /tmp/original.txt");
+
+        let result = exec.execute_line("ln -s /tmp/original.txt /tmp/link.txt");
+        assert_eq!(result.code, 0, "ln failed: {}", result.error);
+
+        // Check link exists via readlink
+        let result = exec.execute_line("readlink /tmp/link.txt");
+        assert_eq!(result.code, 0);
+        assert_eq!(result.output, "/tmp/original.txt");
+    }
+
+    #[test]
+    fn test_symlink_in_ls() {
+        let mut exec = setup_redirect_test();
+        exec.execute_line("echo test > /tmp/target.txt");
+        exec.execute_line("ln -s /tmp/target.txt /tmp/mylink");
+
+        let result = exec.execute_line("ls /tmp");
+        // Should show link with arrow
+        assert!(result.output.contains("mylink"));
+        assert!(result.output.contains("->"));
+    }
+
+    #[test]
+    fn test_symlink_rm() {
+        let mut exec = setup_redirect_test();
+        exec.execute_line("echo test > /tmp/file.txt");
+        exec.execute_line("ln -s /tmp/file.txt /tmp/link");
+
+        // Remove the link
+        let result = exec.execute_line("rm /tmp/link");
+        assert_eq!(result.code, 0);
+
+        // Link should be gone but original file remains
+        let result = exec.execute_line("readlink /tmp/link");
+        assert_ne!(result.code, 0); // Should fail - link doesn't exist
+
+        let result = exec.execute_line("cat /tmp/file.txt");
+        assert_eq!(result.code, 0); // Original still exists
+    }
+
+    #[test]
+    fn test_ln_requires_s_flag() {
+        let mut exec = setup_redirect_test();
+        exec.execute_line("touch /tmp/src.txt");
+
+        // Without -s should fail
+        let result = exec.execute_line("ln /tmp/src.txt /tmp/dst.txt");
+        assert_ne!(result.code, 0);
+        assert!(result.error.contains("hard links not supported"));
     }
 }

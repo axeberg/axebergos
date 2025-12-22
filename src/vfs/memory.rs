@@ -959,4 +959,108 @@ mod tests {
         assert!(!fs.exists("/dir1/file.txt"));
         assert!(fs.exists("/dir2/file.txt"));
     }
+
+    // ============ Symlinks ============
+
+    #[test]
+    fn test_symlink_create() {
+        let mut fs = MemoryFs::new();
+
+        // Create a target file
+        let handle = fs
+            .open("/target.txt", OpenOptions::new().write(true).create(true))
+            .unwrap();
+        fs.write(handle, b"content").unwrap();
+        fs.close(handle).unwrap();
+
+        // Create symlink
+        fs.symlink("/target.txt", "/link.txt").unwrap();
+
+        // Symlink should exist
+        assert!(fs.exists("/link.txt"));
+    }
+
+    #[test]
+    fn test_symlink_read_link() {
+        let mut fs = MemoryFs::new();
+
+        fs.symlink("/some/target", "/mylink").unwrap();
+
+        let target = fs.read_link("/mylink").unwrap();
+        assert_eq!(target, "/some/target");
+    }
+
+    #[test]
+    fn test_symlink_metadata() {
+        let mut fs = MemoryFs::new();
+
+        fs.symlink("/target", "/link").unwrap();
+
+        let meta = fs.metadata("/link").unwrap();
+        assert!(meta.is_symlink);
+        assert!(!meta.is_file);
+        assert!(!meta.is_dir);
+        assert_eq!(meta.symlink_target, Some("/target".to_string()));
+    }
+
+    #[test]
+    fn test_symlink_in_read_dir() {
+        let mut fs = MemoryFs::new();
+
+        fs.create_dir("/home").unwrap();
+        fs.symlink("/elsewhere", "/home/mylink").unwrap();
+
+        let entries = fs.read_dir("/home").unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "mylink");
+        assert!(entries[0].is_symlink);
+        assert!(!entries[0].is_dir);
+    }
+
+    #[test]
+    fn test_symlink_remove() {
+        let mut fs = MemoryFs::new();
+
+        fs.symlink("/target", "/link").unwrap();
+        assert!(fs.exists("/link"));
+
+        fs.remove_file("/link").unwrap();
+        assert!(!fs.exists("/link"));
+    }
+
+    #[test]
+    fn test_symlink_already_exists() {
+        let mut fs = MemoryFs::new();
+
+        fs.symlink("/target1", "/link").unwrap();
+
+        let result = fs.symlink("/target2", "/link");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_read_link_on_file_fails() {
+        let mut fs = MemoryFs::new();
+
+        let handle = fs
+            .open("/file.txt", OpenOptions::new().write(true).create(true))
+            .unwrap();
+        fs.close(handle).unwrap();
+
+        let result = fs.read_link("/file.txt");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_symlink_copy() {
+        let mut fs = MemoryFs::new();
+
+        fs.symlink("/original/target", "/link1").unwrap();
+
+        // Copy symlink should copy the link itself, not follow it
+        fs.copy_file("/link1", "/link2").unwrap();
+
+        let target = fs.read_link("/link2").unwrap();
+        assert_eq!(target, "/original/target");
+    }
 }
