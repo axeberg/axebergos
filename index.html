@@ -95,12 +95,9 @@
 
                 // Load fit addon
                 await loadScript('https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js');
+                // xterm v5 exports FitAddon as { FitAddon: constructor } - expose the constructor directly
+                window.FitAddon = window.FitAddon.FitAddon;
                 console.log('[axeberg] addon-fit loaded, FitAddon =', typeof window.FitAddon);
-
-                // Debug: list xterm-related globals
-                console.log('[axeberg] Available globals:',
-                    Object.keys(window).filter(k => k.toLowerCase().includes('term') || k.toLowerCase().includes('fit'))
-                );
 
                 // Now load WASM
                 const { default: init } = await import('./pkg/axeberg.js');
