@@ -3,6 +3,8 @@
 //! This is where axeberg comes to life. Following Radiant's philosophy:
 //! boot should be immediate, comprehensible, and joyful.
 
+#![cfg(target_arch = "wasm32")]
+
 use crate::compositor;
 use crate::console_log;
 use crate::kernel::syscall::{self, OpenFlags};

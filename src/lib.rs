@@ -11,8 +11,10 @@
 //! - WASI CLI (wasm32-wasip1): stdin/stdout, filesystem persistence
 //! - Bare metal (future): UEFI boot, VirtIO drivers
 
+#[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
+#[cfg(target_arch = "wasm32")]
 pub mod compositor;
 pub mod kernel;
 pub mod platform;
@@ -20,15 +22,18 @@ pub mod runtime;
 pub mod shell;
 pub mod vfs;
 
+#[cfg(target_arch = "wasm32")]
 mod boot;
 
 /// Initialize panic hook for better error messages in browser console
+#[cfg(target_arch = "wasm32")]
 fn init_panic_hook() {
     #[cfg(feature = "console_error_panic_hook")]
     console_error_panic_hook::set_once();
 }
 
 /// Boot the system. This is the WASM entry point.
+#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen(start)]
 pub fn main() {
     init_panic_hook();
@@ -36,16 +41,27 @@ pub fn main() {
 }
 
 /// Console logging helper
+#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 extern "C" {
     #[wasm_bindgen(js_namespace = console)]
     fn log(s: &str);
 }
 
-/// Log to browser console
+/// Log to browser console (WASM)
+#[cfg(target_arch = "wasm32")]
 #[macro_export]
 macro_rules! console_log {
     ($($t:tt)*) => {
         $crate::log(&format!($($t)*))
+    };
+}
+
+/// Log to stderr (native)
+#[cfg(not(target_arch = "wasm32"))]
+#[macro_export]
+macro_rules! console_log {
+    ($($t:tt)*) => {
+        eprintln!($($t)*)
     };
 }
