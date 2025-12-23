@@ -812,6 +812,8 @@ fn setup_keyboard_handler(term: Rc<XTerm>) {
                     // Ctrl+L - clear screen
                     76 if ctrl => {
                         term_for_closure.clear();
+                        // Move cursor to home position after clear
+                        term_for_closure.write("\x1b[H");
                         write_prompt(&term_for_closure);
                         term_for_closure.write(&buffer);
                         let move_back = buffer.len() - *cursor;
@@ -1007,8 +1009,19 @@ fn setup_data_handler(term: Rc<XTerm>) {
                 buffer.insert_str(*cursor, &printable);
                 *cursor += printable.len();
 
-                // Redraw line
-                redraw_line(&term_for_closure, &buffer, *cursor);
+                if printable.len() == 1 {
+                    // Single character: efficient update without full redraw
+                    // Write from inserted position to end of buffer
+                    term_for_closure.write(&buffer[*cursor - 1..]);
+                    // Move cursor back to correct position
+                    let move_back = buffer.len() - *cursor;
+                    if move_back > 0 {
+                        term_for_closure.write(&format!("\x1b[{}D", move_back));
+                    }
+                } else {
+                    // Multi-character paste: full redraw
+                    redraw_line(&term_for_closure, &buffer, *cursor);
+                }
             });
         });
     }) as Box<dyn FnMut(_)>);
