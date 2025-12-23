@@ -7,7 +7,7 @@
 //! 4. Running external commands via the program registry
 
 use super::builtins::{self, BuiltinResult, ShellState};
-use super::parser::{Pipeline, SimpleCommand};
+use super::parser::{CommandList, LogicalOp, Pipeline, SimpleCommand};
 use crate::kernel::syscall;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -163,17 +163,63 @@ impl Executor {
         #[cfg(all(target_arch = "wasm32", not(test)))]
         crate::console_log!("[exec] Running: {}", line);
 
-        // Parse the command
-        let pipeline = match super::parse(&line) {
-            Ok(p) => p,
+        // Parse the command list (handles &&, ||, ;)
+        let cmd_list = match super::parser::parse_command_list(&line) {
+            Ok(c) => c,
             Err(e) => return ExecResult::success().with_error(format!("parse error: {}", e)),
         };
 
-        let result = self.execute_pipeline(&pipeline);
+        let result = self.execute_command_list(&cmd_list);
 
         #[cfg(all(target_arch = "wasm32", not(test)))]
         if !result.error.is_empty() {
             crate::console_log!("[exec] Error: {}", result.error);
+        }
+
+        result
+    }
+
+    /// Execute a command list (multiple pipelines with &&, ||, ;)
+    pub fn execute_command_list(&mut self, cmd_list: &CommandList) -> ExecResult {
+        // Execute the first pipeline
+        let mut result = self.execute_pipeline(&cmd_list.first);
+
+        // Short-circuit on exit
+        if result.should_exit {
+            return result;
+        }
+
+        // Execute remaining pipelines based on logical operators
+        for (op, pipeline) in &cmd_list.rest {
+            let should_execute = match op {
+                LogicalOp::Sequence => true, // Always execute
+                LogicalOp::And => result.code == 0, // Execute if previous succeeded
+                LogicalOp::Or => result.code != 0, // Execute if previous failed
+            };
+
+            if should_execute {
+                let next_result = self.execute_pipeline(pipeline);
+
+                // Combine outputs
+                if !result.output.is_empty() && !next_result.output.is_empty() {
+                    result.output.push('\n');
+                }
+                result.output.push_str(&next_result.output);
+
+                if !result.error.is_empty() && !next_result.error.is_empty() {
+                    result.error.push('\n');
+                }
+                result.error.push_str(&next_result.error);
+
+                // Update exit code to the last executed command
+                result.code = next_result.code;
+
+                // Short-circuit on exit
+                if next_result.should_exit {
+                    result.should_exit = true;
+                    return result;
+                }
+            }
         }
 
         result
@@ -2365,5 +2411,112 @@ mod tests {
         let result = exec.execute_line("ln /tmp/src.txt /tmp/dst.txt");
         assert_ne!(result.code, 0);
         assert!(result.error.contains("hard links not supported"));
+    }
+
+    // ============ Logical Operators ============
+
+    #[test]
+    fn test_and_operator_success() {
+        let mut exec = Executor::new();
+        let result = exec.execute_line("echo first && echo second");
+        assert_eq!(result.code, 0);
+        assert!(result.output.contains("first"));
+        assert!(result.output.contains("second"));
+    }
+
+    #[test]
+    fn test_and_operator_first_fails() {
+        let mut exec = Executor::new();
+        let result = exec.execute_line("false && echo should_not_run");
+        assert_eq!(result.code, 1); // false returns 1
+        assert!(!result.output.contains("should_not_run"));
+    }
+
+    #[test]
+    fn test_or_operator_first_fails() {
+        let mut exec = Executor::new();
+        let result = exec.execute_line("false || echo fallback");
+        assert_eq!(result.code, 0);
+        assert!(result.output.contains("fallback"));
+    }
+
+    #[test]
+    fn test_or_operator_first_succeeds() {
+        let mut exec = Executor::new();
+        let result = exec.execute_line("true || echo should_not_run");
+        assert_eq!(result.code, 0);
+        assert!(!result.output.contains("should_not_run"));
+    }
+
+    #[test]
+    fn test_semicolon_always_runs() {
+        let mut exec = Executor::new();
+        let result = exec.execute_line("echo first; echo second");
+        assert!(result.output.contains("first"));
+        assert!(result.output.contains("second"));
+    }
+
+    #[test]
+    fn test_semicolon_after_failure() {
+        let mut exec = Executor::new();
+        let result = exec.execute_line("false; echo runs_anyway");
+        assert!(result.output.contains("runs_anyway"));
+    }
+
+    #[test]
+    fn test_trailing_semicolon() {
+        let mut exec = Executor::new();
+        let result = exec.execute_line("echo hello;");
+        assert_eq!(result.code, 0);
+        assert_eq!(result.output.trim(), "hello");
+    }
+
+    #[test]
+    fn test_chained_and_all_succeed() {
+        let mut exec = Executor::new();
+        let result = exec.execute_line("echo a && echo b && echo c");
+        assert_eq!(result.code, 0);
+        assert!(result.output.contains("a"));
+        assert!(result.output.contains("b"));
+        assert!(result.output.contains("c"));
+    }
+
+    #[test]
+    fn test_chained_and_middle_fails() {
+        let mut exec = Executor::new();
+        let result = exec.execute_line("echo a && false && echo c");
+        assert_ne!(result.code, 0);
+        assert!(result.output.contains("a"));
+        assert!(!result.output.contains("c")); // c should not run
+    }
+
+    #[test]
+    fn test_mixed_and_or() {
+        let mut exec = Executor::new();
+        // true && false || echo fallback
+        // true succeeds, then false runs (due to &&), then fallback runs (due to ||)
+        let result = exec.execute_line("true && false || echo fallback");
+        assert_eq!(result.code, 0);
+        assert!(result.output.contains("fallback"));
+    }
+
+    #[test]
+    fn test_complex_logic() {
+        let mut exec = Executor::new();
+        // false || true && echo yes
+        // false fails, true runs (due to ||), then yes runs (due to &&)
+        let result = exec.execute_line("false || true && echo yes");
+        assert_eq!(result.code, 0);
+        assert!(result.output.contains("yes"));
+    }
+
+    #[test]
+    fn test_exit_in_chain() {
+        let mut exec = Executor::new();
+        let result = exec.execute_line("echo before && exit 42 && echo after");
+        assert!(result.should_exit);
+        assert_eq!(result.code, 42);
+        assert!(result.output.contains("before"));
+        assert!(!result.output.contains("after"));
     }
 }

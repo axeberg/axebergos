@@ -130,6 +130,37 @@ impl std::error::Error for ParseError {}
 /// Tokenizer for shell input
 struct Lexer<'a> {
     chars: Peekable<Chars<'a>>,
+    /// Pushback buffer for tokens that need to be "unread"
+    pushback: Option<Token>,
+}
+
+/// Logical operator connecting pipelines
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogicalOp {
+    /// Sequential execution (;) - always execute next
+    Sequence,
+    /// AND (&&) - execute next only if previous succeeded
+    And,
+    /// OR (||) - execute next only if previous failed
+    Or,
+}
+
+/// A command list: multiple pipelines connected by logical operators
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandList {
+    /// First pipeline
+    pub first: Pipeline,
+    /// Remaining pipelines with their connecting operators
+    pub rest: Vec<(LogicalOp, Pipeline)>,
+}
+
+impl CommandList {
+    pub fn single(pipeline: Pipeline) -> Self {
+        Self {
+            first: pipeline,
+            rest: Vec::new(),
+        }
+    }
 }
 
 /// Token types
@@ -151,13 +182,26 @@ enum Token {
     RedirectErrAppend,
     /// Background: &
     Background,
+    /// AND: &&
+    And,
+    /// OR: ||
+    Or,
+    /// Semicolon: ;
+    Semicolon,
 }
 
 impl<'a> Lexer<'a> {
     fn new(input: &'a str) -> Self {
         Self {
             chars: input.chars().peekable(),
+            pushback: None,
         }
+    }
+
+    /// Push a token back to be returned by the next call to next_token
+    fn unread(&mut self, token: Token) {
+        assert!(self.pushback.is_none(), "Can only push back one token");
+        self.pushback = Some(token);
     }
 
     fn skip_whitespace(&mut self) {
@@ -171,6 +215,11 @@ impl<'a> Lexer<'a> {
     }
 
     fn next_token(&mut self) -> Result<Option<Token>, ParseError> {
+        // Check pushback buffer first
+        if let Some(token) = self.pushback.take() {
+            return Ok(Some(token));
+        }
+
         self.skip_whitespace();
 
         let c = match self.chars.peek() {
@@ -181,11 +230,25 @@ impl<'a> Lexer<'a> {
         match c {
             '|' => {
                 self.chars.next();
-                Ok(Some(Token::Pipe))
+                if self.chars.peek() == Some(&'|') {
+                    self.chars.next();
+                    Ok(Some(Token::Or))
+                } else {
+                    Ok(Some(Token::Pipe))
+                }
             }
             '&' => {
                 self.chars.next();
-                Ok(Some(Token::Background))
+                if self.chars.peek() == Some(&'&') {
+                    self.chars.next();
+                    Ok(Some(Token::And))
+                } else {
+                    Ok(Some(Token::Background))
+                }
+            }
+            ';' => {
+                self.chars.next();
+                Ok(Some(Token::Semicolon))
             }
             '<' => {
                 self.chars.next();
@@ -229,7 +292,7 @@ impl<'a> Lexer<'a> {
         while let Some(&c) = self.chars.peek() {
             match c {
                 // These terminate a word
-                ' ' | '\t' | '\n' | '\r' | '|' | '&' | '<' | '>' => break,
+                ' ' | '\t' | '\n' | '\r' | '|' | '&' | '<' | '>' | ';' => break,
                 // Quotes can appear mid-word: foo"bar"baz
                 '"' | '\'' => {
                     self.chars.next();
@@ -277,55 +340,119 @@ impl<'a> Lexer<'a> {
     }
 }
 
-/// Parse a command line into a pipeline
-pub fn parse(input: &str) -> Result<Pipeline, ParseError> {
+/// Parse a command line into a command list (handles &&, ||, ;)
+pub fn parse_command_list(input: &str) -> Result<CommandList, ParseError> {
     let mut lexer = Lexer::new(input);
+    let mut rest: Vec<(LogicalOp, Pipeline)> = Vec::new();
+
+    // Parse first pipeline
+    let (first, mut next_op) = parse_pipeline_internal(&mut lexer, None)?;
+
+    // Continue parsing while we have logical operators
+    while let Some(op) = next_op {
+        let (pipeline, trailing_op) = parse_pipeline_internal(&mut lexer, None)?;
+        rest.push((op, pipeline));
+        next_op = trailing_op;
+    }
+
+    Ok(CommandList { first, rest })
+}
+
+/// Parse a single pipeline, returning both the pipeline and any trailing logical operator
+fn parse_pipeline_internal(
+    lexer: &mut Lexer,
+    first_token: Option<Token>,
+) -> Result<(Pipeline, Option<LogicalOp>), ParseError> {
     let mut commands = Vec::new();
     let mut current_words = Vec::new();
     let mut stdin = None;
     let mut stdout = None;
     let mut stderr = None;
     let mut background = false;
+    let mut trailing_op: Option<LogicalOp> = None;
     let mut expecting_command = true; // True at start and after pipe
 
+    // Get the first token
+    let first = match first_token {
+        Some(t) => t,
+        None => match lexer.next_token()? {
+            Some(t) => t,
+            None => return Err(ParseError::EmptyCommand),
+        },
+    };
+
+    // Process the first token
+    let mut current_token = Some(first);
+
     loop {
-        match lexer.next_token()? {
-            None => break,
-            Some(Token::Word(w)) => {
+        let token = match current_token.take() {
+            Some(t) => t,
+            None => match lexer.next_token()? {
+                Some(t) => t,
+                None => break,
+            },
+        };
+
+        match token {
+            Token::Word(w) => {
                 current_words.push(w);
                 expecting_command = false;
             }
-            Some(Token::Pipe) => {
+            Token::Pipe => {
                 if current_words.is_empty() {
                     return Err(ParseError::EmptyCommand);
                 }
                 let cmd = build_command(&mut current_words, stdin.take(), stdout.take(), stderr.take());
                 commands.push(cmd);
-                expecting_command = true; // Expecting command after pipe
+                expecting_command = true; // Expect command after pipe
             }
-            Some(Token::Background) => {
+            Token::Background => {
                 background = true;
-                // & should be at the end
             }
-            Some(Token::RedirectIn) => {
-                let target = expect_word(&mut lexer)?;
+            Token::RedirectIn => {
+                let target = expect_word(lexer)?;
                 stdin = Some(Redirect::new(target, false));
             }
-            Some(Token::RedirectOut) => {
-                let target = expect_word(&mut lexer)?;
+            Token::RedirectOut => {
+                let target = expect_word(lexer)?;
                 stdout = Some(Redirect::new(target, false));
             }
-            Some(Token::RedirectAppend) => {
-                let target = expect_word(&mut lexer)?;
+            Token::RedirectAppend => {
+                let target = expect_word(lexer)?;
                 stdout = Some(Redirect::new(target, true));
             }
-            Some(Token::RedirectErr) => {
-                let target = expect_word(&mut lexer)?;
+            Token::RedirectErr => {
+                let target = expect_word(lexer)?;
                 stderr = Some(Redirect::new(target, false));
             }
-            Some(Token::RedirectErrAppend) => {
-                let target = expect_word(&mut lexer)?;
+            Token::RedirectErrAppend => {
+                let target = expect_word(lexer)?;
                 stderr = Some(Redirect::new(target, true));
+            }
+            // Stop at logical operators - return them for the caller
+            Token::And => {
+                trailing_op = Some(LogicalOp::And);
+                break;
+            }
+            Token::Or => {
+                trailing_op = Some(LogicalOp::Or);
+                break;
+            }
+            Token::Semicolon => {
+                // Check if there's anything after the semicolon
+                // If not, it's just a trailing semicolon (valid, ignore)
+                match lexer.next_token()? {
+                    Some(next) => {
+                        // Push the token back for the next parse call
+                        lexer.unread(next);
+                        trailing_op = Some(LogicalOp::Sequence);
+                        break;
+                    }
+                    None => {
+                        // Trailing semicolon, just ignore it
+                        break;
+                    }
+                }
             }
         }
     }
@@ -341,7 +468,15 @@ pub fn parse(input: &str) -> Result<Pipeline, ParseError> {
         commands.push(cmd);
     }
 
-    Ok(Pipeline { commands, background })
+    Ok((Pipeline { commands, background }, trailing_op))
+}
+
+/// Parse a command line into a pipeline (legacy API, wraps parse_command_list)
+pub fn parse(input: &str) -> Result<Pipeline, ParseError> {
+    let cmd_list = parse_command_list(input)?;
+    // Return just the first pipeline for backwards compatibility
+    // Caller should use parse_command_list for full functionality
+    Ok(cmd_list.first)
 }
 
 fn expect_word(lexer: &mut Lexer) -> Result<String, ParseError> {
@@ -606,5 +741,87 @@ mod tests {
     fn test_quoted_redirect_target() {
         let result = parse(r#"echo hello > "file with spaces.txt""#).unwrap();
         assert_eq!(result.commands[0].stdout, Some(Redirect::new("file with spaces.txt", false)));
+    }
+
+    // ============ Logical Operators ============
+
+    #[test]
+    fn test_and_operator() {
+        let result = parse_command_list("echo a && echo b").unwrap();
+        assert_eq!(result.first.commands[0].program, "echo");
+        assert_eq!(result.first.commands[0].args, vec!["a"]);
+        assert_eq!(result.rest.len(), 1);
+        assert_eq!(result.rest[0].0, LogicalOp::And);
+        assert_eq!(result.rest[0].1.commands[0].program, "echo");
+        assert_eq!(result.rest[0].1.commands[0].args, vec!["b"]);
+    }
+
+    #[test]
+    fn test_or_operator() {
+        let result = parse_command_list("false || echo fallback").unwrap();
+        assert_eq!(result.first.commands[0].program, "false");
+        assert_eq!(result.rest.len(), 1);
+        assert_eq!(result.rest[0].0, LogicalOp::Or);
+        assert_eq!(result.rest[0].1.commands[0].program, "echo");
+    }
+
+    #[test]
+    fn test_semicolon_operator() {
+        let result = parse_command_list("echo a; echo b").unwrap();
+        assert_eq!(result.first.commands[0].program, "echo");
+        assert_eq!(result.rest.len(), 1);
+        assert_eq!(result.rest[0].0, LogicalOp::Sequence);
+        assert_eq!(result.rest[0].1.commands[0].program, "echo");
+    }
+
+    #[test]
+    fn test_trailing_semicolon() {
+        let result = parse_command_list("echo hello;").unwrap();
+        assert_eq!(result.first.commands[0].program, "echo");
+        assert!(result.rest.is_empty()); // Trailing semicolon ignored
+    }
+
+    #[test]
+    fn test_chained_and() {
+        let result = parse_command_list("cmd1 && cmd2 && cmd3").unwrap();
+        assert_eq!(result.first.commands[0].program, "cmd1");
+        assert_eq!(result.rest.len(), 2);
+        assert_eq!(result.rest[0].0, LogicalOp::And);
+        assert_eq!(result.rest[0].1.commands[0].program, "cmd2");
+        assert_eq!(result.rest[1].0, LogicalOp::And);
+        assert_eq!(result.rest[1].1.commands[0].program, "cmd3");
+    }
+
+    #[test]
+    fn test_mixed_operators() {
+        let result = parse_command_list("cmd1 && cmd2 || cmd3; cmd4").unwrap();
+        assert_eq!(result.rest.len(), 3);
+        assert_eq!(result.rest[0].0, LogicalOp::And);
+        assert_eq!(result.rest[1].0, LogicalOp::Or);
+        assert_eq!(result.rest[2].0, LogicalOp::Sequence);
+    }
+
+    #[test]
+    fn test_pipe_with_and() {
+        let result = parse_command_list("cat file | grep pattern && echo found").unwrap();
+        assert_eq!(result.first.commands.len(), 2); // Pipeline with 2 commands
+        assert_eq!(result.first.commands[0].program, "cat");
+        assert_eq!(result.first.commands[1].program, "grep");
+        assert_eq!(result.rest.len(), 1);
+        assert_eq!(result.rest[0].0, LogicalOp::And);
+        assert_eq!(result.rest[0].1.commands[0].program, "echo");
+    }
+
+    #[test]
+    fn test_and_no_space() {
+        let result = parse_command_list("echo a&&echo b").unwrap();
+        assert_eq!(result.first.commands[0].args, vec!["a"]);
+        assert_eq!(result.rest[0].1.commands[0].args, vec!["b"]);
+    }
+
+    #[test]
+    fn test_or_no_space() {
+        let result = parse_command_list("false||echo ok").unwrap();
+        assert_eq!(result.rest[0].0, LogicalOp::Or);
     }
 }

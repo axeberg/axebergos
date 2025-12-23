@@ -300,3 +300,76 @@ fn test_true_false() {
     let (_, _, code) = run_cmd(&mut exec, "false");
     assert_eq!(code, 1);
 }
+
+// ============================================================================
+// Logical Operators
+// ============================================================================
+
+#[test]
+fn test_and_operator() {
+    let mut exec = init_test();
+
+    // Both succeed
+    let (stdout, _, code) = run_cmd(&mut exec, "echo first && echo second");
+    assert_eq!(code, 0);
+    assert!(stdout.contains("first"));
+    assert!(stdout.contains("second"));
+
+    // First fails, second should not run
+    let (stdout, _, code) = run_cmd(&mut exec, "false && echo should_not_run");
+    assert_ne!(code, 0);
+    assert!(!stdout.contains("should_not_run"));
+}
+
+#[test]
+fn test_or_operator() {
+    let mut exec = init_test();
+
+    // First fails, second runs
+    let (stdout, _, code) = run_cmd(&mut exec, "false || echo fallback");
+    assert_eq!(code, 0);
+    assert!(stdout.contains("fallback"));
+
+    // First succeeds, second should not run
+    let (stdout, _, code) = run_cmd(&mut exec, "true || echo should_not_run");
+    assert_eq!(code, 0);
+    assert!(!stdout.contains("should_not_run"));
+}
+
+#[test]
+fn test_semicolon_operator() {
+    let mut exec = init_test();
+
+    // Both run regardless of exit codes
+    let (stdout, _, _) = run_cmd(&mut exec, "echo first; echo second");
+    assert!(stdout.contains("first"));
+    assert!(stdout.contains("second"));
+
+    // Second runs even if first fails
+    let (stdout, _, _) = run_cmd(&mut exec, "false; echo runs_anyway");
+    assert!(stdout.contains("runs_anyway"));
+}
+
+#[test]
+fn test_logical_with_file_ops() {
+    let mut exec = init_test();
+
+    // Create file only if directory creation succeeds
+    run_cmd(&mut exec, "mkdir /tmp/i_logic && touch /tmp/i_logic/file.txt");
+
+    let (stdout, _, code) = run_cmd(&mut exec, "ls /tmp/i_logic");
+    assert_eq!(code, 0);
+    assert!(stdout.contains("file.txt"));
+}
+
+#[test]
+fn test_logical_chain() {
+    let mut exec = init_test();
+
+    // Chain of &&
+    let (stdout, _, code) = run_cmd(&mut exec, "echo a && echo b && echo c");
+    assert_eq!(code, 0);
+    assert!(stdout.contains("a"));
+    assert!(stdout.contains("b"));
+    assert!(stdout.contains("c"));
+}
