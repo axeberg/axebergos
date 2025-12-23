@@ -1,0 +1,38 @@
+cd(1)                       General Commands Manual                      cd(1)
+
+NAME
+       cd - change working directory
+
+SYNOPSIS
+       cd [DIRECTORY]
+
+DESCRIPTION
+       Change the current working directory to DIRECTORY.
+
+       If no directory is given, changes to $HOME.
+
+       If directory is -, changes to $OLDPWD (previous directory).
+
+       If directory starts with ~, expands to $HOME.
+
+EXAMPLES
+       Change to home directory:
+
+           cd
+
+       Change to parent directory:
+
+           cd ..
+
+       Return to previous directory:
+
+           cd -
+
+       Change to subdirectory of home:
+
+           cd ~/documents
+
+SEE ALSO
+       pwd(1)
+
+                                  2025-12-23                             cd(1)

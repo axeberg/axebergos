@@ -387,7 +387,8 @@ Other:
   clear          Clear screen
   history [N]    Show command history
   sleep <N>      Wait N seconds
-  save           Persist filesystem to storage"
+  save           Persist filesystem to storage
+  man <cmd>      Display manual page for command"
             .to_string(),
     )
 }

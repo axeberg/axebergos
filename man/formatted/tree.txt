@@ -1,0 +1,25 @@
+tree(1)                     General Commands Manual                    tree(1)
+
+NAME
+       tree - display directory tree
+
+SYNOPSIS
+       tree [DIRECTORY]
+
+DESCRIPTION
+       Display  the  directory  structure as a tree. If no DIRECTORY is given,
+       displays the current directory.
+
+EXAMPLES
+       Show current directory:
+
+           tree
+
+       Show specific directory:
+
+           tree /home/user
+
+SEE ALSO
+       ls(1)
+
+                                  2025-12-23                           tree(1)

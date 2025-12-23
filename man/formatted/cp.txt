@@ -1,0 +1,24 @@
+cp(1)                       General Commands Manual                      cp(1)
+
+NAME
+       cp - copy files
+
+SYNOPSIS
+       cp SOURCE DEST
+
+DESCRIPTION
+       Copy SOURCE to DEST. Does not support copying directories.
+
+EXAMPLES
+       Copy a file:
+
+           cp original.txt backup.txt
+
+       Copy to another directory:
+
+           cp file.txt /home/user/documents/
+
+SEE ALSO
+       mv(1), rm(1)
+
+                                  2025-12-23                             cp(1)

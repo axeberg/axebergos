@@ -1,0 +1,33 @@
+ln(1)                       General Commands Manual                      ln(1)
+
+NAME
+       ln - create links
+
+SYNOPSIS
+       ln -s [-f] TARGET LINK_NAME
+
+DESCRIPTION
+       Create a symbolic link to TARGET with the name LINK_NAME.
+
+       Only symbolic links are supported; the -s flag is required.
+
+OPTIONS
+       -s
+           Create symbolic link (required).
+
+       -f
+           Force; remove existing destination file.
+
+EXAMPLES
+       Create a symbolic link:
+
+           ln -s /path/to/target linkname
+
+       Replace existing link:
+
+           ln -sf newtarget existinglink
+
+SEE ALSO
+       readlink(1)
+
+                                  2025-12-23                             ln(1)

@@ -98,6 +98,7 @@ impl ProgramRegistry {
         reg.register("ln", prog_ln);
         reg.register("readlink", prog_readlink);
         reg.register("edit", prog_edit);
+        reg.register("man", prog_man);
 
         reg
     }
@@ -1021,6 +1022,15 @@ impl Default for Executor {
 
 // ============ Built-in Programs ============
 
+/// Check if args contain -h or --help and return usage message if so
+fn check_help(args: &[&str], usage: &str) -> Option<String> {
+    if args.iter().any(|a| *a == "-h" || *a == "--help") {
+        Some(usage.to_string())
+    } else {
+        None
+    }
+}
+
 /// Extract stdin from args if present
 fn extract_stdin(args: &[String]) -> (Option<String>, Vec<&str>) {
     if !args.is_empty() && args[0].starts_with("__STDIN__:") {
@@ -1035,6 +1045,11 @@ fn extract_stdin(args: &[String]) -> (Option<String>, Vec<&str>) {
 /// cat - concatenate files or stdin
 fn prog_cat(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
     let (stdin, files) = extract_stdin(args);
+
+    if let Some(help) = check_help(&files, "Usage: cat [FILE]...\nConcatenate files and print to stdout. See 'man cat' for details.") {
+        stdout.push_str(&help);
+        return 0;
+    }
 
     if files.is_empty() {
         // Read from stdin
@@ -1079,6 +1094,12 @@ fn prog_cat(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 fn prog_ls(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
     let (_, paths) = extract_stdin(args);
 
+    if let Some(help) = check_help(&paths, "Usage: ls [-la] [PATH]...\nList directory contents. See 'man ls' for details.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    let paths: Vec<&str> = paths.into_iter().filter(|p| !p.starts_with('-') || *p == "-" ).collect();
     let paths = if paths.is_empty() {
         vec!["."]
     } else {
@@ -1143,8 +1164,13 @@ fn prog_ls(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// mkdir - create directories
-fn prog_mkdir(args: &[String], _stdout: &mut String, stderr: &mut String) -> i32 {
+fn prog_mkdir(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
     let (_, paths) = extract_stdin(args);
+
+    if let Some(help) = check_help(&paths, "Usage: mkdir DIRECTORY...\nCreate directories. See 'man mkdir' for details.") {
+        stdout.push_str(&help);
+        return 0;
+    }
 
     if paths.is_empty() {
         stderr.push_str("mkdir: missing operand\n");
@@ -1162,8 +1188,13 @@ fn prog_mkdir(args: &[String], _stdout: &mut String, stderr: &mut String) -> i32
 }
 
 /// touch - create empty files
-fn prog_touch(args: &[String], _stdout: &mut String, stderr: &mut String) -> i32 {
+fn prog_touch(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
     let (_, paths) = extract_stdin(args);
+
+    if let Some(help) = check_help(&paths, "Usage: touch FILE...\nCreate empty files or update timestamps. See 'man touch' for details.") {
+        stdout.push_str(&help);
+        return 0;
+    }
 
     if paths.is_empty() {
         stderr.push_str("touch: missing operand\n");
@@ -1187,8 +1218,13 @@ fn prog_touch(args: &[String], _stdout: &mut String, stderr: &mut String) -> i32
 }
 
 /// rm - remove files
-fn prog_rm(args: &[String], _stdout: &mut String, stderr: &mut String) -> i32 {
+fn prog_rm(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
     let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: rm [-r] FILE...\nRemove files or directories. See 'man rm' for details.") {
+        stdout.push_str(&help);
+        return 0;
+    }
 
     if args.is_empty() {
         stderr.push_str("rm: missing operand\n");
@@ -1238,8 +1274,13 @@ fn prog_rm(args: &[String], _stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// cp - copy files
-fn prog_cp(args: &[String], _stdout: &mut String, stderr: &mut String) -> i32 {
+fn prog_cp(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
     let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: cp SOURCE DEST\nCopy files. See 'man cp' for details.") {
+        stdout.push_str(&help);
+        return 0;
+    }
 
     if args.len() < 2 {
         stderr.push_str("cp: missing operand\n");
@@ -1259,8 +1300,13 @@ fn prog_cp(args: &[String], _stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// mv - move/rename files
-fn prog_mv(args: &[String], _stdout: &mut String, stderr: &mut String) -> i32 {
+fn prog_mv(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
     let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: mv SOURCE DEST\nMove or rename files. See 'man mv' for details.") {
+        stdout.push_str(&help);
+        return 0;
+    }
 
     if args.len() < 2 {
         stderr.push_str("mv: missing operand\n");
@@ -1282,6 +1328,11 @@ fn prog_mv(args: &[String], _stdout: &mut String, stderr: &mut String) -> i32 {
 /// head - output first lines
 fn prog_head(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
     let (stdin, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: head [-n N] [FILE]\nOutput first N lines (default 10). See 'man head' for details.") {
+        stdout.push_str(&help);
+        return 0;
+    }
 
     let mut n = 10;
     let mut files = Vec::new();
@@ -1329,6 +1380,11 @@ fn prog_head(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 
 fn prog_tail(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
     let (stdin, args) = extract_stdin(args);
 
+    if let Some(help) = check_help(&args, "Usage: tail [-n N] [FILE]\nOutput last N lines (default 10). See 'man tail' for details.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
     let mut n = 10;
 
     for i in 0..args.len() {
@@ -1358,6 +1414,11 @@ fn prog_tail(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 
 /// wc - word, line, character count
 fn prog_wc(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
     let (stdin, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: wc [-lwc] [FILE]\nCount lines, words, and characters. See 'man wc' for details.") {
+        stdout.push_str(&help);
+        return 0;
+    }
 
     let show_lines = args.contains(&"-l");
     let show_words = args.contains(&"-w");
@@ -1391,6 +1452,11 @@ fn prog_wc(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
 /// grep - search for patterns
 fn prog_grep(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
     let (stdin, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: grep [-inv] PATTERN [FILE]...\nSearch for patterns in files. See 'man grep' for details.") {
+        stdout.push_str(&help);
+        return 0;
+    }
 
     if args.is_empty() {
         stderr.push_str("grep: missing pattern\n");
@@ -1426,6 +1492,11 @@ fn prog_grep(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 fn prog_sort(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
     let (stdin, args) = extract_stdin(args);
 
+    if let Some(help) = check_help(&args, "Usage: sort [-ru] [FILE]\nSort lines of text. See 'man sort' for details.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
     let reverse = args.contains(&"-r");
     let unique = args.contains(&"-u");
 
@@ -1447,6 +1518,11 @@ fn prog_sort(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 
 /// uniq - filter adjacent duplicate lines
 fn prog_uniq(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
     let (stdin, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: uniq [-c] [FILE]\nFilter adjacent duplicate lines. See 'man uniq' for details.") {
+        stdout.push_str(&help);
+        return 0;
+    }
 
     let count = args.contains(&"-c");
 
@@ -1486,6 +1562,11 @@ fn prog_uniq(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 
 /// tee - read stdin and write to files
 fn prog_tee(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
     let (stdin, files) = extract_stdin(args);
+
+    if let Some(help) = check_help(&files, "Usage: tee [-a] FILE\nCopy stdin to file and stdout. See 'man tee' for details.") {
+        stdout.push_str(&help);
+        return 0;
+    }
 
     let input = stdin.unwrap_or_default();
 
@@ -1560,6 +1641,11 @@ fn prog_save(_args: &[String], stdout: &mut String, _stderr: &mut String) -> i32
 /// tree - display directory tree
 fn prog_tree(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
     let (_, paths) = extract_stdin(args);
+
+    if let Some(help) = check_help(&paths, "Usage: tree [DIRECTORY]\nDisplay directory tree. See 'man tree' for details.") {
+        stdout.push_str(&help);
+        return 0;
+    }
 
     let path = if paths.is_empty() { "." } else { paths[0] };
 
@@ -1707,8 +1793,13 @@ fn prog_sleep(args: &[String], _stdout: &mut String, stderr: &mut String) -> i32
 }
 
 /// ln - create links (symlinks with -s)
-fn prog_ln(args: &[String], _stdout: &mut String, stderr: &mut String) -> i32 {
+fn prog_ln(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
     let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: ln -s TARGET LINK_NAME\nCreate symbolic links. See 'man ln' for details.") {
+        stdout.push_str(&help);
+        return 0;
+    }
 
     // Parse flags
     let mut symbolic = false;
@@ -1793,6 +1884,11 @@ fn prog_readlink(args: &[String], stdout: &mut String, stderr: &mut String) -> i
 fn prog_edit(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
     let (_, args) = extract_stdin(args);
 
+    if let Some(help) = check_help(&args, "Usage: edit [FILE]\nOpen text editor. Ctrl+Q to quit, Ctrl+S to save. See 'man edit' for details.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
     let filename = args.first().copied();
 
     #[cfg(target_arch = "wasm32")]
@@ -1815,6 +1911,55 @@ fn prog_edit(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
         stderr.push_str("edit: not available in this environment\n");
         1
     }
+}
+
+/// man - display manual pages
+fn prog_man(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: man COMMAND\nDisplay manual page for a command. See 'man man' for details.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    if args.is_empty() {
+        stderr.push_str("What manual page do you want?\n");
+        return 1;
+    }
+
+    let page = args[0];
+
+    // Embedded man pages (pre-rendered from scdoc)
+    let content = match page {
+        "cat" => include_str!("../../man/formatted/cat.txt"),
+        "cd" => include_str!("../../man/formatted/cd.txt"),
+        "cp" => include_str!("../../man/formatted/cp.txt"),
+        "echo" => include_str!("../../man/formatted/echo.txt"),
+        "edit" => include_str!("../../man/formatted/edit.txt"),
+        "grep" => include_str!("../../man/formatted/grep.txt"),
+        "head" => include_str!("../../man/formatted/head.txt"),
+        "ln" => include_str!("../../man/formatted/ln.txt"),
+        "ls" => include_str!("../../man/formatted/ls.txt"),
+        "man" => include_str!("../../man/formatted/man.txt"),
+        "mkdir" => include_str!("../../man/formatted/mkdir.txt"),
+        "mv" => include_str!("../../man/formatted/mv.txt"),
+        "pwd" => include_str!("../../man/formatted/pwd.txt"),
+        "rm" => include_str!("../../man/formatted/rm.txt"),
+        "sort" => include_str!("../../man/formatted/sort.txt"),
+        "tail" => include_str!("../../man/formatted/tail.txt"),
+        "tee" => include_str!("../../man/formatted/tee.txt"),
+        "touch" => include_str!("../../man/formatted/touch.txt"),
+        "tree" => include_str!("../../man/formatted/tree.txt"),
+        "uniq" => include_str!("../../man/formatted/uniq.txt"),
+        "wc" => include_str!("../../man/formatted/wc.txt"),
+        _ => {
+            stderr.push_str(&format!("No manual entry for {}\n", page));
+            return 1;
+        }
+    };
+
+    stdout.push_str(content.trim());
+    0
 }
 
 #[cfg(test)]
