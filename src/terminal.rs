@@ -525,9 +525,14 @@ fn setup_keyboard_handler(term: Rc<XTerm>) {
         let alt = dom_event.alt_key();
         let shift = dom_event.shift_key();
 
-        // Check if editor is active - route all keys to editor
+        // Check if editor is active - route special keys to editor
+        // Regular characters are handled by on_data via handle_paste
         if crate::editor::is_active() {
             if let Some(editor_key) = crate::editor::parse_key(&key, key_code, ctrl, alt, shift) {
+                // Skip regular characters - on_data handles those
+                if matches!(editor_key, crate::editor::Key::Char(_)) {
+                    return;
+                }
                 let should_quit = crate::editor::process_key(editor_key);
                 if should_quit {
                     crate::editor::stop();
