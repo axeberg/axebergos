@@ -359,7 +359,7 @@ fn complete_command(prefix: &str, buffer: &str, cursor: usize, word_start: usize
     let builtins = [
         "cd", "pwd", "exit", "echo", "export", "unset", "env", "true", "false", "help",
         "ls", "cat", "mkdir", "touch", "rm", "cp", "mv", "grep", "head", "tail",
-        "sort", "uniq", "wc", "tee", "clear", "history",
+        "sort", "uniq", "wc", "tee", "clear", "history", "edit", "tree", "ln", "readlink",
     ];
 
     let matches: Vec<_> = builtins.iter().filter(|c| c.starts_with(prefix)).collect();
@@ -523,6 +523,23 @@ fn setup_keyboard_handler(term: Rc<XTerm>) {
         let key_code = dom_event.key_code();
         let ctrl = dom_event.ctrl_key();
         let alt = dom_event.alt_key();
+        let shift = dom_event.shift_key();
+
+        // Check if editor is active - route all keys to editor
+        if crate::editor::is_active() {
+            if let Some(editor_key) = crate::editor::parse_key(&key, key_code, ctrl, alt, shift) {
+                let should_quit = crate::editor::process_key(editor_key);
+                if should_quit {
+                    crate::editor::stop();
+                    // Clear screen and show prompt
+                    term_for_closure.clear();
+                    term_for_closure.write("\x1b[H");
+                    term_for_closure.writeln("Editor closed.");
+                    write_prompt(&term_for_closure);
+                }
+            }
+            return;
+        }
 
         // Check if in search mode
         let in_search = SEARCH_MODE.with(|m| *m.borrow());
@@ -980,6 +997,12 @@ fn setup_data_handler(term: Rc<XTerm>) {
         let first_byte = data.as_bytes()[0];
         if first_byte < 32 && first_byte != 9 {
             // Control character (except tab which we handle in onKey)
+            return;
+        }
+
+        // Check if editor is active - route to editor
+        if crate::editor::is_active() {
+            crate::editor::handle_paste(&data);
             return;
         }
 

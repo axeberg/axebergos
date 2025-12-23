@@ -23,6 +23,9 @@ pub mod vfs;
 pub mod terminal;
 
 #[cfg(target_arch = "wasm32")]
+pub mod editor;
+
+#[cfg(target_arch = "wasm32")]
 mod boot;
 
 /// Initialize panic hook for better error messages in browser console

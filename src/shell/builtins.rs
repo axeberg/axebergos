@@ -380,6 +380,9 @@ Shell:
   alias [name=value] Define or list aliases
   unalias <name>   Remove an alias
 
+Editor:
+  edit [file]    Open text editor (Ctrl+Q to quit, Ctrl+S to save)
+
 Other:
   clear          Clear screen
   history [N]    Show command history

@@ -97,6 +97,7 @@ impl ProgramRegistry {
         reg.register("history", prog_history);
         reg.register("ln", prog_ln);
         reg.register("readlink", prog_readlink);
+        reg.register("edit", prog_edit);
 
         reg
     }
@@ -1784,6 +1785,35 @@ fn prog_readlink(args: &[String], stdout: &mut String, stderr: &mut String) -> i
             stderr.push_str(&format!("readlink: {}: {}\n", path, e));
             1
         }
+    }
+}
+
+/// Text editor - opens a file for editing
+#[allow(unused_variables)]
+fn prog_edit(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    let filename = args.first().copied();
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        match crate::editor::start(filename) {
+            Ok(()) => {
+                // Editor started - control transfers to event loop
+                // Don't output anything - editor takes over screen
+                0
+            }
+            Err(e) => {
+                stderr.push_str(&format!("edit: {}\n", e));
+                1
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        stderr.push_str("edit: not available in this environment\n");
+        1
     }
 }
 
