@@ -581,8 +581,9 @@ impl Editor {
         if self.cy == self.rows.len() {
             self.rows.push(Row::empty());
         }
+        let cx = self.cx;
         if let Some(row) = self.current_row_mut() {
-            row.insert_char(self.cx, ch);
+            row.insert_char(cx, ch);
             self.cx += 1;
             self.dirty = true;
         }
