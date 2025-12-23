@@ -55,6 +55,9 @@ extern "C" {
     #[wasm_bindgen(method, js_name = onKey)]
     fn on_key(this: &XTerm, callback: &js_sys::Function);
 
+    #[wasm_bindgen(method, js_name = onData)]
+    fn on_data(this: &XTerm, callback: &js_sys::Function);
+
     /// The xterm-addon-fit FitAddon class (global `FitAddon`)
     #[wasm_bindgen(js_name = FitAddon)]
     type XTermFitAddon;
@@ -181,8 +184,11 @@ pub fn init() -> Result<(), JsValue> {
         *f.borrow_mut() = Some(fit_rc.clone());
     });
 
-    // Set up keyboard handler
+    // Set up keyboard handler (for special keys like Ctrl+, arrows)
     setup_keyboard_handler(term_rc.clone());
+
+    // Set up data handler (for text input including paste)
+    setup_data_handler(term_rc.clone());
 
     // Set up resize handler
     setup_resize_handler(fit_rc);
@@ -945,27 +951,69 @@ fn setup_keyboard_handler(term: Rc<XTerm>) {
                             *cursor = new_pos;
                         }
                     }
-                    // Regular printable character
-                    _ => {
-                        if key.len() == 1 && !ctrl && !alt {
-                            let ch = key.chars().next().unwrap();
-                            if ch.is_ascii_graphic() || ch == ' ' {
-                                buffer.insert(*cursor, ch);
-                                *cursor += 1;
-                                term_for_closure.write(&buffer[*cursor - 1..]);
-                                let move_back = buffer.len() - *cursor;
-                                if move_back > 0 {
-                                    term_for_closure.write(&format!("\x1b[{}D", move_back));
-                                }
-                            }
-                        }
-                    }
+                    // Regular printable characters are handled by onData handler
+                    // This allows proper paste support and handles all keyboard layouts
+                    _ => {}
                 }
             });
         });
     }) as Box<dyn FnMut(_)>);
 
     term.on_key(callback.as_ref().unchecked_ref());
+    callback.forget();
+}
+
+/// Handle text data input (typed characters and paste)
+fn setup_data_handler(term: Rc<XTerm>) {
+    let term_for_closure = term.clone();
+
+    let callback = Closure::wrap(Box::new(move |data: String| {
+        // Skip control characters (handled by onKey)
+        // onData receives the raw character/string
+        if data.is_empty() {
+            return;
+        }
+
+        // Check for control characters that should be handled by onKey
+        let first_byte = data.as_bytes()[0];
+        if first_byte < 32 && first_byte != 9 {
+            // Control character (except tab which we handle in onKey)
+            return;
+        }
+
+        // Check if in search mode
+        let in_search = SEARCH_MODE.with(|m| *m.borrow());
+        if in_search {
+            // Let onKey handle search mode
+            return;
+        }
+
+        INPUT_BUFFER.with(|buf| {
+            CURSOR_POS.with(|pos| {
+                let mut buffer = buf.borrow_mut();
+                let mut cursor = pos.borrow_mut();
+
+                // Filter to only printable characters
+                let printable: String = data
+                    .chars()
+                    .filter(|c| c.is_ascii_graphic() || *c == ' ')
+                    .collect();
+
+                if printable.is_empty() {
+                    return;
+                }
+
+                // Insert at cursor position
+                buffer.insert_str(*cursor, &printable);
+                *cursor += printable.len();
+
+                // Redraw line
+                redraw_line(&term_for_closure, &buffer, *cursor);
+            });
+        });
+    }) as Box<dyn FnMut(_)>);
+
+    term.on_data(callback.as_ref().unchecked_ref());
     callback.forget();
 }
 
