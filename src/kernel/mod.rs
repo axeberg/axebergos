@@ -17,6 +17,7 @@ pub mod ipc;
 pub mod memory;
 pub mod object;
 pub mod process;
+pub mod procfs;
 pub mod signal;
 pub mod syscall;
 pub mod task;

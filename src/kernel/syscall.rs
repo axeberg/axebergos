@@ -22,11 +22,12 @@ use super::object::{
     ConsoleObject, FileObject, KernelObject, ObjectTable, PipeObject, WindowId, WindowObject,
 };
 pub use super::process::{Fd, Handle, OpenFlags, Pgid, Pid, Process, ProcessState};
+use super::procfs::{generate_proc_content, ProcContext, ProcFs, SystemContext};
 use super::signal::{resolve_action, Signal, SignalAction, SignalError};
 use super::task::TaskId;
 use super::timer::{TimerId, TimerQueue};
 use super::trace::{TraceCategory, TraceSummary, Tracer};
-use super::users::{FileMode, Gid, Group, Uid, User, UserDb};
+use super::users::{Gid, Group, Uid, User, UserDb};
 use crate::vfs::{FileSystem, MemoryFs, OpenOptions as VfsOpenOptions};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -321,6 +322,8 @@ pub enum SyscallError {
     Interrupted,
     /// Not a directory
     NotADirectory,
+    /// Is a directory (can't read/write)
+    IsADirectory,
     /// Already exists
     AlreadyExists,
 }
@@ -342,6 +345,7 @@ impl std::fmt::Display for SyscallError {
             SyscallError::Signal(e) => write!(f, "signal error: {}", e),
             SyscallError::Interrupted => write!(f, "interrupted by signal"),
             SyscallError::NotADirectory => write!(f, "not a directory"),
+            SyscallError::IsADirectory => write!(f, "is a directory"),
             SyscallError::AlreadyExists => write!(f, "already exists"),
         }
     }
@@ -411,6 +415,8 @@ pub struct Kernel {
     tracer: Tracer,
     /// User and group database
     users: UserDb,
+    /// Proc filesystem handler
+    procfs: ProcFs,
 }
 
 /// Simple PRNG for /dev/random and /dev/urandom
@@ -478,6 +484,7 @@ impl Kernel {
             now: 0.0,
             tracer: Tracer::new(),
             users: UserDb::new(),
+            procfs: ProcFs::new(),
         }
     }
 
@@ -614,8 +621,11 @@ impl Kernel {
         let resolved = self.resolve_path(current, path)?;
 
         // Handle special paths
-        let handle = if resolved.starts_with("/dev/") {
+        let resolved_str = resolved.to_string_lossy();
+        let handle = if resolved_str.starts_with("/dev/") {
             self.open_device(&resolved, flags)?
+        } else if ProcFs::is_proc_path(&resolved_str) {
+            self.open_proc(&resolved_str, current)?
         } else {
             self.open_file(&resolved, flags)?
         };
@@ -624,6 +634,88 @@ impl Kernel {
         let process = self.processes.get_mut(&current).unwrap();
         let fd = process.files.alloc(handle);
         Ok(fd)
+    }
+
+    /// Open a /proc file
+    fn open_proc(&mut self, path: &str, current_pid: Pid) -> SyscallResult<Handle> {
+        // Get list of PIDs for procfs
+        let pids: Vec<u32> = self.processes.keys().map(|p| p.0).collect();
+
+        // Check if path exists in procfs
+        if !self.procfs.exists(path, &pids) {
+            return Err(SyscallError::NotFound);
+        }
+
+        // Check if it's a directory
+        if self.procfs.is_dir(path, &pids) {
+            return Err(SyscallError::IsADirectory);
+        }
+
+        // Generate system context
+        let sys_stats = self.memory.system_stats();
+        let sys_ctx = SystemContext {
+            uptime_secs: self.now,
+            total_memory: 64 * 1024 * 1024, // 64MB simulated
+            used_memory: sys_stats.total_allocated as u64,
+            free_memory: 64 * 1024 * 1024 - sys_stats.total_allocated as u64,
+            num_processes: self.processes.len(),
+        };
+
+        // Determine which PID the path refers to
+        let target_pid = if path.starts_with("/proc/self/") {
+            Some(current_pid)
+        } else if let Some(rest) = path.strip_prefix("/proc/") {
+            let parts: Vec<&str> = rest.split('/').collect();
+            if !parts.is_empty() {
+                parts[0].parse::<u32>().ok().map(Pid)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Generate process context if needed
+        let proc_ctx = target_pid.and_then(|pid| {
+            self.processes.get(&pid).map(|p| {
+                let _environ: Vec<(String, String)> = p.environ.clone().into_iter().collect();
+                ProcContext {
+                    pid: p.pid.0,
+                    ppid: p.parent.map(|pp| pp.0),
+                    name: &p.name,
+                    state: match &p.state {
+                        ProcessState::Running => "R (running)",
+                        ProcessState::Sleeping => "S (sleeping)",
+                        ProcessState::Stopped => "T (stopped)",
+                        ProcessState::Zombie(_) => "Z (zombie)",
+                        ProcessState::Blocked(_) => "D (blocked)",
+                    },
+                    uid: p.uid.0,
+                    gid: p.gid.0,
+                    cwd: p.cwd.to_str().unwrap_or("/"),
+                    cmdline: &p.name,
+                    environ: &[],  // Will be filled from snapshot
+                    memory_used: p.memory.stats().allocated as u64,
+                    memory_limit: p.memory.stats().limit as u64,
+                }
+            })
+        });
+
+        // Generate file content
+        let content = generate_proc_content(path, current_pid.0, proc_ctx.as_ref(), &sys_ctx)
+            .ok_or(SyscallError::NotFound)?;
+
+        // Create a file object with the generated content
+        let file = FileObject {
+            path: PathBuf::from(path),
+            position: 0,
+            data: content,
+            readable: true,
+            writable: false,
+        };
+
+        let handle = self.objects.insert(KernelObject::File(file));
+        Ok(handle)
     }
 
     /// Read from a file descriptor
@@ -1099,6 +1191,16 @@ impl Kernel {
         let current = self.current.ok_or(SyscallError::NoProcess)?;
         let resolved = self.resolve_path(current, path)?;
         let path_str = resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
+
+        // Handle /proc directory listings
+        if ProcFs::is_proc_path(path_str) {
+            let pids: Vec<u32> = self.processes.keys().map(|p| p.0).collect();
+            if let Some(entries) = self.procfs.list_dir(path_str, &pids) {
+                return Ok(entries);
+            }
+            return Err(SyscallError::NotFound);
+        }
+
         let entries = self.vfs.read_dir(path_str)?;
         Ok(entries.into_iter().map(|e| e.name).collect())
     }
@@ -1108,6 +1210,13 @@ impl Kernel {
         let current = self.current.ok_or(SyscallError::NoProcess)?;
         let resolved = self.resolve_path(current, path)?;
         let path_str = resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
+
+        // Handle /proc paths
+        if ProcFs::is_proc_path(path_str) {
+            let pids: Vec<u32> = self.processes.keys().map(|p| p.0).collect();
+            return Ok(self.procfs.exists(path_str, &pids));
+        }
+
         Ok(self.vfs.exists(path_str))
     }
 
@@ -1116,6 +1225,23 @@ impl Kernel {
         let current = self.current.ok_or(SyscallError::NoProcess)?;
         let resolved = self.resolve_path(current, path)?;
         let path_str = resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
+
+        // Handle /proc paths
+        if ProcFs::is_proc_path(path_str) {
+            let pids: Vec<u32> = self.processes.keys().map(|p| p.0).collect();
+            if !self.procfs.exists(path_str, &pids) {
+                return Err(SyscallError::NotFound);
+            }
+            let is_dir = self.procfs.is_dir(path_str, &pids);
+            return Ok(FileMetadata {
+                size: 0, // /proc files have dynamic size
+                is_dir,
+                is_file: !is_dir,
+                is_symlink: false,
+                symlink_target: None,
+            });
+        }
+
         let meta = self.vfs.metadata(path_str)?;
         Ok(FileMetadata {
             size: meta.size,
@@ -2866,5 +2992,93 @@ mod tests {
             assert_eq!(events[1].name, "open");
             assert!(events[1].detail.is_none());
         });
+    }
+
+    // ========== /proc Filesystem Tests ==========
+
+    #[test]
+    fn test_proc_uptime() {
+        setup_test_kernel();
+
+        // Open /proc/uptime
+        let fd = open("/proc/uptime", OpenFlags::READ).unwrap();
+        let mut buf = [0u8; 64];
+        let n = read(fd, &mut buf).unwrap();
+        close(fd).unwrap();
+
+        // Should contain uptime value
+        let content = std::str::from_utf8(&buf[..n]).unwrap();
+        assert!(content.contains('.'), "uptime should have decimal point");
+    }
+
+    #[test]
+    fn test_proc_self_status() {
+        setup_test_kernel();
+
+        // Open /proc/self/status
+        let fd = open("/proc/self/status", OpenFlags::READ).unwrap();
+        let mut buf = [0u8; 512];
+        let n = read(fd, &mut buf).unwrap();
+        close(fd).unwrap();
+
+        let content = std::str::from_utf8(&buf[..n]).unwrap();
+        // Should have standard Linux-style status fields
+        assert!(content.contains("Name:"), "should have Name field");
+        assert!(content.contains("State:"), "should have State field");
+        assert!(content.contains("Pid:"), "should have Pid field");
+        assert!(content.contains("Uid:"), "should have Uid field");
+    }
+
+    #[test]
+    fn test_proc_readdir() {
+        setup_test_kernel();
+
+        let entries = readdir("/proc").unwrap();
+        // Should have uptime, meminfo, and at least one PID
+        assert!(entries.contains(&"uptime".to_string()));
+        assert!(entries.contains(&"meminfo".to_string()));
+        assert!(entries.contains(&"cpuinfo".to_string()));
+        assert!(entries.contains(&"version".to_string()));
+        assert!(entries.contains(&"self".to_string()));
+    }
+
+    #[test]
+    fn test_proc_pid_dir() {
+        setup_test_kernel();
+
+        let my_pid = getpid().unwrap();
+        let pid_path = format!("/proc/{}", my_pid.0);
+
+        // Should be able to read the PID directory
+        let entries = readdir(&pid_path).unwrap();
+        assert!(entries.contains(&"status".to_string()));
+        assert!(entries.contains(&"cmdline".to_string()));
+        assert!(entries.contains(&"environ".to_string()));
+    }
+
+    #[test]
+    fn test_proc_exists() {
+        setup_test_kernel();
+
+        assert!(exists("/proc").unwrap());
+        assert!(exists("/proc/uptime").unwrap());
+        assert!(exists("/proc/self").unwrap());
+        assert!(exists("/proc/self/status").unwrap());
+        assert!(!exists("/proc/nonexistent").unwrap());
+    }
+
+    #[test]
+    fn test_proc_metadata() {
+        setup_test_kernel();
+
+        // /proc is a directory
+        let meta = metadata("/proc").unwrap();
+        assert!(meta.is_dir);
+        assert!(!meta.is_file);
+
+        // /proc/uptime is a file
+        let meta = metadata("/proc/uptime").unwrap();
+        assert!(!meta.is_dir);
+        assert!(meta.is_file);
     }
 }
