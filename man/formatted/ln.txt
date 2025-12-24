@@ -30,4 +30,4 @@ EXAMPLES
 SEE ALSO
        readlink(1)
 
-                                  2025-12-23                             ln(1)
+                                  2025-12-24                             ln(1)

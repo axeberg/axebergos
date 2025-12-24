@@ -27,4 +27,4 @@ EXAMPLES
 SEE ALSO
        head(1), tail(1), tee(1)
 
-                                  2025-12-23                            cat(1)
+                                  2025-12-24                            cat(1)

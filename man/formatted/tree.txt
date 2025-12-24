@@ -22,4 +22,4 @@ EXAMPLES
 SEE ALSO
        ls(1)
 
-                                  2025-12-23                           tree(1)
+                                  2025-12-24                           tree(1)

@@ -40,4 +40,4 @@ EXAMPLES
 SEE ALSO
        cat(1), head(1), tail(1)
 
-                                  2025-12-23                           grep(1)
+                                  2025-12-24                           grep(1)

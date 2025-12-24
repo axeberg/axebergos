@@ -21,4 +21,4 @@ EXAMPLES
 SEE ALSO
        mkdir(1), rm(1)
 
-                                  2025-12-23                          touch(1)
+                                  2025-12-24                          touch(1)

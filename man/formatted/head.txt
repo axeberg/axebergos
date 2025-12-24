@@ -31,4 +31,4 @@ EXAMPLES
 SEE ALSO
        tail(1), cat(1)
 
-                                  2025-12-23                           head(1)
+                                  2025-12-24                           head(1)

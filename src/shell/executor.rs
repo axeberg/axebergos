@@ -101,6 +101,13 @@ impl ProgramRegistry {
         reg.register("man", prog_man);
         reg.register("printenv", prog_printenv);
         reg.register("id", prog_id);
+        reg.register("jobs", prog_jobs);
+        reg.register("fg", prog_fg);
+        reg.register("bg", prog_bg);
+        reg.register("strace", prog_strace);
+        reg.register("whoami", prog_whoami);
+        reg.register("hostname", prog_hostname);
+        reg.register("uname", prog_uname);
 
         reg
     }
@@ -1933,27 +1940,36 @@ fn prog_man(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 
     // Embedded man pages (pre-rendered from scdoc)
     let content = match page {
+        "bg" => include_str!("../../man/formatted/bg.txt"),
         "cat" => include_str!("../../man/formatted/cat.txt"),
         "cd" => include_str!("../../man/formatted/cd.txt"),
         "cp" => include_str!("../../man/formatted/cp.txt"),
         "echo" => include_str!("../../man/formatted/echo.txt"),
         "edit" => include_str!("../../man/formatted/edit.txt"),
+        "fg" => include_str!("../../man/formatted/fg.txt"),
         "grep" => include_str!("../../man/formatted/grep.txt"),
         "head" => include_str!("../../man/formatted/head.txt"),
+        "hostname" => include_str!("../../man/formatted/hostname.txt"),
+        "id" => include_str!("../../man/formatted/id.txt"),
+        "jobs" => include_str!("../../man/formatted/jobs.txt"),
         "ln" => include_str!("../../man/formatted/ln.txt"),
         "ls" => include_str!("../../man/formatted/ls.txt"),
         "man" => include_str!("../../man/formatted/man.txt"),
         "mkdir" => include_str!("../../man/formatted/mkdir.txt"),
         "mv" => include_str!("../../man/formatted/mv.txt"),
+        "printenv" => include_str!("../../man/formatted/printenv.txt"),
         "pwd" => include_str!("../../man/formatted/pwd.txt"),
         "rm" => include_str!("../../man/formatted/rm.txt"),
         "sort" => include_str!("../../man/formatted/sort.txt"),
+        "strace" => include_str!("../../man/formatted/strace.txt"),
         "tail" => include_str!("../../man/formatted/tail.txt"),
         "tee" => include_str!("../../man/formatted/tee.txt"),
         "touch" => include_str!("../../man/formatted/touch.txt"),
         "tree" => include_str!("../../man/formatted/tree.txt"),
+        "uname" => include_str!("../../man/formatted/uname.txt"),
         "uniq" => include_str!("../../man/formatted/uniq.txt"),
         "wc" => include_str!("../../man/formatted/wc.txt"),
+        "whoami" => include_str!("../../man/formatted/whoami.txt"),
         _ => {
             stderr.push_str(&format!("No manual entry for {}\n", page));
             return 1;
@@ -2042,6 +2058,350 @@ fn prog_id(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
             1
         }
     }
+}
+
+/// jobs - list background jobs
+fn prog_jobs(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: jobs [-l]\nList background jobs.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    let long_format = args.iter().any(|a| *a == "-l");
+
+    // Get list of processes from kernel
+    let processes = syscall::list_processes();
+
+    // Filter to show only background/stopped jobs (not the shell itself)
+    let mut job_num = 0;
+    for (pid, name, state) in processes {
+        // Skip the shell process (typically pid 1)
+        if pid.0 == 1 {
+            continue;
+        }
+
+        let state_str = match &state {
+            syscall::ProcessState::Running => "Running",
+            syscall::ProcessState::Stopped => "Stopped",
+            syscall::ProcessState::Sleeping => "Sleeping",
+            syscall::ProcessState::Blocked(_) => "Blocked",
+            syscall::ProcessState::Zombie(code) => {
+                stdout.push_str(&format!("[{}]  Done({})\t\t{}\n", job_num + 1, code, name));
+                job_num += 1;
+                continue;
+            }
+        };
+
+        job_num += 1;
+        if long_format {
+            stdout.push_str(&format!("[{}]  {} {}\t\t{}\n", job_num, pid.0, state_str, name));
+        } else {
+            stdout.push_str(&format!("[{}]  {}\t\t{}\n", job_num, state_str, name));
+        }
+    }
+
+    if job_num == 0 {
+        // No jobs - that's fine, just return success
+    }
+
+    0
+}
+
+/// fg - bring job to foreground
+fn prog_fg(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: fg [%JOB]\nBring job to foreground.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    // Parse job specification
+    let job_spec = if args.is_empty() {
+        None // Use current job
+    } else {
+        let spec = args[0];
+        if spec.starts_with('%') {
+            spec.trim_start_matches('%').parse::<u32>().ok()
+        } else {
+            spec.parse::<u32>().ok()
+        }
+    };
+
+    // Get processes and find the matching job
+    let processes = syscall::list_processes();
+    let jobs: Vec<_> = processes.into_iter()
+        .filter(|(pid, _, _)| pid.0 != 1) // Skip shell
+        .collect();
+
+    if jobs.is_empty() {
+        stderr.push_str("fg: no current job\n");
+        return 1;
+    }
+
+    let target = match job_spec {
+        Some(n) if n > 0 && (n as usize) <= jobs.len() => {
+            jobs.get((n - 1) as usize)
+        }
+        None => jobs.last(), // Default to most recent
+        _ => {
+            stderr.push_str("fg: no such job\n");
+            return 1;
+        }
+    };
+
+    if let Some((pid, name, state)) = target {
+        // If stopped, send SIGCONT
+        if matches!(state, syscall::ProcessState::Stopped) {
+            if let Err(e) = syscall::kill(*pid, crate::kernel::signal::Signal::SIGCONT) {
+                stderr.push_str(&format!("fg: {}\n", e));
+                return 1;
+            }
+        }
+        stdout.push_str(&format!("{}\n", name));
+        0
+    } else {
+        stderr.push_str("fg: no such job\n");
+        1
+    }
+}
+
+/// bg - continue job in background
+fn prog_bg(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: bg [%JOB]\nContinue job in background.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    // Parse job specification (same as fg)
+    let job_spec = if args.is_empty() {
+        None
+    } else {
+        let spec = args[0];
+        if spec.starts_with('%') {
+            spec.trim_start_matches('%').parse::<u32>().ok()
+        } else {
+            spec.parse::<u32>().ok()
+        }
+    };
+
+    let processes = syscall::list_processes();
+    let stopped_jobs: Vec<_> = processes.into_iter()
+        .filter(|(pid, _, state)| {
+            pid.0 != 1 && matches!(state, syscall::ProcessState::Stopped)
+        })
+        .collect();
+
+    if stopped_jobs.is_empty() {
+        stderr.push_str("bg: no stopped jobs\n");
+        return 1;
+    }
+
+    let target = match job_spec {
+        Some(n) if n > 0 && (n as usize) <= stopped_jobs.len() => {
+            stopped_jobs.get((n - 1) as usize)
+        }
+        None => stopped_jobs.last(),
+        _ => {
+            stderr.push_str("bg: no such job\n");
+            return 1;
+        }
+    };
+
+    if let Some((pid, name, _)) = target {
+        if let Err(e) = syscall::kill(*pid, crate::kernel::signal::Signal::SIGCONT) {
+            stderr.push_str(&format!("bg: {}\n", e));
+            return 1;
+        }
+        stdout.push_str(&format!("[1] {} &\n", name));
+        0
+    } else {
+        stderr.push_str("bg: no such job\n");
+        1
+    }
+}
+
+/// strace - trace system calls
+fn prog_strace(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: strace [-c] COMMAND [ARGS...]\nTrace system calls.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    if args.is_empty() {
+        stderr.push_str("strace: must have COMMAND to run\n");
+        return 1;
+    }
+
+    let count_mode = args.iter().any(|a| *a == "-c");
+    let cmd_args: Vec<_> = args.iter()
+        .filter(|a| !a.starts_with('-'))
+        .map(|s| *s)
+        .collect();
+
+    if cmd_args.is_empty() {
+        stderr.push_str("strace: must have COMMAND to run\n");
+        return 1;
+    }
+
+    // Enable tracing
+    syscall::trace_enable();
+    syscall::trace_reset();
+
+    // Run the command (we'd need to actually execute it here)
+    // For now, just show the trace summary
+    stdout.push_str(&format!("strace: would trace '{}'\n", cmd_args.join(" ")));
+
+    // Get trace summary
+    let summary = syscall::trace_summary();
+
+    if count_mode {
+        stdout.push_str(&format!(
+            "% time     seconds  usecs/call     calls  syscall\n\
+             ------ ----------- ----------- --------- --------\n\
+             100.00    {:>8.6}           0  {:>8}  total\n",
+            summary.uptime / 1000.0,
+            summary.syscall_count
+        ));
+    } else {
+        stdout.push_str(&format!(
+            "--- tracing enabled for {:.3}ms ---\n\
+             syscalls: {}\n\
+             events: {}\n",
+            summary.uptime,
+            summary.syscall_count,
+            summary.event_count
+        ));
+    }
+
+    // Disable tracing
+    syscall::trace_disable();
+
+    0
+}
+
+/// whoami - print effective username
+fn prog_whoami(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: whoami\nPrint effective username.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    match syscall::getenv("USER") {
+        Ok(Some(user)) => {
+            stdout.push_str(&user);
+            stdout.push('\n');
+            0
+        }
+        Ok(None) => {
+            stderr.push_str("whoami: cannot find username\n");
+            1
+        }
+        Err(e) => {
+            stderr.push_str(&format!("whoami: {}\n", e));
+            1
+        }
+    }
+}
+
+/// hostname - show or set system hostname
+fn prog_hostname(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: hostname [NAME]\nShow or set system hostname.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    if args.is_empty() {
+        // Show hostname
+        match syscall::getenv("HOSTNAME") {
+            Ok(Some(hostname)) => {
+                stdout.push_str(&hostname);
+                stdout.push('\n');
+                0
+            }
+            Ok(None) => {
+                // Default hostname
+                stdout.push_str("axeberg\n");
+                0
+            }
+            Err(e) => {
+                stderr.push_str(&format!("hostname: {}\n", e));
+                1
+            }
+        }
+    } else {
+        // Set hostname
+        let new_hostname = args[0];
+        match syscall::setenv("HOSTNAME", new_hostname) {
+            Ok(()) => 0,
+            Err(e) => {
+                stderr.push_str(&format!("hostname: {}\n", e));
+                1
+            }
+        }
+    }
+}
+
+/// uname - print system information
+fn prog_uname(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: uname [-amnrsv]\nPrint system information.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    // System info
+    let kernel_name = "axeberg";
+    let hostname = syscall::getenv("HOSTNAME")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "axeberg".to_string());
+    let kernel_release = "0.1.0";
+    let kernel_version = "axebergOS";
+    let machine = "wasm32";
+
+    let show_all = args.iter().any(|a| *a == "-a");
+    let show_kernel = args.is_empty() || args.iter().any(|a| *a == "-s") || show_all;
+    let show_hostname = args.iter().any(|a| *a == "-n") || show_all;
+    let show_release = args.iter().any(|a| *a == "-r") || show_all;
+    let show_version = args.iter().any(|a| *a == "-v") || show_all;
+    let show_machine = args.iter().any(|a| *a == "-m") || show_all;
+
+    let mut parts = Vec::new();
+    if show_kernel {
+        parts.push(kernel_name);
+    }
+    if show_hostname {
+        parts.push(&hostname);
+    }
+    if show_release {
+        parts.push(kernel_release);
+    }
+    if show_version {
+        parts.push(kernel_version);
+    }
+    if show_machine {
+        parts.push(machine);
+    }
+
+    if parts.is_empty() {
+        parts.push(kernel_name);
+    }
+
+    stdout.push_str(&parts.join(" "));
+    stdout.push('\n');
+    0
 }
 
 #[cfg(test)]

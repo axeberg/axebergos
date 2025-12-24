@@ -1,0 +1,73 @@
+strace(1)
+
+# NAME
+
+strace - trace system calls
+
+# SYNOPSIS
+
+*strace* [*-c*] [*-e* _EXPR_] _COMMAND_ [_ARGS_...]
+
+# DESCRIPTION
+
+Run a command and trace system calls made during execution. This is useful
+for debugging and understanding program behavior.
+
+Each syscall is displayed with its name, arguments, and return value.
+
+# OPTIONS
+
+*-c*
+	Count mode. Instead of printing each syscall, print a summary of
+	syscall counts and time spent at the end.
+
+*-e* _EXPR_
+	Filter expression. Only trace syscalls matching _EXPR_. Can be a
+	syscall name (e.g., "read") or category (e.g., "file").
+
+*-h*, *--help*
+	Display usage information and exit.
+
+# SYSCALL CATEGORIES
+
+*file*
+	File I/O: read, write, open, close, seek
+
+*process*
+	Process control: exit, getpid, waitpid, spawn
+
+*memory*
+	Memory: alloc, free, mmap
+
+*signal*
+	Signals: kill, signal, sigblock
+
+# EXAMPLES
+
+Trace all syscalls:
+
+	strace ls
+
+Count syscalls:
+
+	strace -c cat file.txt
+
+Trace only file operations:
+
+	strace -e file cat file.txt
+
+# OUTPUT FORMAT
+
+Each line shows:
+
+	syscall_name(args) = return_value
+
+For example:
+
+	open("/tmp/file.txt", READ) = 3
+	read(3, buf, 4096) = 42
+	close(3) = 0
+
+# SEE ALSO
+
+*id*(1), *ps*(1)

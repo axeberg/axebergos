@@ -1,0 +1,35 @@
+hostname(1)                 General Commands Manual                hostname(1)
+
+NAME
+       hostname - show or set system hostname
+
+SYNOPSIS
+       hostname [NAME]
+
+DESCRIPTION
+       Display  or set the system hostname. If no argument is given, print the
+       current hostname. If NAME is provided, set the hostname to that value.
+
+       The hostname is stored in the HOSTNAME environment variable.
+
+OPTIONS
+       -h, --help
+           Display usage information and exit.
+
+EXAMPLES
+       Show current hostname:
+
+           hostname
+
+       Set hostname:
+
+           hostname axeberg
+
+ENVIRONMENT
+       HOSTNAME
+           The system hostname.
+
+SEE ALSO
+       uname(1), printenv(1)
+
+                                  2025-12-24                       hostname(1)

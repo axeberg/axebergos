@@ -1,0 +1,35 @@
+id(1)                       General Commands Manual                      id(1)
+
+NAME
+       id - print process and user identification
+
+SYNOPSIS
+       id
+
+DESCRIPTION
+       Print information about the current process, including:
+
+       o   pid - Process ID
+       o   ppid - Parent process ID
+       o   pgid - Process group ID
+       o   user - Current username (from USER environment variable)
+       o   home - Home directory (from HOME environment variable)
+
+
+OPTIONS
+       -h, --help
+           Display usage information and exit.
+
+EXAMPLES
+       Show process information:
+
+           id
+
+       Example output:
+
+           pid=1 ppid=(none) pgid=1 user=user home=/home/user
+
+SEE ALSO
+       printenv(1), ps(1)
+
+                                  2025-12-24                             id(1)

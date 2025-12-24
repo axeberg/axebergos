@@ -36,4 +36,4 @@ EXAMPLES
 SEE ALSO
        cat(1)
 
-                                  2025-12-23                             wc(1)
+                                  2025-12-24                             wc(1)

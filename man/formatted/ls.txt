@@ -34,4 +34,4 @@ EXAMPLES
 SEE ALSO
        cd(1), tree(1)
 
-                                  2025-12-23                             ls(1)
+                                  2025-12-24                             ls(1)
