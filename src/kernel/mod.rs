@@ -14,6 +14,7 @@
 pub mod devfs;
 pub mod events;
 pub mod executor;
+pub mod init;
 pub mod ipc;
 pub mod memory;
 pub mod object;
@@ -32,6 +33,7 @@ pub mod wasm;
 mod invariants_test;
 
 pub use executor::{Executor, Priority};
+pub use init::{InitSystem, RestartPolicy, Service, ServiceConfig, ServiceState, ServiceStatus, Target};
 pub use ipc::{channel, Receiver, Sender};
 pub use memory::{MemoryError, MemoryStats, Protection, RegionId, ShmId, ShmInfo, SystemMemoryStats};
 pub use process::{Fd, Handle, OpenFlags, Pid};

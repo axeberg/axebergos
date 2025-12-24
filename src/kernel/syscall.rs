@@ -23,6 +23,7 @@ use super::object::{
 };
 pub use super::process::{Fd, Handle, OpenFlags, Pgid, Pid, Process, ProcessState};
 use super::devfs::DevFs;
+use super::init::InitSystem;
 use super::procfs::{generate_proc_content, ProcContext, ProcFs, SystemContext};
 use super::signal::{resolve_action, Signal, SignalAction, SignalError};
 use super::sysfs::SysFs;
@@ -423,6 +424,8 @@ pub struct Kernel {
     devfs: DevFs,
     /// Sysfs handler
     sysfs: SysFs,
+    /// Init system (service manager)
+    init: InitSystem,
 }
 
 /// Simple PRNG for /dev/random and /dev/urandom
@@ -493,6 +496,7 @@ impl Kernel {
             procfs: ProcFs::new(),
             devfs: DevFs::new(),
             sysfs: SysFs::new(),
+            init: InitSystem::new(),
         }
     }
 
@@ -509,6 +513,16 @@ impl Kernel {
     /// Replace the VFS (for restoring from persistence)
     pub fn set_vfs(&mut self, vfs: MemoryFs) {
         self.vfs = vfs;
+    }
+
+    /// Get a reference to the init system
+    pub fn init(&self) -> &InitSystem {
+        &self.init
+    }
+
+    /// Get a mutable reference to the init system
+    pub fn init_mut(&mut self) -> &mut InitSystem {
+        &mut self.init
     }
 
     /// Get the currently running process
