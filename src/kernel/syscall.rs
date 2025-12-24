@@ -5,6 +5,14 @@
 //! - Isolation: processes can only access what they have handles to
 //! - Auditing: all operations go through a single point
 //! - Safety: the kernel validates all operations
+//! - Tracing: system instrumentation for performance analysis
+//!
+//! Inspired by Linux syscall architecture:
+//! - Each syscall has a unique number (SyscallNr) for ABI stability
+//! - Unified dispatch mechanism for hooking and interposition
+//! - Standard error codes (SyscallError maps to errno-like semantics)
+//! - Process groups for job control (fg/bg)
+//! - Environment variables per-process
 
 use super::memory::{
     MemoryError, MemoryManager, MemoryStats, Protection, RegionId, ShmId, ShmInfo,
@@ -13,7 +21,7 @@ use super::memory::{
 use super::object::{
     ConsoleObject, FileObject, KernelObject, ObjectTable, PipeObject, WindowId, WindowObject,
 };
-pub use super::process::{Fd, Handle, OpenFlags, Pid, Process, ProcessState};
+pub use super::process::{Fd, Handle, OpenFlags, Pgid, Pid, Process, ProcessState};
 use super::signal::{resolve_action, Signal, SignalAction, SignalError};
 use super::task::TaskId;
 use super::timer::{TimerId, TimerQueue};
@@ -23,6 +31,237 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
+
+// ========== SYSCALL NUMBERS ==========
+// Inspired by Linux: each syscall has a unique number for ABI stability,
+// debugging, and tracing. Numbers are grouped by category.
+
+/// Syscall numbers for the axeberg kernel
+///
+/// These provide a stable ABI for system calls. Like Linux, we use
+/// numeric identifiers that can be traced and hooked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u32)]
+pub enum SyscallNr {
+    // File I/O (0-49)
+    Read = 0,
+    Write = 1,
+    Open = 2,
+    Close = 3,
+    Seek = 5,
+    Pipe = 22,
+    Dup = 41,
+
+    // Filesystem (50-99)
+    Mkdir = 50,
+    Readdir = 51,
+    Unlink = 52,
+    Rmdir = 53,
+    Rename = 54,
+    Symlink = 55,
+    Readlink = 56,
+    Stat = 57,
+    Copy = 58,
+
+    // Process (100-149)
+    Exit = 100,
+    Getpid = 101,
+    Getppid = 102,
+    Spawn = 103,
+    Waitpid = 104,
+    Getcwd = 105,
+    Chdir = 106,
+    Getpgid = 107,
+    Setpgid = 108,
+
+    // Environment (150-174)
+    Getenv = 150,
+    Setenv = 151,
+    Unsetenv = 152,
+    Environ = 153,
+
+    // Memory (175-199)
+    MemAlloc = 175,
+    MemFree = 176,
+    MemRead = 177,
+    MemWrite = 178,
+    Shmget = 180,
+    Shmat = 181,
+    Shmdt = 182,
+    ShmSync = 183,
+    ShmRefresh = 184,
+
+    // Signals (200-224)
+    Kill = 200,
+    Signal = 201,
+    Sigblock = 202,
+    Sigunblock = 203,
+    Sigpending = 204,
+
+    // Timers (225-249)
+    TimerSet = 225,
+    TimerInterval = 226,
+    TimerCancel = 227,
+    Alarm = 228,
+    Now = 229,
+
+    // Device/ioctl (250-274)
+    Ioctl = 250,
+    WindowCreate = 251,
+
+    // Tracing (275-299)
+    TraceEnable = 275,
+    TraceDisable = 276,
+    TraceSummary = 277,
+}
+
+impl SyscallNr {
+    /// Get the syscall name (for tracing/debugging)
+    pub fn name(&self) -> &'static str {
+        match self {
+            SyscallNr::Read => "read",
+            SyscallNr::Write => "write",
+            SyscallNr::Open => "open",
+            SyscallNr::Close => "close",
+            SyscallNr::Seek => "seek",
+            SyscallNr::Pipe => "pipe",
+            SyscallNr::Dup => "dup",
+            SyscallNr::Mkdir => "mkdir",
+            SyscallNr::Readdir => "readdir",
+            SyscallNr::Unlink => "unlink",
+            SyscallNr::Rmdir => "rmdir",
+            SyscallNr::Rename => "rename",
+            SyscallNr::Symlink => "symlink",
+            SyscallNr::Readlink => "readlink",
+            SyscallNr::Stat => "stat",
+            SyscallNr::Copy => "copy",
+            SyscallNr::Exit => "exit",
+            SyscallNr::Getpid => "getpid",
+            SyscallNr::Getppid => "getppid",
+            SyscallNr::Spawn => "spawn",
+            SyscallNr::Waitpid => "waitpid",
+            SyscallNr::Getcwd => "getcwd",
+            SyscallNr::Chdir => "chdir",
+            SyscallNr::Getpgid => "getpgid",
+            SyscallNr::Setpgid => "setpgid",
+            SyscallNr::Getenv => "getenv",
+            SyscallNr::Setenv => "setenv",
+            SyscallNr::Unsetenv => "unsetenv",
+            SyscallNr::Environ => "environ",
+            SyscallNr::MemAlloc => "mem_alloc",
+            SyscallNr::MemFree => "mem_free",
+            SyscallNr::MemRead => "mem_read",
+            SyscallNr::MemWrite => "mem_write",
+            SyscallNr::Shmget => "shmget",
+            SyscallNr::Shmat => "shmat",
+            SyscallNr::Shmdt => "shmdt",
+            SyscallNr::ShmSync => "shm_sync",
+            SyscallNr::ShmRefresh => "shm_refresh",
+            SyscallNr::Kill => "kill",
+            SyscallNr::Signal => "signal",
+            SyscallNr::Sigblock => "sigblock",
+            SyscallNr::Sigunblock => "sigunblock",
+            SyscallNr::Sigpending => "sigpending",
+            SyscallNr::TimerSet => "timer_set",
+            SyscallNr::TimerInterval => "timer_interval",
+            SyscallNr::TimerCancel => "timer_cancel",
+            SyscallNr::Alarm => "alarm",
+            SyscallNr::Now => "now",
+            SyscallNr::Ioctl => "ioctl",
+            SyscallNr::WindowCreate => "window_create",
+            SyscallNr::TraceEnable => "trace_enable",
+            SyscallNr::TraceDisable => "trace_disable",
+            SyscallNr::TraceSummary => "trace_summary",
+        }
+    }
+
+    /// Get the syscall number
+    pub fn num(&self) -> u32 {
+        *self as u32
+    }
+}
+
+impl std::fmt::Display for SyscallNr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}({})", self.name(), self.num())
+    }
+}
+
+/// Wait status returned by waitpid
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaitStatus {
+    /// Child exited with status code
+    Exited(i32),
+    /// Child was killed by signal
+    Signaled(i32),
+    /// Child was stopped by signal
+    Stopped,
+    /// Child continued
+    Continued,
+    /// No child status available (WNOHANG)
+    NoChild,
+}
+
+/// Flags for waitpid
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WaitFlags {
+    /// Return immediately if no child has exited
+    pub nohang: bool,
+    /// Also return if child has stopped
+    pub untraced: bool,
+    /// Also return if stopped child has continued
+    pub continued: bool,
+}
+
+impl WaitFlags {
+    pub const NONE: WaitFlags = WaitFlags {
+        nohang: false,
+        untraced: false,
+        continued: false,
+    };
+
+    pub const NOHANG: WaitFlags = WaitFlags {
+        nohang: true,
+        untraced: false,
+        continued: false,
+    };
+}
+
+/// ioctl request codes (like Linux ioctl numbers)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum IoctlRequest {
+    /// Get terminal window size
+    GetWinSize = 0x5413,
+    /// Set terminal window size
+    SetWinSize = 0x5414,
+    /// Get terminal attributes
+    GetTermios = 0x5401,
+    /// Set terminal attributes
+    SetTermios = 0x5402,
+    /// Flush terminal I/O
+    TcFlush = 0x540B,
+}
+
+/// Terminal window size (for TIOCGWINSZ/TIOCSWINSZ)
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WinSize {
+    pub rows: u16,
+    pub cols: u16,
+    pub xpixel: u16,
+    pub ypixel: u16,
+}
+
+/// Result from ioctl syscall
+#[derive(Debug, Clone)]
+pub enum IoctlResult {
+    /// Success with no data
+    Ok,
+    /// Window size result
+    WinSize(WinSize),
+    /// Integer value
+    Value(i32),
+}
 
 /// System call error
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -452,6 +691,195 @@ impl Kernel {
     /// Get current process ID
     pub fn sys_getpid(&self) -> SyscallResult<Pid> {
         self.current.ok_or(SyscallError::NoProcess)
+    }
+
+    /// Get parent process ID
+    pub fn sys_getppid(&self) -> SyscallResult<Option<Pid>> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get(&current).unwrap();
+        Ok(process.parent)
+    }
+
+    // ========== ENVIRONMENT SYSCALLS ==========
+    // Like Linux: each process has its own environment (inherited on spawn)
+
+    /// Get an environment variable
+    pub fn sys_getenv(&self, name: &str) -> SyscallResult<Option<String>> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get(&current).unwrap();
+        Ok(process.getenv(name).map(|s| s.to_string()))
+    }
+
+    /// Set an environment variable
+    pub fn sys_setenv(&mut self, name: &str, value: &str) -> SyscallResult<()> {
+        if name.is_empty() || name.contains('=') {
+            return Err(SyscallError::InvalidArgument);
+        }
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get_mut(&current).unwrap();
+        process.setenv(name, value);
+        Ok(())
+    }
+
+    /// Remove an environment variable
+    pub fn sys_unsetenv(&mut self, name: &str) -> SyscallResult<bool> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get_mut(&current).unwrap();
+        Ok(process.unsetenv(name))
+    }
+
+    /// Get all environment variables
+    pub fn sys_environ(&self) -> SyscallResult<Vec<(String, String)>> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get(&current).unwrap();
+        Ok(process
+            .environ()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect())
+    }
+
+    // ========== WAITPID SYSCALL ==========
+    // Like Linux waitpid: wait for child process state changes
+
+    /// Wait for a child process to change state
+    ///
+    /// - pid > 0: wait for specific child
+    /// - pid = -1: wait for any child
+    /// - pid = 0: wait for any child in same process group
+    /// - pid < -1: wait for any child in process group |pid|
+    pub fn sys_waitpid(&mut self, pid: i32, flags: WaitFlags) -> SyscallResult<(Pid, WaitStatus)> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+
+        // Find matching children
+        let children: Vec<Pid> = {
+            let parent = self.processes.get(&current).ok_or(SyscallError::NoProcess)?;
+            let pgid = parent.pgid;
+
+            parent
+                .children
+                .iter()
+                .filter(|&child_pid| {
+                    if pid > 0 {
+                        // Wait for specific child
+                        child_pid.0 == pid as u32
+                    } else if pid == -1 {
+                        // Wait for any child
+                        true
+                    } else if pid == 0 {
+                        // Wait for any child in same process group
+                        self.processes
+                            .get(child_pid)
+                            .map(|p| p.pgid == pgid)
+                            .unwrap_or(false)
+                    } else {
+                        // Wait for any child in specified process group
+                        let target_pgid = Pgid((-pid) as u32);
+                        self.processes
+                            .get(child_pid)
+                            .map(|p| p.pgid == target_pgid)
+                            .unwrap_or(false)
+                    }
+                })
+                .copied()
+                .collect()
+        };
+
+        if children.is_empty() {
+            return Err(SyscallError::NoProcess);
+        }
+
+        // Look for a child that has changed state
+        for child_pid in children {
+            if let Some(child) = self.processes.get(&child_pid) {
+                match &child.state {
+                    ProcessState::Zombie(exit_code) => {
+                        let status = WaitStatus::Exited(*exit_code);
+                        // Reap the zombie
+                        self.processes.remove(&child_pid);
+                        // Remove from parent's children list
+                        if let Some(parent) = self.processes.get_mut(&current) {
+                            parent.children.retain(|&p| p != child_pid);
+                        }
+                        return Ok((child_pid, status));
+                    }
+                    ProcessState::Stopped if flags.untraced => {
+                        return Ok((child_pid, WaitStatus::Stopped));
+                    }
+                    ProcessState::Running if flags.continued => {
+                        // Check if it was recently continued
+                        // (In a full implementation, we'd track this separately)
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // No child ready
+        if flags.nohang {
+            Ok((Pid(0), WaitStatus::NoChild))
+        } else {
+            // In a real OS we'd block here
+            // For now, return no child (caller should retry)
+            Err(SyscallError::WouldBlock)
+        }
+    }
+
+    // ========== PROCESS GROUP SYSCALLS ==========
+    // Like Linux: process groups for job control (fg/bg)
+
+    /// Get process group ID
+    pub fn sys_getpgid(&self, pid: Pid) -> SyscallResult<Pgid> {
+        let process = self.processes.get(&pid).ok_or(SyscallError::NoProcess)?;
+        Ok(process.pgid)
+    }
+
+    /// Set process group ID
+    pub fn sys_setpgid(&mut self, pid: Pid, pgid: Pgid) -> SyscallResult<()> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+
+        // Can only setpgid on self or children
+        if pid != current {
+            let parent = self.processes.get(&current).ok_or(SyscallError::NoProcess)?;
+            if !parent.children.contains(&pid) {
+                return Err(SyscallError::PermissionDenied);
+            }
+        }
+
+        let process = self.processes.get_mut(&pid).ok_or(SyscallError::NoProcess)?;
+        process.pgid = pgid;
+        Ok(())
+    }
+
+    // ========== IOCTL SYSCALL ==========
+    // Like Linux ioctl: generic device control interface
+
+    /// Perform device-specific control operation
+    pub fn sys_ioctl(&mut self, fd: Fd, request: IoctlRequest) -> SyscallResult<IoctlResult> {
+        let handle = self.get_handle(fd)?;
+        let obj = self.objects.get_mut(handle).ok_or(SyscallError::BadFd)?;
+
+        match (obj, request) {
+            (KernelObject::Console(_), IoctlRequest::GetWinSize) => {
+                // Return current terminal size (from terminal module)
+                // For now, return a reasonable default
+                Ok(IoctlResult::WinSize(WinSize {
+                    rows: 24,
+                    cols: 80,
+                    xpixel: 0,
+                    ypixel: 0,
+                }))
+            }
+            (KernelObject::Console(_), IoctlRequest::SetWinSize) => {
+                // Setting window size from ioctl not supported in WASM
+                Err(SyscallError::InvalidArgument)
+            }
+            (KernelObject::Console(console), IoctlRequest::TcFlush) => {
+                console.clear_input();
+                Ok(IoctlResult::Ok)
+            }
+            _ => Err(SyscallError::InvalidArgument),
+        }
     }
 
     // ========== HELPERS ==========
@@ -1077,6 +1505,59 @@ pub fn exit(code: i32) -> SyscallResult<()> {
 /// Get current process ID
 pub fn getpid() -> SyscallResult<Pid> {
     KERNEL.with(|k| k.borrow().sys_getpid())
+}
+
+/// Get parent process ID
+pub fn getppid() -> SyscallResult<Option<Pid>> {
+    KERNEL.with(|k| k.borrow().sys_getppid())
+}
+
+// ========== ENVIRONMENT API ==========
+
+/// Get an environment variable
+pub fn getenv(name: &str) -> SyscallResult<Option<String>> {
+    KERNEL.with(|k| k.borrow().sys_getenv(name))
+}
+
+/// Set an environment variable
+pub fn setenv(name: &str, value: &str) -> SyscallResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_setenv(name, value))
+}
+
+/// Remove an environment variable
+pub fn unsetenv(name: &str) -> SyscallResult<bool> {
+    KERNEL.with(|k| k.borrow_mut().sys_unsetenv(name))
+}
+
+/// Get all environment variables
+pub fn environ() -> SyscallResult<Vec<(String, String)>> {
+    KERNEL.with(|k| k.borrow().sys_environ())
+}
+
+// ========== WAITPID API ==========
+
+/// Wait for a child process to change state
+pub fn waitpid(pid: i32, flags: WaitFlags) -> SyscallResult<(Pid, WaitStatus)> {
+    KERNEL.with(|k| k.borrow_mut().sys_waitpid(pid, flags))
+}
+
+// ========== PROCESS GROUP API ==========
+
+/// Get process group ID
+pub fn getpgid(pid: Pid) -> SyscallResult<Pgid> {
+    KERNEL.with(|k| k.borrow().sys_getpgid(pid))
+}
+
+/// Set process group ID
+pub fn setpgid(pid: Pid, pgid: Pgid) -> SyscallResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_setpgid(pid, pgid))
+}
+
+// ========== IOCTL API ==========
+
+/// Perform device-specific control operation
+pub fn ioctl(fd: Fd, request: IoctlRequest) -> SyscallResult<IoctlResult> {
+    KERNEL.with(|k| k.borrow_mut().sys_ioctl(fd, request))
 }
 
 /// Create a directory

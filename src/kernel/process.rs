@@ -2,13 +2,36 @@
 //!
 //! A process is the fundamental unit of isolation in axeberg.
 //! Each process has its own file descriptor table, working directory,
-//! and runs as an async task in the executor.
+//! environment variables, and runs as an async task in the executor.
+//!
+//! Inspired by Linux process model:
+//! - Process groups (pgid) for job control
+//! - Environment variables (inherited on spawn)
+//! - Parent/child relationships
+//! - Wait/reap semantics for zombie processes
 
 use super::memory::ProcessMemory;
 use super::signal::ProcessSignals;
 use super::TaskId;
 use std::collections::HashMap;
 use std::path::PathBuf;
+
+/// Process group identifier (for job control)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Pgid(pub u32);
+
+impl Pgid {
+    /// Create a PGID from a PID (new process group)
+    pub fn from_pid(pid: Pid) -> Self {
+        Pgid(pid.0)
+    }
+}
+
+impl std::fmt::Display for Pgid {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "pgid:{}", self.0)
+    }
+}
 
 /// Process identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -103,6 +126,9 @@ pub struct Process {
     /// Parent process (None for init)
     pub parent: Option<Pid>,
 
+    /// Process group ID (for job control, like Linux PGID)
+    pub pgid: Pgid,
+
     /// Current state
     pub state: ProcessState,
 
@@ -115,6 +141,9 @@ pub struct Process {
     /// Signal handling
     pub signals: ProcessSignals,
 
+    /// Environment variables (inherited on spawn, like Linux environ)
+    pub environ: HashMap<String, String>,
+
     /// Current working directory
     pub cwd: PathBuf,
 
@@ -123,37 +152,110 @@ pub struct Process {
 
     /// Process name (for debugging/display)
     pub name: String,
+
+    /// Child processes (for waitpid)
+    pub children: Vec<Pid>,
 }
 
 impl Process {
     /// Create a new process
     pub fn new(pid: Pid, name: String, parent: Option<Pid>) -> Self {
+        // Process group defaults to own PID (new session leader)
+        let pgid = Pgid::from_pid(pid);
+
+        // Default environment with common variables
+        let mut environ = HashMap::new();
+        environ.insert("HOME".to_string(), "/home/user".to_string());
+        environ.insert("USER".to_string(), "user".to_string());
+        environ.insert("SHELL".to_string(), "/bin/sh".to_string());
+        environ.insert("PATH".to_string(), "/bin:/usr/bin".to_string());
+        environ.insert("TERM".to_string(), "xterm-256color".to_string());
+
         Self {
             pid,
             parent,
+            pgid,
             state: ProcessState::Running,
             files: FileTable::new(),
             memory: ProcessMemory::new(),
             signals: ProcessSignals::new(),
+            environ,
             cwd: PathBuf::from("/"),
             task: None,
             name,
+            children: Vec::new(),
+        }
+    }
+
+    /// Create a process with inherited environment
+    pub fn with_environ(
+        pid: Pid,
+        name: String,
+        parent: Option<Pid>,
+        pgid: Pgid,
+        environ: HashMap<String, String>,
+        cwd: PathBuf,
+    ) -> Self {
+        Self {
+            pid,
+            parent,
+            pgid,
+            state: ProcessState::Running,
+            files: FileTable::new(),
+            memory: ProcessMemory::new(),
+            signals: ProcessSignals::new(),
+            environ,
+            cwd,
+            task: None,
+            name,
+            children: Vec::new(),
         }
     }
 
     /// Create a process with a memory limit
     pub fn with_memory_limit(pid: Pid, name: String, parent: Option<Pid>, limit: usize) -> Self {
+        let pgid = Pgid::from_pid(pid);
+        let mut environ = HashMap::new();
+        environ.insert("HOME".to_string(), "/home/user".to_string());
+        environ.insert("USER".to_string(), "user".to_string());
+        environ.insert("SHELL".to_string(), "/bin/sh".to_string());
+        environ.insert("PATH".to_string(), "/bin:/usr/bin".to_string());
+        environ.insert("TERM".to_string(), "xterm-256color".to_string());
+
         Self {
             pid,
             parent,
+            pgid,
             state: ProcessState::Running,
             files: FileTable::new(),
             memory: ProcessMemory::with_limit(limit),
             signals: ProcessSignals::new(),
+            environ,
             cwd: PathBuf::from("/"),
             task: None,
             name,
+            children: Vec::new(),
         }
+    }
+
+    /// Get an environment variable
+    pub fn getenv(&self, name: &str) -> Option<&str> {
+        self.environ.get(name).map(|s| s.as_str())
+    }
+
+    /// Set an environment variable
+    pub fn setenv(&mut self, name: &str, value: &str) {
+        self.environ.insert(name.to_string(), value.to_string());
+    }
+
+    /// Remove an environment variable
+    pub fn unsetenv(&mut self, name: &str) -> bool {
+        self.environ.remove(name).is_some()
+    }
+
+    /// Get all environment variables
+    pub fn environ(&self) -> &HashMap<String, String> {
+        &self.environ
     }
 
     /// Check if process is alive (not a zombie)

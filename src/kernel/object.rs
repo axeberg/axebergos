@@ -304,6 +304,16 @@ impl ConsoleObject {
     pub fn peek_output(&self) -> &[u8] {
         &self.output
     }
+
+    /// Clear the input buffer (for TCFLUSH)
+    pub fn clear_input(&mut self) {
+        self.input.clear();
+    }
+
+    /// Clear the output buffer
+    pub fn clear_output(&mut self) {
+        self.output.clear();
+    }
 }
 
 impl Default for ConsoleObject {

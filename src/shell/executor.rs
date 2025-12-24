@@ -99,6 +99,8 @@ impl ProgramRegistry {
         reg.register("readlink", prog_readlink);
         reg.register("edit", prog_edit);
         reg.register("man", prog_man);
+        reg.register("printenv", prog_printenv);
+        reg.register("id", prog_id);
 
         reg
     }
@@ -1960,6 +1962,86 @@ fn prog_man(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 
     stdout.push_str(content.trim());
     0
+}
+
+/// printenv - print environment variables (uses kernel syscalls)
+fn prog_printenv(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: printenv [NAME...]\nPrint environment variables from the kernel process.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    // Get environment from kernel
+    match syscall::environ() {
+        Ok(env) => {
+            if args.is_empty() {
+                // Print all environment variables
+                let mut vars: Vec<_> = env.iter().collect();
+                vars.sort_by(|a, b| a.0.cmp(&b.0));
+                for (name, value) in vars {
+                    stdout.push_str(&format!("{}={}\n", name, value));
+                }
+            } else {
+                // Print specific variables
+                let env_map: std::collections::HashMap<String, String> = env.into_iter().collect();
+                for name in args {
+                    if let Some(value) = env_map.get(&name.to_string()) {
+                        stdout.push_str(&format!("{}\n", value));
+                    }
+                }
+            }
+            0
+        }
+        Err(e) => {
+            stderr.push_str(&format!("printenv: {}\n", e));
+            1
+        }
+    }
+}
+
+/// id - print process and user IDs (uses kernel syscalls)
+fn prog_id(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: id\nPrint process ID, parent PID, and process group.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    // Get process info from kernel
+    match syscall::getpid() {
+        Ok(pid) => {
+            let ppid = syscall::getppid().ok().flatten();
+            let pgid = syscall::getpgid(pid).ok();
+
+            stdout.push_str(&format!("pid={}", pid.0));
+            if let Some(ppid) = ppid {
+                stdout.push_str(&format!(" ppid={}", ppid.0));
+            } else {
+                stdout.push_str(" ppid=(none)");
+            }
+            if let Some(pgid) = pgid {
+                stdout.push_str(&format!(" pgid={}", pgid.0));
+            }
+            stdout.push('\n');
+
+            // Also show environment info
+            if let Ok(Some(user)) = syscall::getenv("USER") {
+                stdout.push_str(&format!("user={}\n", user));
+            }
+            if let Ok(Some(home)) = syscall::getenv("HOME") {
+                stdout.push_str(&format!("home={}\n", home));
+            }
+
+            0
+        }
+        Err(e) => {
+            stderr.push_str(&format!("id: {}\n", e));
+            1
+        }
+    }
 }
 
 #[cfg(test)]
