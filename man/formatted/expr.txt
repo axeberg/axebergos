@@ -1,0 +1,99 @@
+[4mexpr[24m(1)                     General Commands Manual                    [4mexpr[24m(1)
+
+[1mNAME[0m
+       expr - evaluate expressions
+
+[1mSYNOPSIS[0m
+       [1mexpr [4m[22mEXPRESSION[0m
+
+[1mDESCRIPTION[0m
+       Evaluate  an  expression  and print the result to standard output. Sup‐
+       ports arithmetic, string, and logical operations.
+
+[1mOPTIONS[0m
+       [1m-h[22m, [1m--help[0m
+           Display usage information and exit.
+
+[1mARITHMETIC OPERATORS[0m
+       [4mNUM1[24m [1m+ [4m[22mNUM2[0m
+           Addition.
+
+       [4mNUM1[24m [1m- [4m[22mNUM2[0m
+           Subtraction.
+
+       [4mNUM1[24m [1m* [4m[22mNUM2[0m
+           Multiplication (escape the asterisk in shell).
+
+       [4mNUM1[24m [1m/ [4m[22mNUM2[0m
+           Integer division.
+
+       [4mNUM1[24m [1m% [4m[22mNUM2[0m
+           Modulo (remainder).
+
+[1mCOMPARISON OPERATORS[0m
+       [4mNUM1[24m [1m< [4m[22mNUM2[0m
+           Less than (returns 1 if true, 0 if false).
+
+       [4mNUM1[24m [1m<= [4m[22mNUM2[0m
+           Less than or equal.
+
+       [4mNUM1[24m [1m> [4m[22mNUM2[0m
+           Greater than.
+
+       [4mNUM1[24m [1m>= [4m[22mNUM2[0m
+           Greater than or equal.
+
+       [4mNUM1[24m [1m= [4m[22mNUM2[0m
+           Equal.
+
+       [4mNUM1[24m [1m!= [4m[22mNUM2[0m
+           Not equal.
+
+[1mSTRING OPERATIONS[0m
+       [1mlength [4m[22mSTRING[0m
+           Length of STRING.
+
+       [1msubstr [4m[22mSTRING[24m [4mPOS[24m [4mLEN[0m
+           Substring starting at POS (1-indexed) with length LEN.
+
+       [4mSTRING[24m [1m: [4m[22mPATTERN[0m
+           Pattern match (returns length of match).
+
+[1mLOGICAL OPERATORS[0m
+       [4mEXPR1[24m [1m& [4m[22mEXPR2[0m
+           AND: returns EXPR1 if both are non-zero, else 0.
+
+       [4mEXPR1[24m [1m| [4m[22mEXPR2[0m
+           OR: returns EXPR1 if non-zero, else EXPR2.
+
+[1mEXAMPLES[0m
+       Arithmetic:
+
+           expr 5 + 3 # Output: 8
+
+       Multiplication (note escaping):
+
+           expr 4 * 5 # Output: 20
+
+       String length:
+
+           expr length "hello" # Output: 5
+
+       Substring:
+
+           expr substr "hello" 2 3 # Output: ell
+
+[1mEXIT STATUS[0m
+       [1m0[0m
+           Expression evaluated to non-zero/non-null.
+
+       [1m1[0m
+           Expression evaluated to zero/null.
+
+       [1m2[0m
+           Invalid expression.
+
+[1mSEE ALSO[0m
+       [1mtest[22m(1), [1mseq[22m(1)
+
+                                  2025-12-24                           [4mexpr[24m(1)

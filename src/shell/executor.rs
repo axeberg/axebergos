@@ -123,6 +123,15 @@ impl ProgramRegistry {
         reg.register("cut", prog_cut);
         reg.register("tr", prog_tr);
         reg.register("xargs", prog_xargs);
+        reg.register("cal", prog_cal);
+        reg.register("printf", prog_printf);
+        reg.register("test", prog_test);
+        reg.register("[", prog_test);  // [ is an alias for test
+        reg.register("expr", prog_expr);
+        reg.register("which", prog_which);
+        reg.register("type", prog_type);
+        reg.register("uptime", prog_uptime);
+        reg.register("free", prog_free);
 
         reg
     }
@@ -1984,6 +1993,7 @@ fn prog_man(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
     let content = match page {
         "basename" => include_str!("../../man/formatted/basename.txt"),
         "bg" => include_str!("../../man/formatted/bg.txt"),
+        "cal" => include_str!("../../man/formatted/cal.txt"),
         "cat" => include_str!("../../man/formatted/cat.txt"),
         "cd" => include_str!("../../man/formatted/cd.txt"),
         "cp" => include_str!("../../man/formatted/cp.txt"),
@@ -1994,8 +2004,10 @@ fn prog_man(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
         "du" => include_str!("../../man/formatted/du.txt"),
         "echo" => include_str!("../../man/formatted/echo.txt"),
         "edit" => include_str!("../../man/formatted/edit.txt"),
+        "expr" => include_str!("../../man/formatted/expr.txt"),
         "fg" => include_str!("../../man/formatted/fg.txt"),
         "find" => include_str!("../../man/formatted/find.txt"),
+        "free" => include_str!("../../man/formatted/free.txt"),
         "grep" => include_str!("../../man/formatted/grep.txt"),
         "head" => include_str!("../../man/formatted/head.txt"),
         "hostname" => include_str!("../../man/formatted/hostname.txt"),
@@ -2008,6 +2020,7 @@ fn prog_man(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
         "mkdir" => include_str!("../../man/formatted/mkdir.txt"),
         "mv" => include_str!("../../man/formatted/mv.txt"),
         "printenv" => include_str!("../../man/formatted/printenv.txt"),
+        "printf" => include_str!("../../man/formatted/printf.txt"),
         "ps" => include_str!("../../man/formatted/ps.txt"),
         "pwd" => include_str!("../../man/formatted/pwd.txt"),
         "rev" => include_str!("../../man/formatted/rev.txt"),
@@ -2017,13 +2030,18 @@ fn prog_man(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
         "strace" => include_str!("../../man/formatted/strace.txt"),
         "tail" => include_str!("../../man/formatted/tail.txt"),
         "tee" => include_str!("../../man/formatted/tee.txt"),
+        "test" => include_str!("../../man/formatted/test.txt"),
+        "[" => include_str!("../../man/formatted/test.txt"),
         "time" => include_str!("../../man/formatted/time.txt"),
         "touch" => include_str!("../../man/formatted/touch.txt"),
         "tr" => include_str!("../../man/formatted/tr.txt"),
         "tree" => include_str!("../../man/formatted/tree.txt"),
+        "type" => include_str!("../../man/formatted/type.txt"),
         "uname" => include_str!("../../man/formatted/uname.txt"),
         "uniq" => include_str!("../../man/formatted/uniq.txt"),
+        "uptime" => include_str!("../../man/formatted/uptime.txt"),
         "wc" => include_str!("../../man/formatted/wc.txt"),
+        "which" => include_str!("../../man/formatted/which.txt"),
         "whoami" => include_str!("../../man/formatted/whoami.txt"),
         "xargs" => include_str!("../../man/formatted/xargs.txt"),
         "yes" => include_str!("../../man/formatted/yes.txt"),
@@ -3205,6 +3223,618 @@ fn prog_xargs(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 
     // (In a full implementation we'd actually run the command)
     let full_cmd = format!("{} {} {}", cmd, cmd_args.join(" "), items.join(" "));
     stdout.push_str(&format!("xargs: would execute: {}\n", full_cmd.trim()));
+
+    0
+}
+
+/// cal - display a calendar
+fn prog_cal(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: cal [MONTH] [YEAR]\nDisplay a calendar.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+    let args: Vec<String> = args.into_iter().map(|s| s.to_string()).collect();
+
+    // Get current date from system (or use defaults)
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+
+    // Calculate year/month from timestamp
+    let secs = now.as_secs() as i64;
+    let days_since_epoch = secs / 86400;
+
+    // Approximate year calculation (leap years make this imprecise, but good enough)
+    let mut year = 1970i32;
+    let mut remaining_days = days_since_epoch;
+
+    loop {
+        let days_in_year = if is_leap_year(year) { 366 } else { 365 };
+        if remaining_days < days_in_year {
+            break;
+        }
+        remaining_days -= days_in_year;
+        year += 1;
+    }
+
+    // Calculate month
+    let mut month = 1u32;
+    loop {
+        let days_in_month = days_in_month(month, year);
+        if remaining_days < days_in_month as i64 {
+            break;
+        }
+        remaining_days -= days_in_month as i64;
+        month += 1;
+    }
+
+    let current_day = (remaining_days + 1) as u32;
+
+    // Parse arguments
+    let (show_month, show_year) = if args.len() >= 2 {
+        (args[0].parse().unwrap_or(month), args[1].parse().unwrap_or(year))
+    } else if args.len() == 1 {
+        (month, args[0].parse().unwrap_or(year))
+    } else {
+        (month, year)
+    };
+
+    let month_names = [
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December"
+    ];
+
+    let month_name = month_names.get((show_month - 1) as usize).unwrap_or(&"???");
+
+    // Header
+    let header = format!("{} {}", month_name, show_year);
+    let padding = (20 - header.len()) / 2;
+    stdout.push_str(&" ".repeat(padding));
+    stdout.push_str(&header);
+    stdout.push('\n');
+    stdout.push_str("Su Mo Tu We Th Fr Sa\n");
+
+    // First day of month (Zeller's congruence simplified)
+    let first_day = day_of_week(1, show_month, show_year);
+
+    // Print leading spaces
+    for _ in 0..first_day {
+        stdout.push_str("   ");
+    }
+
+    let days = days_in_month(show_month, show_year);
+    let mut col = first_day;
+
+    for day in 1..=days {
+        let is_today = show_month == month && show_year == year && day == current_day;
+        if is_today {
+            stdout.push_str(&format!("{:>2}*", day));
+        } else {
+            stdout.push_str(&format!("{:>2} ", day));
+        }
+        col += 1;
+        if col == 7 {
+            stdout.push('\n');
+            col = 0;
+        }
+    }
+
+    if col != 0 {
+        stdout.push('\n');
+    }
+
+    0
+}
+
+fn is_leap_year(year: i32) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+}
+
+fn days_in_month(month: u32, year: i32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => if is_leap_year(year) { 29 } else { 28 },
+        _ => 30,
+    }
+}
+
+fn day_of_week(day: u32, month: u32, year: i32) -> u32 {
+    // Zeller's congruence (for Gregorian calendar)
+    let mut m = month as i32;
+    let mut y = year;
+
+    if m < 3 {
+        m += 12;
+        y -= 1;
+    }
+
+    let k = y % 100;
+    let j = y / 100;
+
+    let h = (day as i32 + (13 * (m + 1)) / 5 + k + k / 4 + j / 4 - 2 * j) % 7;
+
+    // Convert from Zeller (0=Sat) to Sunday-first (0=Sun)
+    ((h + 6) % 7) as u32
+}
+
+/// printf - format and print data
+fn prog_printf(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if args.is_empty() {
+        stderr.push_str("printf: usage: printf FORMAT [ARG]...\n");
+        return 1;
+    }
+
+    if let Some(help) = check_help(&args, "Usage: printf FORMAT [ARG]...\nFormat and print data.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    let format = args[0];
+    let args = &args[1..];
+    let mut arg_idx = 0;
+
+    let mut chars = format.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('n') => stdout.push('\n'),
+                Some('t') => stdout.push('\t'),
+                Some('r') => stdout.push('\r'),
+                Some('\\') => stdout.push('\\'),
+                Some('"') => stdout.push('"'),
+                Some('0') => stdout.push('\0'),
+                Some(other) => {
+                    stdout.push('\\');
+                    stdout.push(other);
+                }
+                None => stdout.push('\\'),
+            }
+        } else if c == '%' {
+            match chars.next() {
+                Some('s') => {
+                    if arg_idx < args.len() {
+                        stdout.push_str(&args[arg_idx]);
+                        arg_idx += 1;
+                    }
+                }
+                Some('d') | Some('i') => {
+                    if arg_idx < args.len() {
+                        let val: i64 = args[arg_idx].parse().unwrap_or(0);
+                        stdout.push_str(&val.to_string());
+                        arg_idx += 1;
+                    }
+                }
+                Some('x') => {
+                    if arg_idx < args.len() {
+                        let val: i64 = args[arg_idx].parse().unwrap_or(0);
+                        stdout.push_str(&format!("{:x}", val));
+                        arg_idx += 1;
+                    }
+                }
+                Some('X') => {
+                    if arg_idx < args.len() {
+                        let val: i64 = args[arg_idx].parse().unwrap_or(0);
+                        stdout.push_str(&format!("{:X}", val));
+                        arg_idx += 1;
+                    }
+                }
+                Some('o') => {
+                    if arg_idx < args.len() {
+                        let val: i64 = args[arg_idx].parse().unwrap_or(0);
+                        stdout.push_str(&format!("{:o}", val));
+                        arg_idx += 1;
+                    }
+                }
+                Some('c') => {
+                    if arg_idx < args.len() {
+                        if let Some(ch) = args[arg_idx].chars().next() {
+                            stdout.push(ch);
+                        }
+                        arg_idx += 1;
+                    }
+                }
+                Some('%') => stdout.push('%'),
+                Some(other) => {
+                    stdout.push('%');
+                    stdout.push(other);
+                }
+                None => stdout.push('%'),
+            }
+        } else {
+            stdout.push(c);
+        }
+    }
+
+    0
+}
+
+/// test - evaluate conditional expression
+fn prog_test(args: &[String], _stdout: &mut String, stderr: &mut String) -> i32 {
+    if args.is_empty() {
+        return 1; // No arguments = false
+    }
+
+    // Handle [ ... ] form: strip trailing ]
+    let args: Vec<&str> = if !args.is_empty() && args[args.len() - 1] == "]" {
+        args[..args.len() - 1].iter().map(|s| s.as_str()).collect()
+    } else {
+        args.iter().map(|s| s.as_str()).collect()
+    };
+
+    if args.is_empty() {
+        return 1;
+    }
+
+    if args.len() == 1 {
+        // Single argument: true if non-empty string
+        return if args[0].is_empty() { 1 } else { 0 };
+    }
+
+    if args[0] == "!" {
+        // Negation
+        let rest: Vec<String> = args[1..].iter().map(|s| s.to_string()).collect();
+        let result = prog_test(&rest, &mut String::new(), stderr);
+        return if result == 0 { 1 } else { 0 };
+    }
+
+    if args.len() == 2 {
+        // Unary operators
+        let op = args[0];
+        let arg = args[1];
+
+        return match op {
+            "-n" => if arg.is_empty() { 1 } else { 0 },
+            "-z" => if arg.is_empty() { 0 } else { 1 },
+            "-e" | "-a" => if syscall::exists(arg).unwrap_or(false) { 0 } else { 1 },
+            "-f" => {
+                if syscall::exists(arg).unwrap_or(false) {
+                    if let Ok(meta) = syscall::stat(arg) {
+                        if !meta.is_dir { 0 } else { 1 }
+                    } else {
+                        1
+                    }
+                } else {
+                    1
+                }
+            }
+            "-d" => {
+                if syscall::exists(arg).unwrap_or(false) {
+                    if let Ok(meta) = syscall::stat(arg) {
+                        if meta.is_dir { 0 } else { 1 }
+                    } else {
+                        1
+                    }
+                } else {
+                    1
+                }
+            }
+            "-r" | "-w" | "-x" => {
+                // Assume readable/writable/executable if exists
+                if syscall::exists(arg).unwrap_or(false) { 0 } else { 1 }
+            }
+            "-s" => {
+                // True if file exists and has size > 0
+                if let Ok(meta) = syscall::stat(arg) {
+                    if meta.size > 0 { 0 } else { 1 }
+                } else {
+                    1
+                }
+            }
+            "-L" | "-h" => {
+                // True if symbolic link (check via read_link)
+                if syscall::read_link(arg).is_ok() { 0 } else { 1 }
+            }
+            _ => 1, // Unknown unary operator
+        };
+    }
+
+    if args.len() >= 3 {
+        let left = args[0];
+        let op = args[1];
+        let right = args[2];
+
+        // String comparisons
+        match op {
+            "=" | "==" => return if left == right { 0 } else { 1 },
+            "!=" => return if left != right { 0 } else { 1 },
+            _ => {}
+        }
+
+        // Numeric comparisons
+        let left_num: i64 = left.parse().unwrap_or(0);
+        let right_num: i64 = right.parse().unwrap_or(0);
+
+        match op {
+            "-eq" => return if left_num == right_num { 0 } else { 1 },
+            "-ne" => return if left_num != right_num { 0 } else { 1 },
+            "-lt" => return if left_num < right_num { 0 } else { 1 },
+            "-le" => return if left_num <= right_num { 0 } else { 1 },
+            "-gt" => return if left_num > right_num { 0 } else { 1 },
+            "-ge" => return if left_num >= right_num { 0 } else { 1 },
+            _ => {}
+        }
+    }
+
+    stderr.push_str("test: unknown condition\n");
+    1
+}
+
+/// expr - evaluate expressions
+fn prog_expr(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args_ref) = extract_stdin(args);
+
+    if args_ref.is_empty() {
+        stderr.push_str("expr: missing operand\n");
+        return 2;
+    }
+
+    if let Some(help) = check_help(&args_ref, "Usage: expr EXPRESSION\nEvaluate expressions.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    let args: Vec<String> = args_ref.into_iter().map(|s| s.to_string()).collect();
+
+    // Simple expression evaluation
+    if args.len() == 1 {
+        stdout.push_str(&args[0]);
+        stdout.push('\n');
+        return if args[0] == "0" || args[0].is_empty() { 1 } else { 0 };
+    }
+
+    if args.len() == 3 {
+        let left = &args[0];
+        let op = &args[1];
+        let right = &args[2];
+
+        // String operations
+        match op.as_str() {
+            ":" | "match" => {
+                // Pattern match - simplified: returns length of match
+                // In real expr, this would use regex
+                let result = if left.starts_with(right) {
+                    right.len()
+                } else {
+                    0
+                };
+                stdout.push_str(&result.to_string());
+                stdout.push('\n');
+                return if result == 0 { 1 } else { 0 };
+            }
+            _ => {}
+        }
+
+        // Try numeric operations
+        let left_num: Result<i64, _> = left.parse();
+        let right_num: Result<i64, _> = right.parse();
+
+        if let (Ok(l), Ok(r)) = (left_num, right_num) {
+            let result = match op.as_str() {
+                "+" => Some(l + r),
+                "-" => Some(l - r),
+                "*" => Some(l * r),
+                "/" => {
+                    if r == 0 {
+                        stderr.push_str("expr: division by zero\n");
+                        return 2;
+                    }
+                    Some(l / r)
+                }
+                "%" => {
+                    if r == 0 {
+                        stderr.push_str("expr: division by zero\n");
+                        return 2;
+                    }
+                    Some(l % r)
+                }
+                "<" => Some(if l < r { 1 } else { 0 }),
+                "<=" => Some(if l <= r { 1 } else { 0 }),
+                ">" => Some(if l > r { 1 } else { 0 }),
+                ">=" => Some(if l >= r { 1 } else { 0 }),
+                "=" => Some(if l == r { 1 } else { 0 }),
+                "!=" => Some(if l != r { 1 } else { 0 }),
+                "&" => Some(if l != 0 && r != 0 { l } else { 0 }),
+                "|" => Some(if l != 0 { l } else { r }),
+                _ => None,
+            };
+
+            if let Some(val) = result {
+                stdout.push_str(&val.to_string());
+                stdout.push('\n');
+                return if val == 0 { 1 } else { 0 };
+            }
+        }
+
+        // String comparison
+        match op.as_str() {
+            "=" => {
+                let result = if left == right { 1 } else { 0 };
+                stdout.push_str(&result.to_string());
+                stdout.push('\n');
+                return if left == right { 0 } else { 1 };
+            }
+            "!=" => {
+                let result = if left != right { 1 } else { 0 };
+                stdout.push_str(&result.to_string());
+                stdout.push('\n');
+                return if left != right { 0 } else { 1 };
+            }
+            _ => {}
+        }
+    }
+
+    // Handle length operation
+    if args.len() == 2 && args[0] == "length" {
+        stdout.push_str(&args[1].len().to_string());
+        stdout.push('\n');
+        return 0;
+    }
+
+    // Handle substr
+    if args.len() == 4 && args[0] == "substr" {
+        let string = &args[1];
+        let pos: usize = args[2].parse().unwrap_or(1);
+        let len: usize = args[3].parse().unwrap_or(0);
+        let start = pos.saturating_sub(1); // expr uses 1-based indexing
+        let substr: String = string.chars().skip(start).take(len).collect();
+        stdout.push_str(&substr);
+        stdout.push('\n');
+        return 0;
+    }
+
+    stderr.push_str("expr: syntax error\n");
+    2
+}
+
+/// which - locate a command
+fn prog_which(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if args.is_empty() {
+        stderr.push_str("which: missing argument\n");
+        return 1;
+    }
+
+    if let Some(help) = check_help(&args, "Usage: which COMMAND\nLocate a command.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    let reg = ProgramRegistry::new();
+    let mut exit_code = 0;
+
+    for cmd in &args {
+        if builtins::is_builtin(cmd) {
+            stdout.push_str(&format!("{}: shell built-in command\n", cmd));
+        } else if reg.contains(cmd) {
+            stdout.push_str(&format!("/bin/{}\n", cmd));
+        } else {
+            stderr.push_str(&format!("{} not found\n", cmd));
+            exit_code = 1;
+        }
+    }
+
+    exit_code
+}
+
+/// type - describe a command
+fn prog_type(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if args.is_empty() {
+        stderr.push_str("type: missing argument\n");
+        return 1;
+    }
+
+    if let Some(help) = check_help(&args, "Usage: type COMMAND\nDescribe how a command would be interpreted.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    let reg = ProgramRegistry::new();
+    let mut exit_code = 0;
+
+    for cmd in &args {
+        if builtins::is_builtin(cmd) {
+            stdout.push_str(&format!("{} is a shell builtin\n", cmd));
+        } else if reg.contains(cmd) {
+            stdout.push_str(&format!("{} is /bin/{}\n", cmd, cmd));
+        } else {
+            stderr.push_str(&format!("{}: not found\n", cmd));
+            exit_code = 1;
+        }
+    }
+
+    exit_code
+}
+
+/// uptime - show how long system has been running
+fn prog_uptime(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: uptime\nShow how long the system has been running.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    // Get trace summary for uptime info
+    let summary = syscall::trace_summary();
+    let uptime_ms = summary.uptime;
+
+    let seconds = (uptime_ms / 1000.0) as u64;
+    let minutes = seconds / 60;
+    let hours = minutes / 60;
+    let days = hours / 24;
+
+    let secs = seconds % 60;
+    let mins = minutes % 60;
+    let hrs = hours % 24;
+
+    stdout.push_str("up ");
+    if days > 0 {
+        stdout.push_str(&format!("{} day{}, ", days, if days > 1 { "s" } else { "" }));
+    }
+    if hours > 0 || days > 0 {
+        stdout.push_str(&format!("{}:{:02}, ", hrs, mins));
+    } else {
+        stdout.push_str(&format!("{} min, ", mins));
+    }
+    stdout.push_str(&format!("{} sec\n", secs));
+
+    // Show system stats
+    stdout.push_str(&format!("syscalls: {}, ", summary.syscall_count));
+    stdout.push_str(&format!("processes: {}/{}\n", summary.processes_spawned, summary.processes_exited));
+
+    0
+}
+
+/// free - display amount of free and used memory
+fn prog_free(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+    let human = args.iter().any(|a| *a == "-h" || *a == "--human");
+
+    if let Some(help) = check_help(&args, "Usage: free [-h]\nDisplay memory usage.\n  -h  Human readable output") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    let stats = syscall::system_memstats().unwrap_or_default();
+
+    fn format_size(bytes: usize, human: bool) -> String {
+        if !human {
+            return format!("{:>12}", bytes);
+        }
+        if bytes >= 1024 * 1024 * 1024 {
+            format!("{:>8.1}G", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+        } else if bytes >= 1024 * 1024 {
+            format!("{:>8.1}M", bytes as f64 / (1024.0 * 1024.0))
+        } else if bytes >= 1024 {
+            format!("{:>8.1}K", bytes as f64 / 1024.0)
+        } else {
+            format!("{:>8}B", bytes)
+        }
+    }
+
+    let total = stats.system_limit;
+    let used = stats.total_allocated;
+    let free = total.saturating_sub(used);
+    let shared = stats.shm_total_size;
+
+    stdout.push_str("              total        used        free      shared\n");
+
+    stdout.push_str(&format!(
+        "Mem:    {} {} {} {}\n",
+        format_size(total, human),
+        format_size(used, human),
+        format_size(free, human),
+        format_size(shared, human)
+    ));
 
     0
 }

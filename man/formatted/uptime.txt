@@ -1,0 +1,39 @@
+[4muptime[24m(1)                   General Commands Manual                  [4muptime[24m(1)
+
+[1mNAME[0m
+       uptime - show how long system has been running
+
+[1mSYNOPSIS[0m
+       [1muptime[0m
+
+[1mDESCRIPTION[0m
+       Display  how  long  the  system has been running since boot, along with
+       system statistics including syscall count and process spawning informa‐
+       tion.
+
+[1mOPTIONS[0m
+       [1m-h[22m, [1m--help[0m
+           Display usage information and exit.
+
+[1mOUTPUT[0m
+       The output includes:
+
+       •   [1mup[22m: Time since system started (days, hours:minutes, seconds)
+       •   [1msyscalls[22m: Total number of system calls made
+       •   [1mprocesses[22m: Count of spawned/exited processes
+
+
+[1mEXAMPLES[0m
+       Show uptime:
+
+           uptime # Output: up 0 min, 5 sec #         syscalls: 42, processes:
+           3/2
+
+[1mNOTES[0m
+       In axebergOS, uptime is measured from when the kernel  was  initialized
+       for the current session.
+
+[1mSEE ALSO[0m
+       [1mfree[22m(1), [1mps[22m(1)
+
+                                  2025-12-24                         [4muptime[24m(1)

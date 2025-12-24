@@ -1,0 +1,45 @@
+[4mwhich[24m(1)                    General Commands Manual                   [4mwhich[24m(1)
+
+[1mNAME[0m
+       which - locate a command
+
+[1mSYNOPSIS[0m
+       [1mwhich [4m[22mCOMMAND[24m...
+
+[1mDESCRIPTION[0m
+       Show  the  full path of commands. For each COMMAND, print the path that
+       would be executed, or indicate if it's a shell built-in.
+
+[1mOPTIONS[0m
+       [1m-h[22m, [1m--help[0m
+           Display usage information and exit.
+
+[1mOUTPUT[0m
+       For external commands, prints the path (e.g.,  /bin/ls).  For  built-in
+       commands,  prints  "[4mcommand[24m:  shell  built-in  command".  If not found,
+       prints an error message.
+
+[1mEXAMPLES[0m
+       Locate ls:
+
+           which ls # Output: /bin/ls
+
+       Locate shell built-in:
+
+           which cd # Output: cd: shell built-in command
+
+       Multiple commands:
+
+           which cat grep echo # Shows path for each
+
+[1mEXIT STATUS[0m
+       [1m0[0m
+           All commands found.
+
+       [1m1[0m
+           One or more commands not found.
+
+[1mSEE ALSO[0m
+       [1mtype[22m(1)
+
+                                  2025-12-24                          [4mwhich[24m(1)
