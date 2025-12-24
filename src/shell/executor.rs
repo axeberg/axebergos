@@ -108,6 +108,12 @@ impl ProgramRegistry {
         reg.register("whoami", prog_whoami);
         reg.register("hostname", prog_hostname);
         reg.register("uname", prog_uname);
+        reg.register("find", prog_find);
+        reg.register("du", prog_du);
+        reg.register("df", prog_df);
+        reg.register("ps", prog_ps);
+        reg.register("kill", prog_kill);
+        reg.register("time", prog_time);
 
         reg
     }
@@ -1944,26 +1950,32 @@ fn prog_man(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
         "cat" => include_str!("../../man/formatted/cat.txt"),
         "cd" => include_str!("../../man/formatted/cd.txt"),
         "cp" => include_str!("../../man/formatted/cp.txt"),
+        "df" => include_str!("../../man/formatted/df.txt"),
+        "du" => include_str!("../../man/formatted/du.txt"),
         "echo" => include_str!("../../man/formatted/echo.txt"),
         "edit" => include_str!("../../man/formatted/edit.txt"),
         "fg" => include_str!("../../man/formatted/fg.txt"),
+        "find" => include_str!("../../man/formatted/find.txt"),
         "grep" => include_str!("../../man/formatted/grep.txt"),
         "head" => include_str!("../../man/formatted/head.txt"),
         "hostname" => include_str!("../../man/formatted/hostname.txt"),
         "id" => include_str!("../../man/formatted/id.txt"),
         "jobs" => include_str!("../../man/formatted/jobs.txt"),
+        "kill" => include_str!("../../man/formatted/kill.txt"),
         "ln" => include_str!("../../man/formatted/ln.txt"),
         "ls" => include_str!("../../man/formatted/ls.txt"),
         "man" => include_str!("../../man/formatted/man.txt"),
         "mkdir" => include_str!("../../man/formatted/mkdir.txt"),
         "mv" => include_str!("../../man/formatted/mv.txt"),
         "printenv" => include_str!("../../man/formatted/printenv.txt"),
+        "ps" => include_str!("../../man/formatted/ps.txt"),
         "pwd" => include_str!("../../man/formatted/pwd.txt"),
         "rm" => include_str!("../../man/formatted/rm.txt"),
         "sort" => include_str!("../../man/formatted/sort.txt"),
         "strace" => include_str!("../../man/formatted/strace.txt"),
         "tail" => include_str!("../../man/formatted/tail.txt"),
         "tee" => include_str!("../../man/formatted/tee.txt"),
+        "time" => include_str!("../../man/formatted/time.txt"),
         "touch" => include_str!("../../man/formatted/touch.txt"),
         "tree" => include_str!("../../man/formatted/tree.txt"),
         "uname" => include_str!("../../man/formatted/uname.txt"),
@@ -2401,6 +2413,423 @@ fn prog_uname(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 
 
     stdout.push_str(&parts.join(" "));
     stdout.push('\n');
+    0
+}
+
+/// find - search for files
+fn prog_find(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: find [PATH] [-name PATTERN] [-type TYPE]\nSearch for files.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    // Parse arguments
+    let mut start_path = ".";
+    let mut name_pattern: Option<&str> = None;
+    let mut type_filter: Option<char> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i] {
+            "-name" if i + 1 < args.len() => {
+                name_pattern = Some(args[i + 1]);
+                i += 2;
+            }
+            "-type" if i + 1 < args.len() => {
+                type_filter = args[i + 1].chars().next();
+                i += 2;
+            }
+            s if !s.starts_with('-') && i == 0 => {
+                start_path = s;
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+
+    // Recursive find helper
+    fn find_recursive(
+        path: &str,
+        name_pattern: Option<&str>,
+        type_filter: Option<char>,
+        stdout: &mut String,
+    ) -> Result<(), String> {
+        let entries = syscall::readdir(path).map_err(|e| e.to_string())?;
+
+        for entry in entries {
+            let full_path = if path == "/" {
+                format!("/{}", entry)
+            } else {
+                format!("{}/{}", path, entry)
+            };
+
+            let meta = match syscall::metadata(&full_path) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+
+            // Type filter
+            let type_match = match type_filter {
+                Some('f') => meta.is_file,
+                Some('d') => meta.is_dir,
+                Some('l') => meta.is_symlink,
+                Some(_) | None => true,
+            };
+
+            // Name filter (simple glob with * support)
+            let name_match = match name_pattern {
+                Some(pattern) => {
+                    if pattern.contains('*') {
+                        let parts: Vec<&str> = pattern.split('*').collect();
+                        if parts.len() == 2 {
+                            let (prefix, suffix) = (parts[0], parts[1]);
+                            entry.starts_with(prefix) && entry.ends_with(suffix)
+                        } else if pattern.starts_with('*') {
+                            entry.ends_with(&pattern[1..])
+                        } else if pattern.ends_with('*') {
+                            entry.starts_with(&pattern[..pattern.len()-1])
+                        } else {
+                            entry == pattern
+                        }
+                    } else {
+                        entry == pattern
+                    }
+                }
+                None => true,
+            };
+
+            if type_match && name_match {
+                stdout.push_str(&full_path);
+                stdout.push('\n');
+            }
+
+            // Recurse into directories
+            if meta.is_dir && !meta.is_symlink {
+                let _ = find_recursive(&full_path, name_pattern, type_filter, stdout);
+            }
+        }
+        Ok(())
+    }
+
+    // Resolve start path
+    let resolved = if start_path == "." {
+        syscall::getcwd().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|_| "/".to_string())
+    } else if start_path.starts_with('/') {
+        start_path.to_string()
+    } else {
+        let cwd = syscall::getcwd().unwrap_or_else(|_| std::path::PathBuf::from("/"));
+        format!("{}/{}", cwd.display(), start_path)
+    };
+
+    if let Err(e) = find_recursive(&resolved, name_pattern, type_filter, stdout) {
+        stderr.push_str(&format!("find: {}\n", e));
+        return 1;
+    }
+
+    0
+}
+
+/// du - disk usage
+fn prog_du(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: du [-s] [-h] [PATH...]\nEstimate file space usage.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    let summary_only = args.iter().any(|a| *a == "-s");
+    let human_readable = args.iter().any(|a| *a == "-h");
+    let paths: Vec<&str> = args.iter()
+        .filter(|a| !a.starts_with('-'))
+        .map(|s| *s)
+        .collect();
+
+    let paths = if paths.is_empty() { vec!["."] } else { paths };
+
+    fn format_size(size: u64, human: bool) -> String {
+        if human {
+            if size >= 1024 * 1024 * 1024 {
+                format!("{:.1}G", size as f64 / (1024.0 * 1024.0 * 1024.0))
+            } else if size >= 1024 * 1024 {
+                format!("{:.1}M", size as f64 / (1024.0 * 1024.0))
+            } else if size >= 1024 {
+                format!("{:.1}K", size as f64 / 1024.0)
+            } else {
+                format!("{}", size)
+            }
+        } else {
+            format!("{}", (size + 1023) / 1024) // blocks
+        }
+    }
+
+    fn du_recursive(path: &str, human: bool, summary: bool, stdout: &mut String) -> u64 {
+        let mut total: u64 = 0;
+
+        match syscall::metadata(path) {
+            Ok(meta) => {
+                if meta.is_file {
+                    total = meta.size;
+                } else if meta.is_dir {
+                    if let Ok(entries) = syscall::readdir(path) {
+                        for entry in entries {
+                            let full = if path == "/" {
+                                format!("/{}", entry)
+                            } else {
+                                format!("{}/{}", path, entry)
+                            };
+                            let sub_size = du_recursive(&full, human, true, stdout);
+                            total += sub_size;
+                        }
+                    }
+                }
+            }
+            Err(_) => {}
+        }
+
+        if !summary {
+            stdout.push_str(&format!("{}\t{}\n", format_size(total, human), path));
+        }
+
+        total
+    }
+
+    for path in paths {
+        let resolved = if path == "." {
+            syscall::getcwd().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|_| "/".to_string())
+        } else if path.starts_with('/') {
+            path.to_string()
+        } else {
+            let cwd = syscall::getcwd().unwrap_or_else(|_| std::path::PathBuf::from("/"));
+            format!("{}/{}", cwd.display(), path)
+        };
+
+        let total = du_recursive(&resolved, human_readable, summary_only, stdout);
+        if summary_only {
+            stdout.push_str(&format!("{}\t{}\n", format_size(total, human_readable), path));
+        }
+    }
+
+    0
+}
+
+/// df - filesystem space
+fn prog_df(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: df [-h]\nShow filesystem disk space usage.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    let human_readable = args.iter().any(|a| *a == "-h");
+
+    // Get memory stats as a proxy for "disk" usage in our VFS
+    let mem_stats = syscall::system_memstats().unwrap_or_default();
+
+    // Calculate total VFS size by walking the filesystem
+    fn count_size(path: &str) -> u64 {
+        let mut total: u64 = 0;
+        if let Ok(meta) = syscall::metadata(path) {
+            if meta.is_file {
+                total = meta.size;
+            } else if meta.is_dir {
+                if let Ok(entries) = syscall::readdir(path) {
+                    for entry in entries {
+                        let full = if path == "/" {
+                            format!("/{}", entry)
+                        } else {
+                            format!("{}/{}", path, entry)
+                        };
+                        total += count_size(&full);
+                    }
+                }
+            }
+        }
+        total
+    }
+
+    let used = count_size("/");
+    let total: u64 = 1024 * 1024 * 100; // 100MB virtual filesystem
+    let available = total.saturating_sub(used);
+    let use_pct = if total > 0 { (used * 100 / total) as u32 } else { 0 };
+
+    fn format_size(size: u64, human: bool) -> String {
+        if human {
+            if size >= 1024 * 1024 * 1024 {
+                format!("{:.1}G", size as f64 / (1024.0 * 1024.0 * 1024.0))
+            } else if size >= 1024 * 1024 {
+                format!("{:.1}M", size as f64 / (1024.0 * 1024.0))
+            } else if size >= 1024 {
+                format!("{:.1}K", size as f64 / 1024.0)
+            } else {
+                format!("{}B", size)
+            }
+        } else {
+            format!("{}", (size + 1023) / 1024)
+        }
+    }
+
+    stdout.push_str("Filesystem      Size  Used Avail Use% Mounted on\n");
+    stdout.push_str(&format!(
+        "axeberg-vfs  {:>6} {:>5} {:>5} {:>3}% /\n",
+        format_size(total, human_readable),
+        format_size(used, human_readable),
+        format_size(available, human_readable),
+        use_pct
+    ));
+
+    0
+}
+
+/// ps - process status
+fn prog_ps(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: ps [-a] [-l]\nReport process status.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    let long_format = args.iter().any(|a| *a == "-l");
+
+    let processes = syscall::list_processes();
+
+    if long_format {
+        stdout.push_str("  PID  PPID  PGID STATE    COMMAND\n");
+    } else {
+        stdout.push_str("  PID STATE    COMMAND\n");
+    }
+
+    for (pid, name, state) in processes {
+        let state_str = match &state {
+            syscall::ProcessState::Running => "R",
+            syscall::ProcessState::Sleeping => "S",
+            syscall::ProcessState::Stopped => "T",
+            syscall::ProcessState::Blocked(_) => "D",
+            syscall::ProcessState::Zombie(_) => "Z",
+        };
+
+        if long_format {
+            let ppid = syscall::getppid().ok().flatten().map(|p| p.0).unwrap_or(0);
+            let pgid = syscall::getpgid(pid).ok().map(|p| p.0).unwrap_or(pid.0);
+            stdout.push_str(&format!(
+                "{:>5} {:>5} {:>5} {:8} {}\n",
+                pid.0, ppid, pgid, state_str, name
+            ));
+        } else {
+            stdout.push_str(&format!("{:>5} {:8} {}\n", pid.0, state_str, name));
+        }
+    }
+
+    0
+}
+
+/// kill - send signal to process
+fn prog_kill(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: kill [-s SIGNAL] PID...\nSend signal to processes.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    // Parse signal
+    let mut signal = crate::kernel::signal::Signal::SIGTERM;
+    let mut pids: Vec<u32> = Vec::new();
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "-s" && i + 1 < args.len() {
+            signal = match args[i + 1].to_uppercase().as_str() {
+                "TERM" | "SIGTERM" | "15" => crate::kernel::signal::Signal::SIGTERM,
+                "KILL" | "SIGKILL" | "9" => crate::kernel::signal::Signal::SIGKILL,
+                "STOP" | "SIGSTOP" | "19" => crate::kernel::signal::Signal::SIGSTOP,
+                "CONT" | "SIGCONT" | "18" => crate::kernel::signal::Signal::SIGCONT,
+                "INT" | "SIGINT" | "2" => crate::kernel::signal::Signal::SIGINT,
+                "HUP" | "SIGHUP" | "1" => crate::kernel::signal::Signal::SIGHUP,
+                "USR1" | "SIGUSR1" | "10" => crate::kernel::signal::Signal::SIGUSR1,
+                "USR2" | "SIGUSR2" | "12" => crate::kernel::signal::Signal::SIGUSR2,
+                s => {
+                    stderr.push_str(&format!("kill: invalid signal: {}\n", s));
+                    return 1;
+                }
+            };
+            i += 2;
+        } else if arg.starts_with('-') && arg.len() > 1 {
+            // -9, -KILL, etc.
+            let sig_str = &arg[1..];
+            signal = match sig_str.to_uppercase().as_str() {
+                "TERM" | "SIGTERM" | "15" => crate::kernel::signal::Signal::SIGTERM,
+                "KILL" | "SIGKILL" | "9" => crate::kernel::signal::Signal::SIGKILL,
+                "STOP" | "SIGSTOP" | "19" => crate::kernel::signal::Signal::SIGSTOP,
+                "CONT" | "SIGCONT" | "18" => crate::kernel::signal::Signal::SIGCONT,
+                "INT" | "SIGINT" | "2" => crate::kernel::signal::Signal::SIGINT,
+                "HUP" | "SIGHUP" | "1" => crate::kernel::signal::Signal::SIGHUP,
+                s => {
+                    stderr.push_str(&format!("kill: invalid signal: {}\n", s));
+                    return 1;
+                }
+            };
+            i += 1;
+        } else if let Ok(pid) = arg.parse::<u32>() {
+            pids.push(pid);
+            i += 1;
+        } else {
+            stderr.push_str(&format!("kill: invalid pid: {}\n", arg));
+            return 1;
+        }
+    }
+
+    if pids.is_empty() {
+        stderr.push_str("kill: missing pid\n");
+        return 1;
+    }
+
+    let mut exit_code = 0;
+    for pid in pids {
+        if let Err(e) = syscall::kill(syscall::Pid(pid), signal) {
+            stderr.push_str(&format!("kill: ({}) - {}\n", pid, e));
+            exit_code = 1;
+        }
+    }
+
+    exit_code
+}
+
+/// time - time command execution
+fn prog_time(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: time COMMAND [ARGS...]\nTime command execution.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    if args.is_empty() {
+        stderr.push_str("time: missing command\n");
+        return 1;
+    }
+
+    let start = syscall::now();
+
+    // We can't actually execute the command here since we're just a program
+    // But we can show what we would time
+    stdout.push_str(&format!("time: would execute '{}'\n", args.join(" ")));
+
+    let elapsed = syscall::now() - start;
+
+    // Format like Unix time command
+    stdout.push_str(&format!(
+        "\nreal    {:.3}s\nuser    {:.3}s\nsys     {:.3}s\n",
+        elapsed / 1000.0,
+        0.0, // In a real OS we'd track user time
+        0.0  // In a real OS we'd track system time
+    ));
+
     0
 }
 

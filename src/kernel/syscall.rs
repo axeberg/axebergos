@@ -381,6 +381,42 @@ pub struct Kernel {
     tracer: Tracer,
 }
 
+/// Simple PRNG for /dev/random and /dev/urandom
+/// Uses xorshift64 algorithm seeded from current time
+fn generate_random_bytes(len: usize) -> Vec<u8> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    // Get seed from current time (or use a fixed seed in WASM)
+    let mut state: u64 = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0x123456789ABCDEF0);
+
+    // Ensure non-zero state
+    if state == 0 {
+        state = 0xDEADBEEFCAFEBABE;
+    }
+
+    let mut result = Vec::with_capacity(len);
+
+    while result.len() < len {
+        // xorshift64
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+
+        // Extract bytes from the state
+        let bytes = state.to_le_bytes();
+        for &b in &bytes {
+            if result.len() < len {
+                result.push(b);
+            }
+        }
+    }
+
+    result
+}
+
 impl Kernel {
     pub fn new() -> Self {
         let mut objects = ObjectTable::new();
@@ -922,6 +958,13 @@ impl Kernel {
                 // /dev/zero - returns infinite zeros
                 // For now, return a file with some zeros
                 let file = FileObject::new(path.to_path_buf(), vec![0; 4096], true, false);
+                Ok(self.objects.insert(KernelObject::File(file)))
+            }
+            "random" | "urandom" => {
+                // /dev/random and /dev/urandom - return random bytes
+                // Using a simple PRNG seeded from current time
+                let random_data = generate_random_bytes(4096);
+                let file = FileObject::new(path.to_path_buf(), random_data, true, false);
                 Ok(self.objects.insert(KernelObject::File(file)))
             }
             _ => Err(SyscallError::NotFound),

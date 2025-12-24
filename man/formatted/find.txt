@@ -1,0 +1,51 @@
+find(1)                     General Commands Manual                    find(1)
+
+NAME
+       find - search for files in a directory hierarchy
+
+SYNOPSIS
+       find [PATH] [-name PATTERN] [-type TYPE]
+
+DESCRIPTION
+       Search  for  files  in the directory tree rooted at PATH. If no PATH is
+       given, search from the current directory.
+
+OPTIONS
+       -name PATTERN
+           Match files whose name matches PATTERN. Supports * as wildcard:
+           o   *.txt matches files ending in .txt
+           o   test* matches files starting with test
+           o   *log* matches files containing log
+
+
+       -type TYPE
+           Match files of specified type:
+           o   f - regular file
+           o   d - directory
+           o   l - symbolic link
+
+
+       -h, --help
+           Display usage information and exit.
+
+EXAMPLES
+       Find all files:
+
+           find /home
+
+       Find text files:
+
+           find . -name "*.txt"
+
+       Find directories:
+
+           find /home -type d
+
+       Find files named config:
+
+           find / -name config -type f
+
+SEE ALSO
+       ls(1), grep(1), tree(1)
+
+                                  2025-12-24                           find(1)

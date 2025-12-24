@@ -630,7 +630,7 @@ pub struct ShmInfo {
 }
 
 /// System-wide memory stats
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct SystemMemoryStats {
     pub total_allocated: usize,
     pub system_limit: usize,

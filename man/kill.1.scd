@@ -1,0 +1,75 @@
+kill(1)
+
+# NAME
+
+kill - send signal to processes
+
+# SYNOPSIS
+
+*kill* [*-s* _SIGNAL_] _PID_...
+*kill* *-*_SIGNAL_ _PID_...
+
+# DESCRIPTION
+
+Send a signal to the specified processes. By default, sends SIGTERM.
+
+# OPTIONS
+
+*-s* _SIGNAL_
+	Specify the signal to send by name or number.
+
+*-*_SIGNAL_
+	Shorthand for -s, e.g., *-9* or *-KILL*.
+
+*-h*, *--help*
+	Display usage information and exit.
+
+# SIGNALS
+
+*TERM*, *SIGTERM*, *15*
+	Terminate (default). Process can catch and handle.
+
+*KILL*, *SIGKILL*, *9*
+	Kill immediately. Cannot be caught or ignored.
+
+*STOP*, *SIGSTOP*, *19*
+	Stop process. Cannot be caught or ignored.
+
+*CONT*, *SIGCONT*, *18*
+	Continue stopped process.
+
+*INT*, *SIGINT*, *2*
+	Interrupt (like Ctrl+C).
+
+*HUP*, *SIGHUP*, *1*
+	Hangup.
+
+*USR1*, *SIGUSR1*, *10*
+	User-defined signal 1.
+
+*USR2*, *SIGUSR2*, *12*
+	User-defined signal 2.
+
+# EXAMPLES
+
+Terminate process 1234:
+
+	kill 1234
+
+Kill process immediately:
+
+	kill -9 1234
+	kill -KILL 1234
+	kill -s KILL 1234
+
+Stop a process:
+
+	kill -STOP 1234
+
+Resume a stopped process:
+
+	kill -CONT 1234
+
+# SEE ALSO
+
+*ps*(1), *jobs*(1), *fg*(1), *bg*(1)
