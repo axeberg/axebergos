@@ -58,6 +58,12 @@ extern "C" {
     #[wasm_bindgen(method, js_name = onData)]
     fn on_data(this: &XTerm, callback: &js_sys::Function);
 
+    #[wasm_bindgen(method, getter)]
+    fn cols(this: &XTerm) -> u32;
+
+    #[wasm_bindgen(method, getter)]
+    fn rows(this: &XTerm) -> u32;
+
     /// The xterm-addon-fit FitAddon class (global `FitAddon`)
     #[wasm_bindgen(js_name = FitAddon)]
     type XTermFitAddon;
@@ -1061,6 +1067,12 @@ fn setup_data_handler(term: Rc<XTerm>) {
 fn setup_resize_handler(fit_addon: Rc<XTermFitAddon>) {
     let callback = Closure::wrap(Box::new(move || {
         fit_addon.fit();
+        // Update editor size if active
+        if crate::editor::is_active() {
+            let (cols, rows) = get_size();
+            crate::editor::set_screen_size(cols, rows);
+            crate::editor::refresh();
+        }
     }) as Box<dyn FnMut()>);
 
     if let Some(window) = web_sys::window() {
@@ -1097,6 +1109,17 @@ pub fn clear() {
             term.clear();
         }
     });
+}
+
+/// Get terminal dimensions (cols, rows)
+pub fn get_size() -> (usize, usize) {
+    TERMINAL.with(|t| {
+        if let Some(term) = t.borrow().as_ref() {
+            (term.cols() as usize, term.rows() as usize)
+        } else {
+            (80, 24) // fallback
+        }
+    })
 }
 
 /// Get command history

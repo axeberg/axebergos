@@ -38,8 +38,9 @@ pub fn is_active() -> bool {
 pub fn start(filename: Option<&str>) -> Result<(), String> {
     let mut editor = Editor::new();
 
-    // Set screen size (will be updated on first render)
-    editor.set_screen_size(80, 24);
+    // Get actual terminal size
+    let (cols, rows) = crate::terminal::get_size();
+    editor.set_screen_size(cols, rows);
 
     if let Some(path) = filename {
         editor.load(path)?;
@@ -53,7 +54,8 @@ pub fn start(filename: Option<&str>) -> Result<(), String> {
         *a.borrow_mut() = true;
     });
 
-    // Trigger initial render
+    // Clear screen and render
+    crate::terminal::write("\x1b[2J\x1b[H");
     refresh();
 
     Ok(())
