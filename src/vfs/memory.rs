@@ -25,11 +25,53 @@ enum Node {
     Symlink(String),
 }
 
+/// Permission and ownership metadata for a file
+#[derive(Clone, Serialize, Deserialize)]
+struct NodeMeta {
+    /// Owner user ID
+    uid: u32,
+    /// Owner group ID
+    gid: u32,
+    /// Unix permission mode (rwxrwxrwx)
+    mode: u16,
+}
+
+impl Default for NodeMeta {
+    fn default() -> Self {
+        Self {
+            uid: 1000,
+            gid: 1000,
+            mode: 0o644,
+        }
+    }
+}
+
+impl NodeMeta {
+    fn dir_default() -> Self {
+        Self {
+            uid: 1000,
+            gid: 1000,
+            mode: 0o755,
+        }
+    }
+
+    fn root_dir() -> Self {
+        Self {
+            uid: 0,
+            gid: 0,
+            mode: 0o755,
+        }
+    }
+}
+
 /// Serializable snapshot of the filesystem
 #[derive(Serialize, Deserialize)]
 pub struct FsSnapshot {
     /// All files and directories
     nodes: HashMap<String, Node>,
+    /// Permission metadata for each path
+    #[serde(default)]
+    meta: HashMap<String, NodeMeta>,
     /// Format version for future compatibility
     version: u32,
 }
@@ -38,6 +80,8 @@ pub struct FsSnapshot {
 pub struct MemoryFs {
     /// All files and directories, keyed by path
     nodes: HashMap<String, Node>,
+    /// Permission metadata for each path
+    meta: HashMap<String, NodeMeta>,
     /// Open file handles
     handles: Slab<OpenFile>,
 }
@@ -46,10 +90,12 @@ impl MemoryFs {
     pub fn new() -> Self {
         let mut fs = Self {
             nodes: HashMap::new(),
+            meta: HashMap::new(),
             handles: Slab::new(),
         };
         // Root directory always exists
         fs.nodes.insert("/".to_string(), Node::Directory);
+        fs.meta.insert("/".to_string(), NodeMeta::root_dir());
         fs
     }
 
@@ -115,31 +161,56 @@ impl Default for MemoryFs {
 }
 
 /// Snapshot version - increment when format changes
-const SNAPSHOT_VERSION: u32 = 1;
+const SNAPSHOT_VERSION: u32 = 2;
 
 impl MemoryFs {
     /// Create a snapshot of the filesystem for persistence
     pub fn snapshot(&self) -> FsSnapshot {
         FsSnapshot {
             nodes: self.nodes.clone(),
+            meta: self.meta.clone(),
             version: SNAPSHOT_VERSION,
         }
     }
 
     /// Restore filesystem from a snapshot
     pub fn restore(snapshot: FsSnapshot) -> io::Result<Self> {
-        if snapshot.version != SNAPSHOT_VERSION {
+        // Accept version 1 (no meta) or version 2 (with meta)
+        if snapshot.version != SNAPSHOT_VERSION && snapshot.version != 1 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(
-                    "Snapshot version mismatch: expected {}, got {}",
+                    "Snapshot version mismatch: expected {} or 1, got {}",
                     SNAPSHOT_VERSION, snapshot.version
                 ),
             ));
         }
 
+        // If version 1, meta will be empty (serde default)
+        // Generate default meta for all nodes
+        let meta = if snapshot.meta.is_empty() {
+            let mut meta = HashMap::new();
+            for (path, node) in &snapshot.nodes {
+                let node_meta = match node {
+                    Node::Directory => {
+                        if path == "/" {
+                            NodeMeta::root_dir()
+                        } else {
+                            NodeMeta::dir_default()
+                        }
+                    }
+                    _ => NodeMeta::default(),
+                };
+                meta.insert(path.clone(), node_meta);
+            }
+            meta
+        } else {
+            snapshot.meta
+        };
+
         Ok(Self {
             nodes: snapshot.nodes,
+            meta,
             handles: Slab::new(),
         })
     }
@@ -176,6 +247,7 @@ impl FileSystem for MemoryFs {
             // Create new file
             self.ensure_parent(&path)?;
             self.nodes.insert(path.clone(), Node::File(Vec::new()));
+            self.meta.insert(path.clone(), NodeMeta::default());
         } else if options.truncate {
             // Truncate existing file
             if let Some(Node::File(data)) = self.nodes.get_mut(&path) {
@@ -329,6 +401,8 @@ impl FileSystem for MemoryFs {
     fn metadata(&self, path: &str) -> io::Result<Metadata> {
         let path = Self::normalize_path(path);
 
+        let meta = self.meta.get(&path).cloned().unwrap_or_default();
+
         match self.nodes.get(&path) {
             Some(Node::File(data)) => Ok(Metadata {
                 size: data.len() as u64,
@@ -336,6 +410,9 @@ impl FileSystem for MemoryFs {
                 is_file: true,
                 is_symlink: false,
                 symlink_target: None,
+                uid: meta.uid,
+                gid: meta.gid,
+                mode: meta.mode,
             }),
             Some(Node::Directory) => Ok(Metadata {
                 size: 0,
@@ -343,6 +420,9 @@ impl FileSystem for MemoryFs {
                 is_file: false,
                 is_symlink: false,
                 symlink_target: None,
+                uid: meta.uid,
+                gid: meta.gid,
+                mode: meta.mode,
             }),
             Some(Node::Symlink(target)) => Ok(Metadata {
                 size: target.len() as u64,
@@ -350,6 +430,9 @@ impl FileSystem for MemoryFs {
                 is_file: false,
                 is_symlink: true,
                 symlink_target: Some(target.clone()),
+                uid: meta.uid,
+                gid: meta.gid,
+                mode: meta.mode,
             }),
             None => Err(io::Error::new(io::ErrorKind::NotFound, "Path not found")),
         }
@@ -366,7 +449,8 @@ impl FileSystem for MemoryFs {
         }
 
         self.ensure_parent(&path)?;
-        self.nodes.insert(path, Node::Directory);
+        self.nodes.insert(path.clone(), Node::Directory);
+        self.meta.insert(path, NodeMeta::dir_default());
         Ok(())
     }
 
@@ -425,6 +509,7 @@ impl FileSystem for MemoryFs {
         match self.nodes.get(&path) {
             Some(Node::File(_)) | Some(Node::Symlink(_)) => {
                 self.nodes.remove(&path);
+                self.meta.remove(&path);
                 Ok(())
             }
             Some(Node::Directory) => Err(io::Error::new(
@@ -457,6 +542,7 @@ impl FileSystem for MemoryFs {
                     ));
                 }
                 self.nodes.remove(&path);
+                self.meta.remove(&path);
                 Ok(())
             }
             Some(Node::File(_)) | Some(Node::Symlink(_)) => Err(io::Error::new(
@@ -503,28 +589,36 @@ impl FileSystem for MemoryFs {
             // Collect all paths that need renaming
             let from_prefix = format!("{}/", from);
             let to_prefix = format!("{}/", to);
-            let children: Vec<(String, Node)> = self
+            let children: Vec<(String, Node, Option<NodeMeta>)> = self
                 .nodes
                 .iter()
                 .filter(|(p, _)| p.starts_with(&from_prefix))
                 .map(|(p, n)| {
                     let new_path = format!("{}{}", to_prefix, &p[from_prefix.len()..]);
-                    (new_path, n.clone())
+                    let meta = self.meta.get(p).cloned();
+                    (new_path, n.clone(), meta)
                 })
                 .collect();
 
             // Remove old paths
             self.nodes.retain(|p, _| !p.starts_with(&from_prefix));
+            self.meta.retain(|p, _| !p.starts_with(&from_prefix));
 
             // Insert new paths
-            for (path, node) in children {
-                self.nodes.insert(path, node);
+            for (path, node, meta) in children {
+                self.nodes.insert(path.clone(), node);
+                if let Some(m) = meta {
+                    self.meta.insert(path, m);
+                }
             }
         }
 
         // Move the node itself
         if let Some(node) = self.nodes.remove(&from) {
-            self.nodes.insert(to, node);
+            self.nodes.insert(to.clone(), node);
+        }
+        if let Some(meta) = self.meta.remove(&from) {
+            self.meta.insert(to, meta);
         }
 
         Ok(())
@@ -556,8 +650,12 @@ impl FileSystem for MemoryFs {
         // Ensure parent exists
         self.ensure_parent(&to)?;
 
+        // Copy metadata (but set new owner to current user would require context)
+        let meta = self.meta.get(&from).cloned().unwrap_or_default();
+
         // Insert copy at destination
-        self.nodes.insert(to, node_to_copy);
+        self.nodes.insert(to.clone(), node_to_copy);
+        self.meta.insert(to, meta);
 
         Ok(size)
     }
@@ -582,7 +680,13 @@ impl FileSystem for MemoryFs {
         self.ensure_parent(&link_path)?;
 
         // Create the symlink (target is stored as-is, can be relative or absolute)
-        self.nodes.insert(link_path, Node::Symlink(target.to_string()));
+        self.nodes.insert(link_path.clone(), Node::Symlink(target.to_string()));
+        // Symlinks have mode 0o777 by convention (permissions are on target)
+        self.meta.insert(link_path, NodeMeta {
+            uid: 1000,
+            gid: 1000,
+            mode: 0o777,
+        });
         Ok(())
     }
 
@@ -597,6 +701,46 @@ impl FileSystem for MemoryFs {
             )),
             None => Err(io::Error::new(io::ErrorKind::NotFound, "Path not found")),
         }
+    }
+
+    fn chmod(&mut self, path: &str, mode: u16) -> io::Result<()> {
+        let path = Self::normalize_path(path);
+
+        if !self.nodes.contains_key(&path) {
+            return Err(io::Error::new(io::ErrorKind::NotFound, "Path not found"));
+        }
+
+        if let Some(meta) = self.meta.get_mut(&path) {
+            meta.mode = mode & 0o7777; // Mask to valid permission bits
+        } else {
+            // Create default meta with the new mode
+            self.meta.insert(path, NodeMeta {
+                uid: 1000,
+                gid: 1000,
+                mode: mode & 0o7777,
+            });
+        }
+
+        Ok(())
+    }
+
+    fn chown(&mut self, path: &str, uid: Option<u32>, gid: Option<u32>) -> io::Result<()> {
+        let path = Self::normalize_path(path);
+
+        if !self.nodes.contains_key(&path) {
+            return Err(io::Error::new(io::ErrorKind::NotFound, "Path not found"));
+        }
+
+        let meta = self.meta.entry(path).or_insert_with(NodeMeta::default);
+
+        if let Some(new_uid) = uid {
+            meta.uid = new_uid;
+        }
+        if let Some(new_gid) = gid {
+            meta.gid = new_gid;
+        }
+
+        Ok(())
     }
 }
 

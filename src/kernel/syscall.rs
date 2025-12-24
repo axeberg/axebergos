@@ -126,6 +126,8 @@ pub enum SyscallNr {
     Setegid = 307,
     Getgroups = 308,
     Setgroups = 309,
+    Chmod = 310,
+    Chown = 311,
 }
 
 impl SyscallNr {
@@ -195,6 +197,8 @@ impl SyscallNr {
             SyscallNr::Setegid => "setegid",
             SyscallNr::Getgroups => "getgroups",
             SyscallNr::Setgroups => "setgroups",
+            SyscallNr::Chmod => "chmod",
+            SyscallNr::Chown => "chown",
         }
     }
 
@@ -1649,6 +1653,50 @@ impl Kernel {
     pub fn get_group_by_gid(&self, gid: Gid) -> Option<&Group> {
         self.users.get_group(gid)
     }
+
+    /// Change file permissions
+    pub fn sys_chmod(&mut self, path: &str, mode: u16) -> SyscallResult<()> {
+        // Check if caller owns the file or is root
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get(&current).unwrap();
+        let euid = process.euid;
+
+        // Get file metadata to check ownership
+        let meta = self.vfs.metadata(path)?;
+
+        // Only root or file owner can chmod
+        if euid.0 != 0 && meta.uid != euid.0 {
+            return Err(SyscallError::PermissionDenied);
+        }
+
+        self.vfs.chmod(path, mode)?;
+        Ok(())
+    }
+
+    /// Change file ownership
+    pub fn sys_chown(&mut self, path: &str, uid: Option<u32>, gid: Option<u32>) -> SyscallResult<()> {
+        // Check if caller is root (only root can chown)
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get(&current).unwrap();
+        let euid = process.euid;
+
+        // Only root can change ownership
+        if euid.0 != 0 {
+            // Non-root can only change group to a group they belong to
+            if uid.is_some() {
+                return Err(SyscallError::PermissionDenied);
+            }
+            if let Some(new_gid) = gid {
+                let groups = &process.groups;
+                if !groups.iter().any(|g| g.0 == new_gid) && process.gid.0 != new_gid {
+                    return Err(SyscallError::PermissionDenied);
+                }
+            }
+        }
+
+        self.vfs.chown(path, uid, gid)?;
+        Ok(())
+    }
 }
 
 impl Default for Kernel {
@@ -2201,6 +2249,16 @@ pub fn add_group(name: &str) -> SyscallResult<Gid> {
             .add_group(name)
             .map_err(|_| SyscallError::AlreadyExists)
     })
+}
+
+/// Change file permissions
+pub fn chmod(path: &str, mode: u16) -> SyscallResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_chmod(path, mode))
+}
+
+/// Change file ownership
+pub fn chown(path: &str, uid: Option<u32>, gid: Option<u32>) -> SyscallResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_chown(path, uid, gid))
 }
 
 // ========== PERSISTENCE API ==========

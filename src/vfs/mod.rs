@@ -70,6 +70,27 @@ pub struct Metadata {
     pub is_file: bool,
     pub is_symlink: bool,
     pub symlink_target: Option<String>,
+    /// Owner user ID
+    pub uid: u32,
+    /// Owner group ID
+    pub gid: u32,
+    /// Unix permission mode (rwxrwxrwx)
+    pub mode: u16,
+}
+
+impl Default for Metadata {
+    fn default() -> Self {
+        Self {
+            size: 0,
+            is_dir: false,
+            is_file: true,
+            is_symlink: false,
+            symlink_target: None,
+            uid: 1000,  // Default to regular user
+            gid: 1000,
+            mode: 0o644, // rw-r--r--
+        }
+    }
 }
 
 /// Directory entry
@@ -126,6 +147,12 @@ pub trait FileSystem {
 
     /// Read the target of a symbolic link
     fn read_link(&self, path: &str) -> io::Result<String>;
+
+    /// Change file mode (permissions)
+    fn chmod(&mut self, path: &str, mode: u16) -> io::Result<()>;
+
+    /// Change file owner
+    fn chown(&mut self, path: &str, uid: Option<u32>, gid: Option<u32>) -> io::Result<()>;
 }
 
 /// Convenience wrapper for reading entire file to string
