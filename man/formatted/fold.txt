@@ -1,0 +1,32 @@
+[4mfold[24m(1)                     General Commands Manual                    [4mfold[24m(1)
+
+[1mNAME[0m
+       fold - wrap each input line to fit in specified width
+
+[1mSYNOPSIS[0m
+       [1mfold [22m[[1m-w [4m[22mWIDTH[24m] [[4mFILE[24m]
+
+[1mDESCRIPTION[0m
+       Wrap lines at the specified width. Reads from FILE or standard input if
+       no file is specified.
+
+[1mOPTIONS[0m
+       [1m-w [4m[22mWIDTH[0m
+           Wrap at WIDTH columns (default 80).
+
+       [1m-h[22m, [1m--help[0m
+           Display usage information and exit.
+
+[1mEXAMPLES[0m
+       Fold lines at 40 characters:
+
+           fold -w 40 file.txt
+
+       Fold stdin:
+
+           echo "very long line" | fold -w 10
+
+[1mSEE ALSO[0m
+       [1mcut[22m(1), [1mtr[22m(1)
+
+                                  2025-12-24                           [4mfold[24m(1)

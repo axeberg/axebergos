@@ -1,0 +1,33 @@
+[4mnl[24m(1)                       General Commands Manual                      [4mnl[24m(1)
+
+[1mNAME[0m
+       nl - number lines of files
+
+[1mSYNOPSIS[0m
+       [1mnl [22m[[4mFILE[24m]
+
+[1mDESCRIPTION[0m
+       Add  line  numbers  to  the  beginning of each line. Reads from FILE or
+       standard input if no file is specified.
+
+[1mOPTIONS[0m
+       [1m-h[22m, [1m--help[0m
+           Display usage information and exit.
+
+[1mOUTPUT FORMAT[0m
+       Lines are numbered starting from 1, right-justified  in  a  6-character
+       field, followed by a tab and the line content.
+
+[1mEXAMPLES[0m
+       Number lines of a file:
+
+           nl file.txt
+
+       Number lines from stdin:
+
+           cat file.txt | nl
+
+[1mSEE ALSO[0m
+       [1mcat[22m(1), [1mhead[22m(1)
+
+                                  2025-12-24                             [4mnl[24m(1)

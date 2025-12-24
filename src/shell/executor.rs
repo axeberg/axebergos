@@ -132,6 +132,14 @@ impl ProgramRegistry {
         reg.register("type", prog_type);
         reg.register("uptime", prog_uptime);
         reg.register("free", prog_free);
+        reg.register("diff", prog_diff);
+        reg.register("base64", prog_base64);
+        reg.register("xxd", prog_xxd);
+        reg.register("nl", prog_nl);
+        reg.register("fold", prog_fold);
+        reg.register("paste", prog_paste);
+        reg.register("comm", prog_comm);
+        reg.register("strings", prog_strings);
 
         reg
     }
@@ -1992,14 +2000,17 @@ fn prog_man(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
     // Embedded man pages (pre-rendered from scdoc)
     let content = match page {
         "basename" => include_str!("../../man/formatted/basename.txt"),
+        "base64" => include_str!("../../man/formatted/base64.txt"),
         "bg" => include_str!("../../man/formatted/bg.txt"),
         "cal" => include_str!("../../man/formatted/cal.txt"),
         "cat" => include_str!("../../man/formatted/cat.txt"),
         "cd" => include_str!("../../man/formatted/cd.txt"),
+        "comm" => include_str!("../../man/formatted/comm.txt"),
         "cp" => include_str!("../../man/formatted/cp.txt"),
         "cut" => include_str!("../../man/formatted/cut.txt"),
         "date" => include_str!("../../man/formatted/date.txt"),
         "df" => include_str!("../../man/formatted/df.txt"),
+        "diff" => include_str!("../../man/formatted/diff.txt"),
         "dirname" => include_str!("../../man/formatted/dirname.txt"),
         "du" => include_str!("../../man/formatted/du.txt"),
         "echo" => include_str!("../../man/formatted/echo.txt"),
@@ -2007,6 +2018,7 @@ fn prog_man(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
         "expr" => include_str!("../../man/formatted/expr.txt"),
         "fg" => include_str!("../../man/formatted/fg.txt"),
         "find" => include_str!("../../man/formatted/find.txt"),
+        "fold" => include_str!("../../man/formatted/fold.txt"),
         "free" => include_str!("../../man/formatted/free.txt"),
         "grep" => include_str!("../../man/formatted/grep.txt"),
         "head" => include_str!("../../man/formatted/head.txt"),
@@ -2019,6 +2031,8 @@ fn prog_man(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
         "man" => include_str!("../../man/formatted/man.txt"),
         "mkdir" => include_str!("../../man/formatted/mkdir.txt"),
         "mv" => include_str!("../../man/formatted/mv.txt"),
+        "nl" => include_str!("../../man/formatted/nl.txt"),
+        "paste" => include_str!("../../man/formatted/paste.txt"),
         "printenv" => include_str!("../../man/formatted/printenv.txt"),
         "printf" => include_str!("../../man/formatted/printf.txt"),
         "ps" => include_str!("../../man/formatted/ps.txt"),
@@ -2028,6 +2042,7 @@ fn prog_man(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
         "seq" => include_str!("../../man/formatted/seq.txt"),
         "sort" => include_str!("../../man/formatted/sort.txt"),
         "strace" => include_str!("../../man/formatted/strace.txt"),
+        "strings" => include_str!("../../man/formatted/strings.txt"),
         "tail" => include_str!("../../man/formatted/tail.txt"),
         "tee" => include_str!("../../man/formatted/tee.txt"),
         "test" => include_str!("../../man/formatted/test.txt"),
@@ -2044,6 +2059,7 @@ fn prog_man(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
         "which" => include_str!("../../man/formatted/which.txt"),
         "whoami" => include_str!("../../man/formatted/whoami.txt"),
         "xargs" => include_str!("../../man/formatted/xargs.txt"),
+        "xxd" => include_str!("../../man/formatted/xxd.txt"),
         "yes" => include_str!("../../man/formatted/yes.txt"),
         _ => {
             stderr.push_str(&format!("No manual entry for {}\n", page));
@@ -3835,6 +3851,483 @@ fn prog_free(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 
         format_size(free, human),
         format_size(shared, human)
     ));
+
+    0
+}
+
+/// diff - compare files line by line
+fn prog_diff(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: diff FILE1 FILE2\nCompare files line by line.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    if args.len() < 2 {
+        stderr.push_str("diff: requires two files\n");
+        return 1;
+    }
+
+    let file1 = args[0];
+    let file2 = args[1];
+
+    let content1 = match read_file_content(file1) {
+        Ok(c) => c,
+        Err(e) => {
+            stderr.push_str(&format!("diff: {}: {}\n", file1, e));
+            return 1;
+        }
+    };
+
+    let content2 = match read_file_content(file2) {
+        Ok(c) => c,
+        Err(e) => {
+            stderr.push_str(&format!("diff: {}: {}\n", file2, e));
+            return 1;
+        }
+    };
+
+    let lines1: Vec<&str> = content1.lines().collect();
+    let lines2: Vec<&str> = content2.lines().collect();
+
+    let mut has_diff = false;
+    let max_len = lines1.len().max(lines2.len());
+
+    for i in 0..max_len {
+        let l1 = lines1.get(i).copied();
+        let l2 = lines2.get(i).copied();
+
+        match (l1, l2) {
+            (Some(a), Some(b)) if a != b => {
+                stdout.push_str(&format!("{}c{}\n", i + 1, i + 1));
+                stdout.push_str(&format!("< {}\n", a));
+                stdout.push_str("---\n");
+                stdout.push_str(&format!("> {}\n", b));
+                has_diff = true;
+            }
+            (Some(a), None) => {
+                stdout.push_str(&format!("{}d{}\n", i + 1, lines2.len()));
+                stdout.push_str(&format!("< {}\n", a));
+                has_diff = true;
+            }
+            (None, Some(b)) => {
+                stdout.push_str(&format!("{}a{}\n", lines1.len(), i + 1));
+                stdout.push_str(&format!("> {}\n", b));
+                has_diff = true;
+            }
+            _ => {}
+        }
+    }
+
+    if has_diff { 1 } else { 0 }
+}
+
+/// base64 - encode/decode base64
+fn prog_base64(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (stdin, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: base64 [-d] [FILE]\nBase64 encode or decode.\n  -d  Decode") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    let decode = args.iter().any(|a| *a == "-d" || *a == "--decode");
+    let file_args: Vec<&str> = args.iter().filter(|a| !a.starts_with('-')).map(|s| s.as_ref()).collect();
+
+    let input = if let Some(file) = file_args.first() {
+        match read_file_content(file) {
+            Ok(c) => c,
+            Err(e) => {
+                stderr.push_str(&format!("base64: {}: {}\n", file, e));
+                return 1;
+            }
+        }
+    } else {
+        stdin.unwrap_or_default()
+    };
+
+    if decode {
+        // Simple base64 decode
+        let chars: Vec<char> = input.chars().filter(|c| !c.is_whitespace()).collect();
+        let mut result = Vec::new();
+        let mut i = 0;
+
+        while i < chars.len() {
+            let chunk: Vec<u8> = chars[i..].iter().take(4).map(|c| base64_decode_char(*c)).collect();
+            if chunk.len() < 4 { break; }
+
+            let val = ((chunk[0] as u32) << 18) | ((chunk[1] as u32) << 12) | ((chunk[2] as u32) << 6) | (chunk[3] as u32);
+            result.push((val >> 16) as u8);
+            if chunk[2] < 64 { result.push((val >> 8) as u8); }
+            if chunk[3] < 64 { result.push(val as u8); }
+            i += 4;
+        }
+
+        if let Ok(s) = String::from_utf8(result) {
+            stdout.push_str(&s);
+        } else {
+            stderr.push_str("base64: invalid encoding\n");
+            return 1;
+        }
+    } else {
+        // Base64 encode
+        let bytes = input.as_bytes();
+        let mut result = String::new();
+
+        for chunk in bytes.chunks(3) {
+            let val = match chunk.len() {
+                3 => ((chunk[0] as u32) << 16) | ((chunk[1] as u32) << 8) | (chunk[2] as u32),
+                2 => ((chunk[0] as u32) << 16) | ((chunk[1] as u32) << 8),
+                1 => (chunk[0] as u32) << 16,
+                _ => break,
+            };
+
+            result.push(base64_encode_val((val >> 18) & 0x3F));
+            result.push(base64_encode_val((val >> 12) & 0x3F));
+            result.push(if chunk.len() > 1 { base64_encode_val((val >> 6) & 0x3F) } else { '=' });
+            result.push(if chunk.len() > 2 { base64_encode_val(val & 0x3F) } else { '=' });
+        }
+
+        stdout.push_str(&result);
+        stdout.push('\n');
+    }
+
+    0
+}
+
+fn base64_encode_val(v: u32) -> char {
+    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    CHARS[v as usize] as char
+}
+
+fn base64_decode_char(c: char) -> u8 {
+    match c {
+        'A'..='Z' => (c as u8) - b'A',
+        'a'..='z' => (c as u8) - b'a' + 26,
+        '0'..='9' => (c as u8) - b'0' + 52,
+        '+' => 62,
+        '/' => 63,
+        '=' => 64, // padding
+        _ => 64,
+    }
+}
+
+/// xxd - hex dump
+fn prog_xxd(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (stdin, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: xxd [FILE]\nMake a hexdump.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    let input = if let Some(file) = args.first() {
+        match read_file_content(file) {
+            Ok(c) => c,
+            Err(e) => {
+                stderr.push_str(&format!("xxd: {}: {}\n", file, e));
+                return 1;
+            }
+        }
+    } else {
+        stdin.unwrap_or_default()
+    };
+
+    let bytes = input.as_bytes();
+
+    for (offset, chunk) in bytes.chunks(16).enumerate() {
+        // Offset
+        stdout.push_str(&format!("{:08x}: ", offset * 16));
+
+        // Hex bytes
+        for (i, byte) in chunk.iter().enumerate() {
+            stdout.push_str(&format!("{:02x}", byte));
+            if i % 2 == 1 { stdout.push(' '); }
+        }
+
+        // Padding for incomplete lines
+        for i in chunk.len()..16 {
+            stdout.push_str("  ");
+            if i % 2 == 1 { stdout.push(' '); }
+        }
+
+        // ASCII representation
+        stdout.push(' ');
+        for byte in chunk {
+            if *byte >= 0x20 && *byte < 0x7f {
+                stdout.push(*byte as char);
+            } else {
+                stdout.push('.');
+            }
+        }
+        stdout.push('\n');
+    }
+
+    0
+}
+
+/// nl - number lines
+fn prog_nl(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (stdin, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: nl [FILE]\nNumber lines of a file.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    let input = if let Some(file) = args.first().filter(|f| !f.starts_with('-')) {
+        match read_file_content(file) {
+            Ok(c) => c,
+            Err(e) => {
+                stderr.push_str(&format!("nl: {}: {}\n", file, e));
+                return 1;
+            }
+        }
+    } else {
+        stdin.unwrap_or_default()
+    };
+
+    for (i, line) in input.lines().enumerate() {
+        stdout.push_str(&format!("{:6}\t{}\n", i + 1, line));
+    }
+
+    0
+}
+
+/// fold - wrap lines
+fn prog_fold(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (stdin, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: fold [-w WIDTH] [FILE]\nWrap lines at specified width.\n  -w WIDTH  Width (default 80)") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    let mut width: usize = 80;
+    let mut i = 0;
+    let mut file = None;
+
+    while i < args.len() {
+        if args[i] == "-w" && i + 1 < args.len() {
+            width = args[i + 1].parse().unwrap_or(80);
+            i += 2;
+        } else if !args[i].starts_with('-') {
+            file = Some(args[i].to_string());
+            i += 1;
+        } else {
+            i += 1;
+        }
+    }
+
+    let input = if let Some(ref f) = file {
+        match read_file_content(f) {
+            Ok(c) => c,
+            Err(e) => {
+                stderr.push_str(&format!("fold: {}: {}\n", f, e));
+                return 1;
+            }
+        }
+    } else {
+        stdin.unwrap_or_default()
+    };
+
+    for line in input.lines() {
+        let chars: Vec<char> = line.chars().collect();
+        for chunk in chars.chunks(width) {
+            let s: String = chunk.iter().collect();
+            stdout.push_str(&s);
+            stdout.push('\n');
+        }
+    }
+
+    0
+}
+
+/// paste - merge lines of files
+fn prog_paste(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: paste FILE1 FILE2...\nMerge lines of files.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    if args.is_empty() {
+        stderr.push_str("paste: requires at least one file\n");
+        return 1;
+    }
+
+    let mut file_lines: Vec<Vec<String>> = Vec::new();
+    let mut max_lines = 0;
+
+    for file in &args {
+        match read_file_content(file) {
+            Ok(content) => {
+                let lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+                max_lines = max_lines.max(lines.len());
+                file_lines.push(lines);
+            }
+            Err(e) => {
+                stderr.push_str(&format!("paste: {}: {}\n", file, e));
+                return 1;
+            }
+        }
+    }
+
+    for i in 0..max_lines {
+        for (j, lines) in file_lines.iter().enumerate() {
+            if j > 0 { stdout.push('\t'); }
+            if let Some(line) = lines.get(i) {
+                stdout.push_str(line);
+            }
+        }
+        stdout.push('\n');
+    }
+
+    0
+}
+
+/// comm - compare sorted files
+fn prog_comm(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: comm [-123] FILE1 FILE2\nCompare sorted files line by line.\n  -1  Suppress column 1 (lines unique to FILE1)\n  -2  Suppress column 2 (lines unique to FILE2)\n  -3  Suppress column 3 (common lines)") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    let suppress1 = args.iter().any(|a| a.contains('1'));
+    let suppress2 = args.iter().any(|a| a.contains('2'));
+    let suppress3 = args.iter().any(|a| a.contains('3'));
+
+    let files: Vec<&str> = args.iter().filter(|a| !a.starts_with('-')).map(|s| s.as_ref()).collect();
+    if files.len() < 2 {
+        stderr.push_str("comm: requires two files\n");
+        return 1;
+    }
+
+    let content1 = match read_file_content(files[0]) {
+        Ok(c) => c,
+        Err(e) => {
+            stderr.push_str(&format!("comm: {}: {}\n", files[0], e));
+            return 1;
+        }
+    };
+
+    let content2 = match read_file_content(files[1]) {
+        Ok(c) => c,
+        Err(e) => {
+            stderr.push_str(&format!("comm: {}: {}\n", files[1], e));
+            return 1;
+        }
+    };
+
+    let mut lines1: Vec<&str> = content1.lines().collect();
+    let mut lines2: Vec<&str> = content2.lines().collect();
+
+    let mut i = 0;
+    let mut j = 0;
+
+    while i < lines1.len() || j < lines2.len() {
+        match (lines1.get(i), lines2.get(j)) {
+            (Some(a), Some(b)) if a == b => {
+                if !suppress3 {
+                    let prefix = if suppress1 || suppress2 { "" } else { "\t\t" };
+                    stdout.push_str(&format!("{}{}\n", prefix, a));
+                }
+                i += 1;
+                j += 1;
+            }
+            (Some(a), Some(b)) if a < b => {
+                if !suppress1 {
+                    stdout.push_str(&format!("{}\n", a));
+                }
+                i += 1;
+            }
+            (Some(_), Some(b)) => {
+                if !suppress2 {
+                    let prefix = if suppress1 { "" } else { "\t" };
+                    stdout.push_str(&format!("{}{}\n", prefix, b));
+                }
+                j += 1;
+            }
+            (Some(a), None) => {
+                if !suppress1 {
+                    stdout.push_str(&format!("{}\n", a));
+                }
+                i += 1;
+            }
+            (None, Some(b)) => {
+                if !suppress2 {
+                    let prefix = if suppress1 { "" } else { "\t" };
+                    stdout.push_str(&format!("{}{}\n", prefix, b));
+                }
+                j += 1;
+            }
+            (None, None) => break,
+        }
+    }
+
+    0
+}
+
+/// strings - print strings from binary
+fn prog_strings(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (stdin, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: strings [-n MIN] [FILE]\nPrint printable strings from file.\n  -n MIN  Minimum string length (default 4)") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    let mut min_len: usize = 4;
+    let mut i = 0;
+    let mut file = None;
+
+    while i < args.len() {
+        if args[i] == "-n" && i + 1 < args.len() {
+            min_len = args[i + 1].parse().unwrap_or(4);
+            i += 2;
+        } else if !args[i].starts_with('-') {
+            file = Some(args[i].to_string());
+            i += 1;
+        } else {
+            i += 1;
+        }
+    }
+
+    let input = if let Some(ref f) = file {
+        match read_file_content(f) {
+            Ok(c) => c,
+            Err(e) => {
+                stderr.push_str(&format!("strings: {}: {}\n", f, e));
+                return 1;
+            }
+        }
+    } else {
+        stdin.unwrap_or_default()
+    };
+
+    let bytes = input.as_bytes();
+    let mut current = String::new();
+
+    for byte in bytes {
+        if *byte >= 0x20 && *byte < 0x7f {
+            current.push(*byte as char);
+        } else {
+            if current.len() >= min_len {
+                stdout.push_str(&current);
+                stdout.push('\n');
+            }
+            current.clear();
+        }
+    }
+
+    if current.len() >= min_len {
+        stdout.push_str(&current);
+        stdout.push('\n');
+    }
 
     0
 }

@@ -1,0 +1,36 @@
+[4mxxd[24m(1)                      General Commands Manual                     [4mxxd[24m(1)
+
+[1mNAME[0m
+       xxd - make a hexdump
+
+[1mSYNOPSIS[0m
+       [1mxxd [22m[[4mFILE[24m]
+
+[1mDESCRIPTION[0m
+       Create a hex dump of a file or standard input. Output shows offset, hex
+       bytes, and ASCII representation.
+
+[1mOPTIONS[0m
+       [1m-h[22m, [1m--help[0m
+           Display usage information and exit.
+
+[1mOUTPUT FORMAT[0m
+       Each line contains:
+       •   8-character hex offset
+       •   Up to 16 bytes in hexadecimal (grouped in pairs)
+       •   ASCII representation (non-printable as '.')
+
+
+[1mEXAMPLES[0m
+       Hex dump a file:
+
+           xxd file.txt
+
+       Hex dump from stdin:
+
+           echo "Hello" | xxd
+
+[1mSEE ALSO[0m
+       [1mbase64[22m(1), [1mstrings[22m(1)
+
+                                  2025-12-24                            [4mxxd[24m(1)
