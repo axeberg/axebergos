@@ -25,6 +25,7 @@ pub use super::process::{Fd, Handle, OpenFlags, Pgid, Pid, Process, ProcessState
 use super::devfs::DevFs;
 use super::fifo::{FifoError, FifoRegistry};
 use super::init::InitSystem;
+use super::mount::{FsType, MountEntry, MountError, MountOptions, MountTable};
 use super::msgqueue::{Message, MsgQueueError, MsgQueueId, MsgQueueManager, MsgQueueStats};
 use super::procfs::{generate_proc_content, ProcContext, ProcFs, SystemContext};
 use super::semaphore::{SemaphoreManager, SemError, SemId, SemOpResult, SemSetStats};
@@ -435,6 +436,8 @@ pub struct Kernel {
     msgqueues: MsgQueueManager,
     /// Semaphore manager
     semaphores: SemaphoreManager,
+    /// Mount table
+    mounts: MountTable,
 }
 
 /// Simple PRNG for /dev/random and /dev/urandom
@@ -509,6 +512,7 @@ impl Kernel {
             fifos: FifoRegistry::new(),
             msgqueues: MsgQueueManager::new(),
             semaphores: SemaphoreManager::new(),
+            mounts: MountTable::with_defaults(0.0),
         }
     }
 
@@ -565,6 +569,16 @@ impl Kernel {
     /// Get mutable reference to semaphore manager
     pub fn semaphores_mut(&mut self) -> &mut SemaphoreManager {
         &mut self.semaphores
+    }
+
+    /// Get reference to mount table
+    pub fn mounts(&self) -> &MountTable {
+        &self.mounts
+    }
+
+    /// Get mutable reference to mount table
+    pub fn mounts_mut(&mut self) -> &mut MountTable {
+        &mut self.mounts
     }
 
     /// Get the currently running process
