@@ -23,8 +23,11 @@ use super::object::{
 };
 pub use super::process::{Fd, Handle, OpenFlags, Pgid, Pid, Process, ProcessState};
 use super::devfs::DevFs;
+use super::fifo::{FifoError, FifoRegistry};
 use super::init::InitSystem;
+use super::msgqueue::{Message, MsgQueueError, MsgQueueId, MsgQueueManager, MsgQueueStats};
 use super::procfs::{generate_proc_content, ProcContext, ProcFs, SystemContext};
+use super::semaphore::{SemaphoreManager, SemError, SemId, SemOpResult, SemSetStats};
 use super::signal::{resolve_action, Signal, SignalAction, SignalError};
 use super::sysfs::SysFs;
 use super::task::TaskId;
@@ -426,6 +429,12 @@ pub struct Kernel {
     sysfs: SysFs,
     /// Init system (service manager)
     init: InitSystem,
+    /// FIFO registry for named pipes
+    fifos: FifoRegistry,
+    /// Message queue manager
+    msgqueues: MsgQueueManager,
+    /// Semaphore manager
+    semaphores: SemaphoreManager,
 }
 
 /// Simple PRNG for /dev/random and /dev/urandom
@@ -497,6 +506,9 @@ impl Kernel {
             devfs: DevFs::new(),
             sysfs: SysFs::new(),
             init: InitSystem::new(),
+            fifos: FifoRegistry::new(),
+            msgqueues: MsgQueueManager::new(),
+            semaphores: SemaphoreManager::new(),
         }
     }
 
@@ -523,6 +535,36 @@ impl Kernel {
     /// Get a mutable reference to the init system
     pub fn init_mut(&mut self) -> &mut InitSystem {
         &mut self.init
+    }
+
+    /// Get reference to FIFO registry
+    pub fn fifos(&self) -> &FifoRegistry {
+        &self.fifos
+    }
+
+    /// Get mutable reference to FIFO registry
+    pub fn fifos_mut(&mut self) -> &mut FifoRegistry {
+        &mut self.fifos
+    }
+
+    /// Get reference to message queue manager
+    pub fn msgqueues(&self) -> &MsgQueueManager {
+        &self.msgqueues
+    }
+
+    /// Get mutable reference to message queue manager
+    pub fn msgqueues_mut(&mut self) -> &mut MsgQueueManager {
+        &mut self.msgqueues
+    }
+
+    /// Get reference to semaphore manager
+    pub fn semaphores(&self) -> &SemaphoreManager {
+        &self.semaphores
+    }
+
+    /// Get mutable reference to semaphore manager
+    pub fn semaphores_mut(&mut self) -> &mut SemaphoreManager {
+        &mut self.semaphores
     }
 
     /// Get the currently running process
