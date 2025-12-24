@@ -11,6 +11,7 @@
 //! - KernelObject: file, pipe, console, window, etc.
 //! - Syscall: the interface between user code and the kernel
 
+pub mod devfs;
 pub mod events;
 pub mod executor;
 pub mod ipc;
@@ -20,6 +21,7 @@ pub mod process;
 pub mod procfs;
 pub mod signal;
 pub mod syscall;
+pub mod sysfs;
 pub mod task;
 pub mod timer;
 pub mod trace;

@@ -22,8 +22,10 @@ use super::object::{
     ConsoleObject, FileObject, KernelObject, ObjectTable, PipeObject, WindowId, WindowObject,
 };
 pub use super::process::{Fd, Handle, OpenFlags, Pgid, Pid, Process, ProcessState};
+use super::devfs::DevFs;
 use super::procfs::{generate_proc_content, ProcContext, ProcFs, SystemContext};
 use super::signal::{resolve_action, Signal, SignalAction, SignalError};
+use super::sysfs::SysFs;
 use super::task::TaskId;
 use super::timer::{TimerId, TimerQueue};
 use super::trace::{TraceCategory, TraceSummary, Tracer};
@@ -417,6 +419,10 @@ pub struct Kernel {
     users: UserDb,
     /// Proc filesystem handler
     procfs: ProcFs,
+    /// Device filesystem handler
+    devfs: DevFs,
+    /// Sysfs handler
+    sysfs: SysFs,
 }
 
 /// Simple PRNG for /dev/random and /dev/urandom
@@ -485,6 +491,8 @@ impl Kernel {
             tracer: Tracer::new(),
             users: UserDb::new(),
             procfs: ProcFs::new(),
+            devfs: DevFs::new(),
+            sysfs: SysFs::new(),
         }
     }
 
@@ -626,6 +634,8 @@ impl Kernel {
             self.open_device(&resolved, flags)?
         } else if ProcFs::is_proc_path(&resolved_str) {
             self.open_proc(&resolved_str, current)?
+        } else if SysFs::is_sys_path(&resolved_str) {
+            self.open_sysfs(&resolved_str)?
         } else {
             self.open_file(&resolved, flags)?
         };
@@ -703,6 +713,35 @@ impl Kernel {
 
         // Generate file content
         let content = generate_proc_content(path, current_pid.0, proc_ctx.as_ref(), &sys_ctx)
+            .ok_or(SyscallError::NotFound)?;
+
+        // Create a file object with the generated content
+        let file = FileObject {
+            path: PathBuf::from(path),
+            position: 0,
+            data: content,
+            readable: true,
+            writable: false,
+        };
+
+        let handle = self.objects.insert(KernelObject::File(file));
+        Ok(handle)
+    }
+
+    /// Open a /sys file
+    fn open_sysfs(&mut self, path: &str) -> SyscallResult<Handle> {
+        // Check if path exists
+        if !self.sysfs.exists(path) {
+            return Err(SyscallError::NotFound);
+        }
+
+        // Check if it's a directory
+        if self.sysfs.is_dir(path) {
+            return Err(SyscallError::IsADirectory);
+        }
+
+        // Generate content
+        let content = self.sysfs.generate_content(path)
             .ok_or(SyscallError::NotFound)?;
 
         // Create a file object with the generated content
@@ -1201,6 +1240,22 @@ impl Kernel {
             return Err(SyscallError::NotFound);
         }
 
+        // Handle /dev directory listings
+        if DevFs::is_dev_path(path_str) {
+            if let Some(entries) = self.devfs.list_dir(path_str) {
+                return Ok(entries);
+            }
+            return Err(SyscallError::NotFound);
+        }
+
+        // Handle /sys directory listings
+        if SysFs::is_sys_path(path_str) {
+            if let Some(entries) = self.sysfs.list_dir(path_str) {
+                return Ok(entries);
+            }
+            return Err(SyscallError::NotFound);
+        }
+
         let entries = self.vfs.read_dir(path_str)?;
         Ok(entries.into_iter().map(|e| e.name).collect())
     }
@@ -1215,6 +1270,16 @@ impl Kernel {
         if ProcFs::is_proc_path(path_str) {
             let pids: Vec<u32> = self.processes.keys().map(|p| p.0).collect();
             return Ok(self.procfs.exists(path_str, &pids));
+        }
+
+        // Handle /dev paths
+        if DevFs::is_dev_path(path_str) {
+            return Ok(self.devfs.exists(path_str));
+        }
+
+        // Handle /sys paths
+        if SysFs::is_sys_path(path_str) {
+            return Ok(self.sysfs.exists(path_str));
         }
 
         Ok(self.vfs.exists(path_str))
@@ -1235,6 +1300,36 @@ impl Kernel {
             let is_dir = self.procfs.is_dir(path_str, &pids);
             return Ok(FileMetadata {
                 size: 0, // /proc files have dynamic size
+                is_dir,
+                is_file: !is_dir,
+                is_symlink: false,
+                symlink_target: None,
+            });
+        }
+
+        // Handle /dev paths
+        if DevFs::is_dev_path(path_str) {
+            if !self.devfs.exists(path_str) {
+                return Err(SyscallError::NotFound);
+            }
+            let is_dir = self.devfs.is_dir(path_str);
+            return Ok(FileMetadata {
+                size: 0,
+                is_dir,
+                is_file: !is_dir,
+                is_symlink: false,
+                symlink_target: None,
+            });
+        }
+
+        // Handle /sys paths
+        if SysFs::is_sys_path(path_str) {
+            if !self.sysfs.exists(path_str) {
+                return Err(SyscallError::NotFound);
+            }
+            let is_dir = self.sysfs.is_dir(path_str);
+            return Ok(FileMetadata {
+                size: 0,
                 is_dir,
                 is_file: !is_dir,
                 is_symlink: false,
@@ -3080,5 +3175,151 @@ mod tests {
         let meta = metadata("/proc/uptime").unwrap();
         assert!(!meta.is_dir);
         assert!(meta.is_file);
+    }
+
+    // ========== /dev Filesystem Tests ==========
+
+    #[test]
+    fn test_dev_readdir() {
+        setup_test_kernel();
+
+        let entries = readdir("/dev").unwrap();
+        // Should have standard devices
+        assert!(entries.contains(&"null".to_string()));
+        assert!(entries.contains(&"zero".to_string()));
+        assert!(entries.contains(&"random".to_string()));
+        assert!(entries.contains(&"urandom".to_string()));
+        assert!(entries.contains(&"console".to_string()));
+    }
+
+    #[test]
+    fn test_dev_exists() {
+        setup_test_kernel();
+
+        assert!(exists("/dev").unwrap());
+        assert!(exists("/dev/null").unwrap());
+        assert!(exists("/dev/zero").unwrap());
+        assert!(exists("/dev/random").unwrap());
+        assert!(!exists("/dev/nonexistent").unwrap());
+    }
+
+    #[test]
+    fn test_dev_metadata() {
+        setup_test_kernel();
+
+        // /dev is a directory
+        let meta = metadata("/dev").unwrap();
+        assert!(meta.is_dir);
+        assert!(!meta.is_file);
+
+        // /dev/null is a file (device)
+        let meta = metadata("/dev/null").unwrap();
+        assert!(!meta.is_dir);
+        assert!(meta.is_file);
+    }
+
+    #[test]
+    fn test_dev_null() {
+        setup_test_kernel();
+
+        // Write to /dev/null should work
+        let fd = open("/dev/null", OpenFlags::WRITE).unwrap();
+        let n = write(fd, b"test data").unwrap();
+        assert_eq!(n, 9);
+        close(fd).unwrap();
+    }
+
+    #[test]
+    fn test_dev_zero() {
+        setup_test_kernel();
+
+        // Read from /dev/zero should return zeros
+        let fd = open("/dev/zero", OpenFlags::READ).unwrap();
+        let mut buf = [0xFFu8; 16];
+        let n = read(fd, &mut buf).unwrap();
+        assert!(n > 0);
+        assert!(buf.iter().take(n).all(|&b| b == 0));
+        close(fd).unwrap();
+    }
+
+    #[test]
+    fn test_dev_random() {
+        setup_test_kernel();
+
+        // Read from /dev/random should return bytes
+        let fd = open("/dev/random", OpenFlags::READ).unwrap();
+        let mut buf = [0u8; 16];
+        let n = read(fd, &mut buf).unwrap();
+        assert!(n > 0);
+        close(fd).unwrap();
+    }
+
+    // ========== /sys Filesystem Tests ==========
+
+    #[test]
+    fn test_sys_readdir() {
+        setup_test_kernel();
+
+        let entries = readdir("/sys").unwrap();
+        // Should have standard sysfs directories
+        assert!(entries.contains(&"kernel".to_string()));
+        assert!(entries.contains(&"class".to_string()));
+        assert!(entries.contains(&"devices".to_string()));
+    }
+
+    #[test]
+    fn test_sys_exists() {
+        setup_test_kernel();
+
+        assert!(exists("/sys").unwrap());
+        assert!(exists("/sys/kernel").unwrap());
+        assert!(exists("/sys/kernel/hostname").unwrap());
+        assert!(!exists("/sys/nonexistent").unwrap());
+    }
+
+    #[test]
+    fn test_sys_metadata() {
+        setup_test_kernel();
+
+        // /sys is a directory
+        let meta = metadata("/sys").unwrap();
+        assert!(meta.is_dir);
+        assert!(!meta.is_file);
+
+        // /sys/kernel is a directory
+        let meta = metadata("/sys/kernel").unwrap();
+        assert!(meta.is_dir);
+
+        // /sys/kernel/hostname is a file
+        let meta = metadata("/sys/kernel/hostname").unwrap();
+        assert!(!meta.is_dir);
+        assert!(meta.is_file);
+    }
+
+    #[test]
+    fn test_sys_read_file() {
+        setup_test_kernel();
+
+        // Read /sys/kernel/hostname
+        let fd = open("/sys/kernel/hostname", OpenFlags::READ).unwrap();
+        let mut buf = [0u8; 64];
+        let n = read(fd, &mut buf).unwrap();
+        close(fd).unwrap();
+
+        let content = std::str::from_utf8(&buf[..n]).unwrap();
+        assert!(content.contains("axeberg"));
+    }
+
+    #[test]
+    fn test_sys_kernel_ostype() {
+        setup_test_kernel();
+
+        let fd = open("/sys/kernel/ostype", OpenFlags::READ).unwrap();
+        let mut buf = [0u8; 64];
+        let n = read(fd, &mut buf).unwrap();
+        close(fd).unwrap();
+
+        let content = std::str::from_utf8(&buf[..n]).unwrap();
+        assert!(content.contains("AxebergOS"));
     }
 }
