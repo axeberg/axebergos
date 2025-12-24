@@ -140,6 +140,12 @@ impl ProgramRegistry {
         reg.register("paste", prog_paste);
         reg.register("comm", prog_comm);
         reg.register("strings", prog_strings);
+        reg.register("groups", prog_groups);
+        reg.register("su", prog_su);
+        reg.register("sudo", prog_sudo);
+        reg.register("useradd", prog_useradd);
+        reg.register("groupadd", prog_groupadd);
+        reg.register("passwd", prog_passwd);
 
         reg
     }
@@ -2112,43 +2118,88 @@ fn prog_printenv(args: &[String], stdout: &mut String, stderr: &mut String) -> i
 fn prog_id(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
     let (_, args) = extract_stdin(args);
 
-    if let Some(help) = check_help(&args, "Usage: id\nPrint process ID, parent PID, and process group.") {
+    if let Some(help) = check_help(&args, "Usage: id [USER]\nPrint user and group IDs.") {
         stdout.push_str(&help);
         return 0;
     }
 
-    // Get process info from kernel
-    match syscall::getpid() {
-        Ok(pid) => {
-            let ppid = syscall::getppid().ok().flatten();
-            let pgid = syscall::getpgid(pid).ok();
+    // Get user info - either for specified user or current process
+    if let Some(username) = args.first() {
+        // Show info for specified user
+        if let Some(user) = syscall::get_user_by_name(username) {
+            let group_name = syscall::get_group_by_gid(user.gid)
+                .map(|g| g.name.clone())
+                .unwrap_or_else(|| user.gid.0.to_string());
 
-            stdout.push_str(&format!("pid={}", pid.0));
-            if let Some(ppid) = ppid {
-                stdout.push_str(&format!(" ppid={}", ppid.0));
-            } else {
-                stdout.push_str(" ppid=(none)");
-            }
-            if let Some(pgid) = pgid {
-                stdout.push_str(&format!(" pgid={}", pgid.0));
-            }
-            stdout.push('\n');
-
-            // Also show environment info
-            if let Ok(Some(user)) = syscall::getenv("USER") {
-                stdout.push_str(&format!("user={}\n", user));
-            }
-            if let Ok(Some(home)) = syscall::getenv("HOME") {
-                stdout.push_str(&format!("home={}\n", home));
-            }
-
-            0
-        }
-        Err(e) => {
-            stderr.push_str(&format!("id: {}\n", e));
-            1
+            stdout.push_str(&format!(
+                "uid={}({}) gid={}({})\n",
+                user.uid.0, user.name, user.gid.0, group_name
+            ));
+            return 0;
+        } else {
+            stderr.push_str(&format!("id: '{}': no such user\n", username));
+            return 1;
         }
     }
+
+    // Show info for current process
+    let uid = match syscall::getuid() {
+        Ok(u) => u,
+        Err(e) => {
+            stderr.push_str(&format!("id: {}\n", e));
+            return 1;
+        }
+    };
+
+    let gid = syscall::getgid().unwrap_or_default();
+    let euid = syscall::geteuid().unwrap_or(uid);
+    let egid = syscall::getegid().unwrap_or(gid);
+    let groups = syscall::getgroups().unwrap_or_default();
+
+    // Get names from user database
+    let uid_name = syscall::get_user_by_uid(uid)
+        .map(|u| u.name.clone())
+        .unwrap_or_else(|| uid.0.to_string());
+    let gid_name = syscall::get_group_by_gid(gid)
+        .map(|g| g.name.clone())
+        .unwrap_or_else(|| gid.0.to_string());
+
+    // Format uid and gid
+    stdout.push_str(&format!("uid={}({}) gid={}({})", uid.0, uid_name, gid.0, gid_name));
+
+    // Show effective uid if different
+    if euid != uid {
+        let euid_name = syscall::get_user_by_uid(euid)
+            .map(|u| u.name.clone())
+            .unwrap_or_else(|| euid.0.to_string());
+        stdout.push_str(&format!(" euid={}({})", euid.0, euid_name));
+    }
+
+    // Show effective gid if different
+    if egid != gid {
+        let egid_name = syscall::get_group_by_gid(egid)
+            .map(|g| g.name.clone())
+            .unwrap_or_else(|| egid.0.to_string());
+        stdout.push_str(&format!(" egid={}({})", egid.0, egid_name));
+    }
+
+    // Show groups
+    if !groups.is_empty() {
+        stdout.push_str(" groups=");
+        let group_strs: Vec<String> = groups
+            .iter()
+            .map(|g| {
+                let name = syscall::get_group_by_gid(*g)
+                    .map(|gr| gr.name.clone())
+                    .unwrap_or_else(|| g.0.to_string());
+                format!("{}({})", g.0, name)
+            })
+            .collect();
+        stdout.push_str(&group_strs.join(","));
+    }
+
+    stdout.push('\n');
+    0
 }
 
 /// jobs - list background jobs
@@ -2386,21 +2437,338 @@ fn prog_whoami(args: &[String], stdout: &mut String, stderr: &mut String) -> i32
         return 0;
     }
 
-    match syscall::getenv("USER") {
-        Ok(Some(user)) => {
-            stdout.push_str(&user);
-            stdout.push('\n');
-            0
-        }
-        Ok(None) => {
-            stderr.push_str("whoami: cannot find username\n");
-            1
+    // Get effective user ID and look up the username
+    match syscall::geteuid() {
+        Ok(euid) => {
+            if let Some(user) = syscall::get_user_by_uid(euid) {
+                stdout.push_str(&user.name);
+                stdout.push('\n');
+                0
+            } else {
+                // Fallback to environment or uid
+                if let Ok(Some(user)) = syscall::getenv("USER") {
+                    stdout.push_str(&user);
+                    stdout.push('\n');
+                    0
+                } else {
+                    stdout.push_str(&format!("{}\n", euid.0));
+                    0
+                }
+            }
         }
         Err(e) => {
             stderr.push_str(&format!("whoami: {}\n", e));
             1
         }
     }
+}
+
+/// groups - print group memberships
+fn prog_groups(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: groups [USER]\nPrint group memberships.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    // Get groups for specified user or current process
+    if let Some(username) = args.first() {
+        // Look up user's groups
+        if let Some(user) = syscall::get_user_by_name(username) {
+            stdout.push_str(username);
+            stdout.push_str(" : ");
+
+            // Primary group
+            let primary = syscall::get_group_by_gid(user.gid)
+                .map(|g| g.name.clone())
+                .unwrap_or_else(|| user.gid.0.to_string());
+            stdout.push_str(&primary);
+
+            // TODO: Get supplementary groups from user database
+            stdout.push('\n');
+            return 0;
+        } else {
+            stderr.push_str(&format!("groups: '{}': no such user\n", username));
+            return 1;
+        }
+    }
+
+    // Current user's groups
+    let groups = match syscall::getgroups() {
+        Ok(g) => g,
+        Err(e) => {
+            stderr.push_str(&format!("groups: {}\n", e));
+            return 1;
+        }
+    };
+
+    let names: Vec<String> = groups
+        .iter()
+        .map(|g| {
+            syscall::get_group_by_gid(*g)
+                .map(|gr| gr.name.clone())
+                .unwrap_or_else(|| g.0.to_string())
+        })
+        .collect();
+
+    stdout.push_str(&names.join(" "));
+    stdout.push('\n');
+    0
+}
+
+/// su - switch user (simulated)
+fn prog_su(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: su [-] [USER]\nSwitch user. Defaults to root.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    // Parse arguments
+    let mut login_shell = false;
+    let mut target_user = "root";
+
+    for arg in args {
+        if arg == "-" || arg == "-l" || arg == "--login" {
+            login_shell = true;
+        } else if !arg.starts_with('-') {
+            target_user = arg;
+        }
+    }
+
+    // Look up target user
+    let user = match syscall::get_user_by_name(target_user) {
+        Some(u) => u,
+        None => {
+            stderr.push_str(&format!("su: user '{}' does not exist\n", target_user));
+            return 1;
+        }
+    };
+
+    // Check if we have permission (root can su to anyone, others need wheel group or password)
+    let euid = syscall::geteuid().unwrap_or_default();
+    if euid.0 != 0 {
+        // Non-root user - would need password in real system
+        // For demo, check if user is in wheel group
+        let groups = syscall::getgroups().unwrap_or_default();
+        let in_wheel = groups.iter().any(|g| g.0 == 10); // wheel is gid 10
+
+        if !in_wheel && target_user == "root" {
+            stderr.push_str("su: authentication required (user not in wheel group)\n");
+            return 1;
+        }
+    }
+
+    // Set the user and group IDs
+    if let Err(e) = syscall::setuid(user.uid) {
+        stderr.push_str(&format!("su: failed to set uid: {}\n", e));
+        return 1;
+    }
+
+    if let Err(e) = syscall::setgid(user.gid) {
+        stderr.push_str(&format!("su: failed to set gid: {}\n", e));
+        return 1;
+    }
+
+    // Update environment
+    let _ = syscall::setenv("USER", &user.name);
+    let _ = syscall::setenv("HOME", &user.home);
+    if login_shell {
+        let _ = syscall::setenv("SHELL", &user.shell);
+    }
+
+    stdout.push_str(&format!("Switched to user '{}'\n", user.name));
+    0
+}
+
+/// sudo - run command as root (simulated)
+fn prog_sudo(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if args.is_empty() || args.first().map(|s| s.as_ref()) == Some("--help") {
+        stdout.push_str("Usage: sudo COMMAND [ARG]...\nRun command as root.\n");
+        return 0;
+    }
+
+    // Check if user is in wheel group (sudoers)
+    let euid = syscall::geteuid().unwrap_or_default();
+    if euid.0 != 0 {
+        let groups = syscall::getgroups().unwrap_or_default();
+        let in_wheel = groups.iter().any(|g| g.0 == 10);
+
+        if !in_wheel {
+            stderr.push_str("sudo: user is not in sudoers (wheel group)\n");
+            return 1;
+        }
+    }
+
+    // Temporarily become root
+    let old_euid = euid;
+    let old_egid = syscall::getegid().unwrap_or_default();
+
+    if let Err(e) = syscall::seteuid(crate::kernel::Uid::ROOT) {
+        stderr.push_str(&format!("sudo: failed to elevate: {}\n", e));
+        return 1;
+    }
+    if let Err(e) = syscall::setegid(crate::kernel::Gid::ROOT) {
+        stderr.push_str(&format!("sudo: failed to elevate gid: {}\n", e));
+        let _ = syscall::seteuid(old_euid);
+        return 1;
+    }
+
+    // The actual command would be executed by the shell in a real implementation
+    // For now, just print that we're running as root
+    stdout.push_str(&format!("[sudo] Running as root: {}\n", args.join(" ")));
+
+    // Restore original effective uid/gid
+    let _ = syscall::seteuid(old_euid);
+    let _ = syscall::setegid(old_egid);
+
+    0
+}
+
+/// useradd - create a new user
+fn prog_useradd(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if args.is_empty() || args.first().map(|s| s.as_ref()) == Some("--help") {
+        stdout.push_str("Usage: useradd [-g GID] USERNAME\nCreate a new user.\n");
+        return 0;
+    }
+
+    // Check if caller is root
+    let euid = syscall::geteuid().unwrap_or_default();
+    if euid.0 != 0 {
+        stderr.push_str("useradd: permission denied (must be root)\n");
+        return 1;
+    }
+
+    // Parse arguments
+    let mut gid: Option<crate::kernel::Gid> = None;
+    let mut username = None;
+    let mut iter = args.iter();
+
+    while let Some(arg) = iter.next() {
+        if *arg == "-g" {
+            if let Some(gid_str) = iter.next() {
+                if let Ok(n) = gid_str.parse::<u32>() {
+                    gid = Some(crate::kernel::Gid(n));
+                } else if let Some(group) = syscall::get_group_by_name(gid_str) {
+                    gid = Some(group.gid);
+                } else {
+                    stderr.push_str(&format!("useradd: group '{}' does not exist\n", gid_str));
+                    return 1;
+                }
+            }
+        } else if !arg.starts_with('-') {
+            username = Some(*arg);
+        }
+    }
+
+    let username = match username {
+        Some(u) => u,
+        None => {
+            stderr.push_str("useradd: missing username\n");
+            return 1;
+        }
+    };
+
+    // Check if user already exists
+    if syscall::get_user_by_name(username).is_some() {
+        stderr.push_str(&format!("useradd: user '{}' already exists\n", username));
+        return 1;
+    }
+
+    // Create the user
+    match syscall::add_user(username, gid) {
+        Ok(uid) => {
+            stdout.push_str(&format!("Created user '{}' with uid={}\n", username, uid.0));
+            0
+        }
+        Err(e) => {
+            stderr.push_str(&format!("useradd: {}\n", e));
+            1
+        }
+    }
+}
+
+/// groupadd - create a new group
+fn prog_groupadd(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if args.is_empty() || args.first().map(|s| s.as_ref()) == Some("--help") {
+        stdout.push_str("Usage: groupadd GROUPNAME\nCreate a new group.\n");
+        return 0;
+    }
+
+    // Check if caller is root
+    let euid = syscall::geteuid().unwrap_or_default();
+    if euid.0 != 0 {
+        stderr.push_str("groupadd: permission denied (must be root)\n");
+        return 1;
+    }
+
+    let groupname = &args[0];
+
+    // Check if group already exists
+    if syscall::get_group_by_name(groupname).is_some() {
+        stderr.push_str(&format!("groupadd: group '{}' already exists\n", groupname));
+        return 1;
+    }
+
+    // Create the group
+    match syscall::add_group(groupname) {
+        Ok(gid) => {
+            stdout.push_str(&format!("Created group '{}' with gid={}\n", groupname, gid.0));
+            0
+        }
+        Err(e) => {
+            stderr.push_str(&format!("groupadd: {}\n", e));
+            1
+        }
+    }
+}
+
+/// passwd - change password (placeholder)
+fn prog_passwd(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: passwd [USER]\nChange user password.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    // Check if changing own password or other's
+    let target = if args.is_empty() {
+        // Changing own password
+        if let Ok(euid) = syscall::geteuid() {
+            syscall::get_user_by_uid(euid)
+                .map(|u| u.name.clone())
+                .unwrap_or_else(|| "user".to_string())
+        } else {
+            "user".to_string()
+        }
+    } else {
+        // Changing another user's password - need root
+        let euid = syscall::geteuid().unwrap_or_default();
+        if euid.0 != 0 {
+            stderr.push_str("passwd: permission denied (must be root to change other users' passwords)\n");
+            return 1;
+        }
+        args[0].to_string()
+    };
+
+    if syscall::get_user_by_name(&target).is_none() {
+        stderr.push_str(&format!("passwd: user '{}' does not exist\n", target));
+        return 1;
+    }
+
+    // In a real system, this would prompt for password
+    stdout.push_str(&format!("Changing password for '{}'\n", target));
+    stdout.push_str("(Password change simulated - no actual password set)\n");
+    0
 }
 
 /// hostname - show or set system hostname

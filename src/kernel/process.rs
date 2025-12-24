@@ -12,6 +12,7 @@
 
 use super::memory::ProcessMemory;
 use super::signal::ProcessSignals;
+use super::users::{Gid, Uid};
 use super::TaskId;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -129,6 +130,21 @@ pub struct Process {
     /// Process group ID (for job control, like Linux PGID)
     pub pgid: Pgid,
 
+    /// Real user ID (who started the process)
+    pub uid: Uid,
+
+    /// Real group ID
+    pub gid: Gid,
+
+    /// Effective user ID (for permission checks, may differ if setuid)
+    pub euid: Uid,
+
+    /// Effective group ID (for permission checks)
+    pub egid: Gid,
+
+    /// Supplementary group IDs
+    pub groups: Vec<Gid>,
+
     /// Current state
     pub state: ProcessState,
 
@@ -158,10 +174,14 @@ pub struct Process {
 }
 
 impl Process {
-    /// Create a new process
+    /// Create a new process (defaults to user 1000)
     pub fn new(pid: Pid, name: String, parent: Option<Pid>) -> Self {
         // Process group defaults to own PID (new session leader)
         let pgid = Pgid::from_pid(pid);
+
+        // Default to regular user (uid 1000)
+        let uid = Uid(1000);
+        let gid = Gid(1000);
 
         // Default environment with common variables
         let mut environ = HashMap::new();
@@ -175,6 +195,11 @@ impl Process {
             pid,
             parent,
             pgid,
+            uid,
+            gid,
+            euid: uid,
+            egid: gid,
+            groups: vec![gid],
             state: ProcessState::Running,
             files: FileTable::new(),
             memory: ProcessMemory::new(),
@@ -187,12 +212,15 @@ impl Process {
         }
     }
 
-    /// Create a process with inherited environment
+    /// Create a process with inherited environment and credentials
     pub fn with_environ(
         pid: Pid,
         name: String,
         parent: Option<Pid>,
         pgid: Pgid,
+        uid: Uid,
+        gid: Gid,
+        groups: Vec<Gid>,
         environ: HashMap<String, String>,
         cwd: PathBuf,
     ) -> Self {
@@ -200,6 +228,11 @@ impl Process {
             pid,
             parent,
             pgid,
+            uid,
+            gid,
+            euid: uid,
+            egid: gid,
+            groups,
             state: ProcessState::Running,
             files: FileTable::new(),
             memory: ProcessMemory::new(),
@@ -215,6 +248,9 @@ impl Process {
     /// Create a process with a memory limit
     pub fn with_memory_limit(pid: Pid, name: String, parent: Option<Pid>, limit: usize) -> Self {
         let pgid = Pgid::from_pid(pid);
+        let uid = Uid(1000);
+        let gid = Gid(1000);
+
         let mut environ = HashMap::new();
         environ.insert("HOME".to_string(), "/home/user".to_string());
         environ.insert("USER".to_string(), "user".to_string());
@@ -226,6 +262,11 @@ impl Process {
             pid,
             parent,
             pgid,
+            uid,
+            gid,
+            euid: uid,
+            egid: gid,
+            groups: vec![gid],
             state: ProcessState::Running,
             files: FileTable::new(),
             memory: ProcessMemory::with_limit(limit),

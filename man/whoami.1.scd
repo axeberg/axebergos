@@ -10,8 +10,9 @@ whoami - print effective username
 
 # DESCRIPTION
 
-Print the username associated with the current process. This is obtained
-from the USER environment variable.
+Print the username associated with the effective user ID of the
+current process. The username is looked up in the system user
+database.
 
 # OPTIONS
 
@@ -28,11 +29,6 @@ Output:
 
 	user
 
-# ENVIRONMENT
-
-*USER*
-	The username to display.
-
 # SEE ALSO
 
-*id*(1), *printenv*(1)
+*id*(1), *groups*(1), *su*(1)

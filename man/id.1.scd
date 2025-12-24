@@ -2,21 +2,28 @@ id(1)
 
 # NAME
 
-id - print process and user identification
+id - print real and effective user and group IDs
 
 # SYNOPSIS
 
-*id*
+*id* [_USER_]
 
 # DESCRIPTION
 
-Print information about the current process, including:
+Print user and group ID information for the current process or the
+specified USER.
 
-- *pid* - Process ID
-- *ppid* - Parent process ID
-- *pgid* - Process group ID
-- *user* - Current username (from USER environment variable)
-- *home* - Home directory (from HOME environment variable)
+Without arguments, displays the real and effective user/group IDs of
+the current process, along with supplementary group memberships.
+
+# OUTPUT FORMAT
+
+The output shows:
+
+uid=_UID_(_USERNAME_) gid=_GID_(_GROUPNAME_) [groups=...]
+
+If effective IDs differ from real IDs, they are also displayed as
+euid and egid.
 
 # OPTIONS
 
@@ -25,16 +32,18 @@ Print information about the current process, including:
 
 # EXAMPLES
 
-Show process information:
+Show current user's IDs:
 
 	id
 
 Example output:
 
-	pid=1 ppid=(none) pgid=1
-	user=user
-	home=/home/user
+	uid=1000(user) gid=1000(user) groups=1000(user),10(wheel)
+
+Show IDs for user 'root':
+
+	id root
 
 # SEE ALSO
 
-*printenv*(1), *ps*(1)
+*whoami*(1), *groups*(1), *su*(1)

@@ -26,6 +26,7 @@ use super::signal::{resolve_action, Signal, SignalAction, SignalError};
 use super::task::TaskId;
 use super::timer::{TimerId, TimerQueue};
 use super::trace::{TraceCategory, TraceSummary, Tracer};
+use super::users::{FileMode, Gid, Group, Uid, User, UserDb};
 use crate::vfs::{FileSystem, MemoryFs, OpenOptions as VfsOpenOptions};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -113,6 +114,18 @@ pub enum SyscallNr {
     TraceEnable = 275,
     TraceDisable = 276,
     TraceSummary = 277,
+
+    // Users/Security (300-324)
+    Getuid = 300,
+    Geteuid = 301,
+    Getgid = 302,
+    Getegid = 303,
+    Setuid = 304,
+    Seteuid = 305,
+    Setgid = 306,
+    Setegid = 307,
+    Getgroups = 308,
+    Setgroups = 309,
 }
 
 impl SyscallNr {
@@ -172,6 +185,16 @@ impl SyscallNr {
             SyscallNr::TraceEnable => "trace_enable",
             SyscallNr::TraceDisable => "trace_disable",
             SyscallNr::TraceSummary => "trace_summary",
+            SyscallNr::Getuid => "getuid",
+            SyscallNr::Geteuid => "geteuid",
+            SyscallNr::Getgid => "getgid",
+            SyscallNr::Getegid => "getegid",
+            SyscallNr::Setuid => "setuid",
+            SyscallNr::Seteuid => "seteuid",
+            SyscallNr::Setgid => "setgid",
+            SyscallNr::Setegid => "setegid",
+            SyscallNr::Getgroups => "getgroups",
+            SyscallNr::Setgroups => "setgroups",
         }
     }
 
@@ -294,6 +317,8 @@ pub enum SyscallError {
     Interrupted,
     /// Not a directory
     NotADirectory,
+    /// Already exists
+    AlreadyExists,
 }
 
 impl std::fmt::Display for SyscallError {
@@ -313,6 +338,7 @@ impl std::fmt::Display for SyscallError {
             SyscallError::Signal(e) => write!(f, "signal error: {}", e),
             SyscallError::Interrupted => write!(f, "interrupted by signal"),
             SyscallError::NotADirectory => write!(f, "not a directory"),
+            SyscallError::AlreadyExists => write!(f, "already exists"),
         }
     }
 }
@@ -379,6 +405,8 @@ pub struct Kernel {
     now: f64,
     /// Tracer for instrumentation and debugging
     tracer: Tracer,
+    /// User and group database
+    users: UserDb,
 }
 
 /// Simple PRNG for /dev/random and /dev/urandom
@@ -445,6 +473,7 @@ impl Kernel {
             timers: TimerQueue::new(),
             now: 0.0,
             tracer: Tracer::new(),
+            users: UserDb::new(),
         }
     }
 
@@ -1484,6 +1513,142 @@ impl Kernel {
             .map(|p| (p.pid, p.name.clone(), p.state.clone()))
             .collect()
     }
+
+    // ========== USER/GROUP SYSCALLS ==========
+
+    /// Get real user ID
+    pub fn sys_getuid(&self) -> SyscallResult<Uid> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get(&current).unwrap();
+        Ok(process.uid)
+    }
+
+    /// Get effective user ID
+    pub fn sys_geteuid(&self) -> SyscallResult<Uid> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get(&current).unwrap();
+        Ok(process.euid)
+    }
+
+    /// Get real group ID
+    pub fn sys_getgid(&self) -> SyscallResult<Gid> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get(&current).unwrap();
+        Ok(process.gid)
+    }
+
+    /// Get effective group ID
+    pub fn sys_getegid(&self) -> SyscallResult<Gid> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get(&current).unwrap();
+        Ok(process.egid)
+    }
+
+    /// Get supplementary group list
+    pub fn sys_getgroups(&self) -> SyscallResult<Vec<Gid>> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get(&current).unwrap();
+        Ok(process.groups.clone())
+    }
+
+    /// Set real user ID (requires root or setting to own uid)
+    pub fn sys_setuid(&mut self, uid: Uid) -> SyscallResult<()> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get_mut(&current).unwrap();
+
+        // Only root can set arbitrary uid
+        if process.euid != Uid::ROOT && uid != process.uid {
+            return Err(SyscallError::PermissionDenied);
+        }
+
+        process.uid = uid;
+        process.euid = uid;
+        Ok(())
+    }
+
+    /// Set effective user ID
+    pub fn sys_seteuid(&mut self, euid: Uid) -> SyscallResult<()> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get_mut(&current).unwrap();
+
+        // Can set euid to real uid, saved uid (we don't track saved), or if root any uid
+        if process.euid != Uid::ROOT && euid != process.uid {
+            return Err(SyscallError::PermissionDenied);
+        }
+
+        process.euid = euid;
+        Ok(())
+    }
+
+    /// Set real group ID (requires root or setting to own gid)
+    pub fn sys_setgid(&mut self, gid: Gid) -> SyscallResult<()> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get_mut(&current).unwrap();
+
+        if process.euid != Uid::ROOT && gid != process.gid {
+            return Err(SyscallError::PermissionDenied);
+        }
+
+        process.gid = gid;
+        process.egid = gid;
+        Ok(())
+    }
+
+    /// Set effective group ID
+    pub fn sys_setegid(&mut self, egid: Gid) -> SyscallResult<()> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get_mut(&current).unwrap();
+
+        if process.euid != Uid::ROOT && egid != process.gid {
+            return Err(SyscallError::PermissionDenied);
+        }
+
+        process.egid = egid;
+        Ok(())
+    }
+
+    /// Set supplementary group list (requires root)
+    pub fn sys_setgroups(&mut self, groups: Vec<Gid>) -> SyscallResult<()> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get_mut(&current).unwrap();
+
+        if process.euid != Uid::ROOT {
+            return Err(SyscallError::PermissionDenied);
+        }
+
+        process.groups = groups;
+        Ok(())
+    }
+
+    /// Get user database reference
+    pub fn users(&self) -> &UserDb {
+        &self.users
+    }
+
+    /// Get mutable user database reference
+    pub fn users_mut(&mut self) -> &mut UserDb {
+        &mut self.users
+    }
+
+    /// Lookup user by name
+    pub fn get_user_by_name(&self, name: &str) -> Option<&User> {
+        self.users.get_user_by_name(name)
+    }
+
+    /// Lookup user by uid
+    pub fn get_user_by_uid(&self, uid: Uid) -> Option<&User> {
+        self.users.get_user(uid)
+    }
+
+    /// Lookup group by name
+    pub fn get_group_by_name(&self, name: &str) -> Option<&Group> {
+        self.users.get_group_by_name(name)
+    }
+
+    /// Lookup group by gid
+    pub fn get_group_by_gid(&self, gid: Gid) -> Option<&Group> {
+        self.users.get_group(gid)
+    }
 }
 
 impl Default for Kernel {
@@ -1929,6 +2094,112 @@ pub fn trace_event(category: TraceCategory, name: &str, detail: Option<&str>) {
         } else {
             kernel.tracer_mut().trace_instant(now, category, name);
         }
+    })
+}
+
+// ========== USER/GROUP API ==========
+
+/// Get real user ID
+pub fn getuid() -> SyscallResult<Uid> {
+    KERNEL.with(|k| k.borrow().sys_getuid())
+}
+
+/// Get effective user ID
+pub fn geteuid() -> SyscallResult<Uid> {
+    KERNEL.with(|k| k.borrow().sys_geteuid())
+}
+
+/// Get real group ID
+pub fn getgid() -> SyscallResult<Gid> {
+    KERNEL.with(|k| k.borrow().sys_getgid())
+}
+
+/// Get effective group ID
+pub fn getegid() -> SyscallResult<Gid> {
+    KERNEL.with(|k| k.borrow().sys_getegid())
+}
+
+/// Get supplementary group list
+pub fn getgroups() -> SyscallResult<Vec<Gid>> {
+    KERNEL.with(|k| k.borrow().sys_getgroups())
+}
+
+/// Set real user ID
+pub fn setuid(uid: Uid) -> SyscallResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_setuid(uid))
+}
+
+/// Set effective user ID
+pub fn seteuid(euid: Uid) -> SyscallResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_seteuid(euid))
+}
+
+/// Set real group ID
+pub fn setgid(gid: Gid) -> SyscallResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_setgid(gid))
+}
+
+/// Set effective group ID
+pub fn setegid(egid: Gid) -> SyscallResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_setegid(egid))
+}
+
+/// Set supplementary group list
+pub fn setgroups(groups: Vec<Gid>) -> SyscallResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_setgroups(groups))
+}
+
+/// Get user by name
+pub fn get_user_by_name(name: &str) -> Option<User> {
+    KERNEL.with(|k| k.borrow().get_user_by_name(name).cloned())
+}
+
+/// Get user by uid
+pub fn get_user_by_uid(uid: Uid) -> Option<User> {
+    KERNEL.with(|k| k.borrow().get_user_by_uid(uid).cloned())
+}
+
+/// Get group by name
+pub fn get_group_by_name(name: &str) -> Option<Group> {
+    KERNEL.with(|k| k.borrow().get_group_by_name(name).cloned())
+}
+
+/// Get group by gid
+pub fn get_group_by_gid(gid: Gid) -> Option<Group> {
+    KERNEL.with(|k| k.borrow().get_group_by_gid(gid).cloned())
+}
+
+/// Add a new user (requires root)
+pub fn add_user(name: &str, gid: Option<Gid>) -> SyscallResult<Uid> {
+    KERNEL.with(|k| {
+        let mut kernel = k.borrow_mut();
+        // Check if caller is root
+        if let Ok(euid) = kernel.sys_geteuid() {
+            if euid != Uid::ROOT {
+                return Err(SyscallError::PermissionDenied);
+            }
+        }
+        kernel
+            .users_mut()
+            .add_user(name, gid)
+            .map_err(|_| SyscallError::AlreadyExists)
+    })
+}
+
+/// Add a new group (requires root)
+pub fn add_group(name: &str) -> SyscallResult<Gid> {
+    KERNEL.with(|k| {
+        let mut kernel = k.borrow_mut();
+        // Check if caller is root
+        if let Ok(euid) = kernel.sys_geteuid() {
+            if euid != Uid::ROOT {
+                return Err(SyscallError::PermissionDenied);
+            }
+        }
+        kernel
+            .users_mut()
+            .add_group(name)
+            .map_err(|_| SyscallError::AlreadyExists)
     })
 }
 
