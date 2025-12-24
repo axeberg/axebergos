@@ -1,0 +1,34 @@
+date(1)
+
+# NAME
+
+date - print current date and time
+
+# SYNOPSIS
+
+*date* [+_FORMAT_]
+
+# DESCRIPTION
+
+Print the current date and time. In axebergOS, this displays the system
+uptime formatted as time.
+
+# OPTIONS
+
+*-h*, *--help*
+	Display usage information and exit.
+
+# EXAMPLES
+
+Print current time:
+
+	date
+
+# NOTES
+
+In axebergOS, the date command shows elapsed time since system start,
+formatted as HH:MM:SS UTC.
+
+# SEE ALSO
+
+*time*(1), *uname*(1)

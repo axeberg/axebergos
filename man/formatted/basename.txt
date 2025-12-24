@@ -1,0 +1,39 @@
+basename(1)                 General Commands Manual                basename(1)
+
+NAME
+       basename - strip directory and suffix from filename
+
+SYNOPSIS
+       basename PATH [SUFFIX]
+
+DESCRIPTION
+       Print the final component of PATH, optionally removing SUFFIX.
+
+ARGUMENTS
+       PATH
+           The pathname to process.
+
+       SUFFIX
+           Optional suffix to remove from the result.
+
+OPTIONS
+       -h, --help
+           Display usage information and exit.
+
+EXAMPLES
+       Get filename:
+
+           basename /home/user/file.txt
+
+       Result: file.txt
+
+       Remove suffix:
+
+           basename /home/user/file.txt .txt
+
+       Result: file
+
+SEE ALSO
+       dirname(1), pwd(1)
+
+                                  2025-12-24                       basename(1)

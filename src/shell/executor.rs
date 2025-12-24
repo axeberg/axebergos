@@ -114,6 +114,15 @@ impl ProgramRegistry {
         reg.register("ps", prog_ps);
         reg.register("kill", prog_kill);
         reg.register("time", prog_time);
+        reg.register("date", prog_date);
+        reg.register("seq", prog_seq);
+        reg.register("yes", prog_yes);
+        reg.register("basename", prog_basename);
+        reg.register("dirname", prog_dirname);
+        reg.register("rev", prog_rev);
+        reg.register("cut", prog_cut);
+        reg.register("tr", prog_tr);
+        reg.register("xargs", prog_xargs);
 
         reg
     }
@@ -1046,6 +1055,33 @@ fn check_help(args: &[&str], usage: &str) -> Option<String> {
     }
 }
 
+/// Helper to read file content as string
+fn read_file_content(path: &str) -> Result<String, String> {
+    match syscall::open(path, syscall::OpenFlags::READ) {
+        Ok(fd) => {
+            let mut content = String::new();
+            let mut buf = [0u8; 4096];
+            loop {
+                match syscall::read(fd, &mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        if let Ok(s) = std::str::from_utf8(&buf[..n]) {
+                            content.push_str(s);
+                        }
+                    }
+                    Err(e) => {
+                        let _ = syscall::close(fd);
+                        return Err(e.to_string());
+                    }
+                }
+            }
+            let _ = syscall::close(fd);
+            Ok(content)
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// Extract stdin from args if present
 fn extract_stdin(args: &[String]) -> (Option<String>, Vec<&str>) {
     if !args.is_empty() && args[0].starts_with("__STDIN__:") {
@@ -1946,11 +1982,15 @@ fn prog_man(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 
     // Embedded man pages (pre-rendered from scdoc)
     let content = match page {
+        "basename" => include_str!("../../man/formatted/basename.txt"),
         "bg" => include_str!("../../man/formatted/bg.txt"),
         "cat" => include_str!("../../man/formatted/cat.txt"),
         "cd" => include_str!("../../man/formatted/cd.txt"),
         "cp" => include_str!("../../man/formatted/cp.txt"),
+        "cut" => include_str!("../../man/formatted/cut.txt"),
+        "date" => include_str!("../../man/formatted/date.txt"),
         "df" => include_str!("../../man/formatted/df.txt"),
+        "dirname" => include_str!("../../man/formatted/dirname.txt"),
         "du" => include_str!("../../man/formatted/du.txt"),
         "echo" => include_str!("../../man/formatted/echo.txt"),
         "edit" => include_str!("../../man/formatted/edit.txt"),
@@ -1970,18 +2010,23 @@ fn prog_man(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
         "printenv" => include_str!("../../man/formatted/printenv.txt"),
         "ps" => include_str!("../../man/formatted/ps.txt"),
         "pwd" => include_str!("../../man/formatted/pwd.txt"),
+        "rev" => include_str!("../../man/formatted/rev.txt"),
         "rm" => include_str!("../../man/formatted/rm.txt"),
+        "seq" => include_str!("../../man/formatted/seq.txt"),
         "sort" => include_str!("../../man/formatted/sort.txt"),
         "strace" => include_str!("../../man/formatted/strace.txt"),
         "tail" => include_str!("../../man/formatted/tail.txt"),
         "tee" => include_str!("../../man/formatted/tee.txt"),
         "time" => include_str!("../../man/formatted/time.txt"),
         "touch" => include_str!("../../man/formatted/touch.txt"),
+        "tr" => include_str!("../../man/formatted/tr.txt"),
         "tree" => include_str!("../../man/formatted/tree.txt"),
         "uname" => include_str!("../../man/formatted/uname.txt"),
         "uniq" => include_str!("../../man/formatted/uniq.txt"),
         "wc" => include_str!("../../man/formatted/wc.txt"),
         "whoami" => include_str!("../../man/formatted/whoami.txt"),
+        "xargs" => include_str!("../../man/formatted/xargs.txt"),
+        "yes" => include_str!("../../man/formatted/yes.txt"),
         _ => {
             stderr.push_str(&format!("No manual entry for {}\n", page));
             return 1;
@@ -2829,6 +2874,337 @@ fn prog_time(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
         0.0, // In a real OS we'd track user time
         0.0  // In a real OS we'd track system time
     ));
+
+    0
+}
+
+/// date - print current date and time
+fn prog_date(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: date [+FORMAT]\nPrint current date and time.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    // Get current time from syscall
+    let now_ms = syscall::now();
+
+    // Convert to readable format (simplified - just show ms since start)
+    // In a real OS we'd have proper time syscalls
+    let secs = (now_ms / 1000.0) as u64;
+    let hours = (secs / 3600) % 24;
+    let mins = (secs / 60) % 60;
+    let secs = secs % 60;
+
+    // Simple format: show uptime as time
+    stdout.push_str(&format!("{:02}:{:02}:{:02} UTC\n", hours, mins, secs));
+    0
+}
+
+/// seq - print sequence of numbers
+fn prog_seq(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: seq [FIRST] [INCREMENT] LAST\nPrint sequence of numbers.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    if args.is_empty() {
+        stderr.push_str("seq: missing operand\n");
+        return 1;
+    }
+
+    // Parse arguments
+    let (first, increment, last) = match args.len() {
+        1 => (1i64, 1i64, args[0].parse::<i64>().unwrap_or(1)),
+        2 => (args[0].parse::<i64>().unwrap_or(1), 1i64, args[1].parse::<i64>().unwrap_or(1)),
+        _ => (
+            args[0].parse::<i64>().unwrap_or(1),
+            args[1].parse::<i64>().unwrap_or(1),
+            args[2].parse::<i64>().unwrap_or(1),
+        ),
+    };
+
+    if increment == 0 {
+        stderr.push_str("seq: increment cannot be zero\n");
+        return 1;
+    }
+
+    let mut n = first;
+    if increment > 0 {
+        while n <= last {
+            stdout.push_str(&format!("{}\n", n));
+            n += increment;
+        }
+    } else {
+        while n >= last {
+            stdout.push_str(&format!("{}\n", n));
+            n += increment;
+        }
+    }
+
+    0
+}
+
+/// yes - output string repeatedly (limited iterations for safety)
+fn prog_yes(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: yes [STRING]\nRepeatedly output STRING (limited to 100 lines).") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    let text = if args.is_empty() { "y" } else { args[0] };
+
+    // Limit to 100 iterations for safety in this environment
+    for _ in 0..100 {
+        stdout.push_str(text);
+        stdout.push('\n');
+    }
+
+    0
+}
+
+/// basename - strip directory and suffix from filename
+fn prog_basename(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: basename PATH [SUFFIX]\nStrip directory and suffix from PATH.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    if args.is_empty() {
+        stderr.push_str("basename: missing operand\n");
+        return 1;
+    }
+
+    let path = args[0];
+    let suffix = args.get(1).map(|s| *s);
+
+    // Get the last component
+    let base = path.rsplit('/').next().unwrap_or(path);
+
+    // Strip suffix if provided
+    let result = if let Some(suf) = suffix {
+        base.strip_suffix(suf).unwrap_or(base)
+    } else {
+        base
+    };
+
+    stdout.push_str(result);
+    stdout.push('\n');
+    0
+}
+
+/// dirname - strip last component from filename
+fn prog_dirname(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: dirname PATH\nStrip last component from PATH.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    if args.is_empty() {
+        stderr.push_str("dirname: missing operand\n");
+        return 1;
+    }
+
+    let path = args[0];
+
+    // Find the last slash
+    let result = if let Some(pos) = path.rfind('/') {
+        if pos == 0 {
+            "/" // Root case
+        } else {
+            &path[..pos]
+        }
+    } else {
+        "." // No directory component
+    };
+
+    stdout.push_str(result);
+    stdout.push('\n');
+    0
+}
+
+/// rev - reverse lines
+fn prog_rev(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (stdin, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: rev [FILE]\nReverse characters in each line.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    let content = if let Some(input) = stdin {
+        input
+    } else if !args.is_empty() {
+        match read_file_content(args[0]) {
+            Ok(c) => c,
+            Err(e) => {
+                stderr.push_str(&format!("rev: {}: {}\n", args[0], e));
+                return 1;
+            }
+        }
+    } else {
+        String::new()
+    };
+
+    for line in content.lines() {
+        let reversed: String = line.chars().rev().collect();
+        stdout.push_str(&reversed);
+        stdout.push('\n');
+    }
+
+    0
+}
+
+/// cut - remove sections from each line
+fn prog_cut(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (stdin, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: cut -d DELIM -f FIELDS [FILE]\nRemove sections from each line.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    // Parse options
+    let mut delimiter = '\t';
+    let mut fields: Option<Vec<usize>> = None;
+    let mut file: Option<&str> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i] {
+            "-d" if i + 1 < args.len() => {
+                delimiter = args[i + 1].chars().next().unwrap_or('\t');
+                i += 2;
+            }
+            "-f" if i + 1 < args.len() => {
+                // Parse field list (e.g., "1,2,3" or "1-3")
+                let field_spec = args[i + 1];
+                let mut field_list = Vec::new();
+                for part in field_spec.split(',') {
+                    if let Some(dash_pos) = part.find('-') {
+                        let start: usize = part[..dash_pos].parse().unwrap_or(1);
+                        let end: usize = part[dash_pos + 1..].parse().unwrap_or(start);
+                        for f in start..=end {
+                            field_list.push(f);
+                        }
+                    } else if let Ok(f) = part.parse::<usize>() {
+                        field_list.push(f);
+                    }
+                }
+                fields = Some(field_list);
+                i += 2;
+            }
+            s if !s.starts_with('-') => {
+                file = Some(s);
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+
+    let fields = match fields {
+        Some(f) => f,
+        None => {
+            stderr.push_str("cut: you must specify a list of fields\n");
+            return 1;
+        }
+    };
+
+    let content = if let Some(input) = stdin {
+        input
+    } else if let Some(path) = file {
+        match read_file_content(path) {
+            Ok(c) => c,
+            Err(e) => {
+                stderr.push_str(&format!("cut: {}: {}\n", path, e));
+                return 1;
+            }
+        }
+    } else {
+        String::new()
+    };
+
+    for line in content.lines() {
+        let parts: Vec<&str> = line.split(delimiter).collect();
+        let selected: Vec<&str> = fields.iter()
+            .filter_map(|&f| parts.get(f.saturating_sub(1)))
+            .copied()
+            .collect();
+        stdout.push_str(&selected.join(&delimiter.to_string()));
+        stdout.push('\n');
+    }
+
+    0
+}
+
+/// tr - translate characters
+fn prog_tr(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (stdin, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: tr SET1 SET2\nTranslate characters from SET1 to SET2.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    if args.len() < 2 {
+        stderr.push_str("tr: missing operand\n");
+        return 1;
+    }
+
+    let set1: Vec<char> = args[0].chars().collect();
+    let set2: Vec<char> = args[1].chars().collect();
+
+    let content = stdin.unwrap_or_default();
+
+    for ch in content.chars() {
+        let translated = if let Some(pos) = set1.iter().position(|&c| c == ch) {
+            set2.get(pos).copied().unwrap_or(*set2.last().unwrap_or(&ch))
+        } else {
+            ch
+        };
+        stdout.push(translated);
+    }
+
+    0
+}
+
+/// xargs - build and execute commands from stdin
+fn prog_xargs(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (stdin, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: xargs [COMMAND] [ARGS]\nBuild command lines from stdin.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    // Get the command to run (default: echo)
+    let cmd = if args.is_empty() { "echo" } else { args[0] };
+    let cmd_args: Vec<&str> = if args.len() > 1 { args[1..].to_vec() } else { vec![] };
+
+    // Read items from stdin
+    let items: Vec<&str> = stdin
+        .as_deref()
+        .unwrap_or("")
+        .split_whitespace()
+        .collect();
+
+    if items.is_empty() {
+        return 0;
+    }
+
+    // For now, just show what would be executed
+    // (In a full implementation we'd actually run the command)
+    let full_cmd = format!("{} {} {}", cmd, cmd_args.join(" "), items.join(" "));
+    stdout.push_str(&format!("xargs: would execute: {}\n", full_cmd.trim()));
 
     0
 }
