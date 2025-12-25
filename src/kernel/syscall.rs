@@ -21,7 +21,7 @@ use super::memory::{
 use super::object::{
     ConsoleObject, FileObject, KernelObject, ObjectTable, PipeObject, WindowId, WindowObject,
 };
-pub use super::process::{Fd, Handle, OpenFlags, Pgid, Pid, Process, ProcessState};
+pub use super::process::{Fd, Handle, OpenFlags, Pgid, Pid, Process, ProcessState, Sid};
 use super::devfs::DevFs;
 use super::fifo::FifoRegistry;
 use super::init::InitSystem;
@@ -629,6 +629,90 @@ impl Kernel {
 
         self.processes.insert(pid, process);
         pid
+    }
+
+    /// Create a new login shell process for a user (like Linux login(1))
+    /// This creates a proper session leader with its own session ID and process group,
+    /// sets up the user's environment, and allocates a controlling TTY.
+    pub fn spawn_login_shell(
+        &mut self,
+        username: &str,
+        uid: Uid,
+        gid: Gid,
+        home: &str,
+        shell: &str,
+        parent: Option<Pid>,
+    ) -> Pid {
+        let pid = Pid(self.next_pid);
+        self.next_pid += 1;
+
+        let shell_name = format!("-{}", shell.rsplit('/').next().unwrap_or("sh"));
+        let mut process = Process::new_login_shell(
+            pid,
+            shell_name,
+            parent,
+            uid,
+            gid,
+            vec![gid],
+            username,
+            home,
+            shell,
+        );
+
+        // Give the process stdin/stdout/stderr pointing to console
+        self.objects.retain(self.console_handle);
+        self.objects.retain(self.console_handle);
+        self.objects.retain(self.console_handle);
+
+        process.files.insert(Fd::STDIN, self.console_handle);
+        process.files.insert(Fd::STDOUT, self.console_handle);
+        process.files.insert(Fd::STDERR, self.console_handle);
+
+        // Associate TTY with this session
+        if let Some(tty) = self.ttys.get_tty_mut("tty1") {
+            tty.session = Some(pid.0);
+            tty.pgrp = Some(pid.0);
+        }
+
+        // Track parent-child relationship
+        if let Some(parent_pid) = parent {
+            if let Some(parent_proc) = self.processes.get_mut(&parent_pid) {
+                parent_proc.children.push(pid);
+            }
+        }
+
+        self.processes.insert(pid, process);
+        pid
+    }
+
+    /// setsid - Create a new session (like Linux setsid(2))
+    /// The calling process becomes the session leader and process group leader.
+    /// Returns the new session ID on success.
+    pub fn sys_setsid(&mut self) -> SyscallResult<u32> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get_mut(&current).unwrap();
+
+        // Cannot create new session if already a process group leader
+        if process.pgid.0 == process.pid.0 && process.is_session_leader {
+            return Err(SyscallError::PermissionDenied);
+        }
+
+        // Create new session
+        let new_sid = Sid::from_pid(current);
+        process.sid = new_sid;
+        process.pgid = Pgid::from_pid(current);
+        process.is_session_leader = true;
+        process.ctty = None; // Lose controlling terminal
+
+        Ok(new_sid.0)
+    }
+
+    /// getsid - Get session ID (like Linux getsid(2))
+    pub fn sys_getsid(&self, pid: Option<Pid>) -> SyscallResult<u32> {
+        let target_pid = pid.unwrap_or_else(|| self.current.unwrap());
+        let process = self.processes.get(&target_pid)
+            .ok_or(SyscallError::NoProcess)?;
+        Ok(process.sid.0)
     }
 
     /// Get a process by PID
@@ -2355,9 +2439,57 @@ pub fn spawn_process(name: &str) -> Pid {
     KERNEL.with(|k| k.borrow_mut().spawn_process(name, None))
 }
 
+/// Spawn a new login shell process for a user
+/// Creates a new session leader with proper credentials and environment
+pub fn spawn_login_shell(
+    username: &str,
+    uid: u32,
+    gid: u32,
+    home: &str,
+    shell: &str,
+) -> Pid {
+    KERNEL.with(|k| {
+        let current = k.borrow().current;
+        k.borrow_mut().spawn_login_shell(
+            username,
+            Uid(uid),
+            Gid(gid),
+            home,
+            shell,
+            current,
+        )
+    })
+}
+
 /// Set the current running process
 pub fn set_current_process(pid: Pid) {
     KERNEL.with(|k| k.borrow_mut().set_current(pid))
+}
+
+/// setsid - Create a new session
+pub fn setsid() -> SyscallResult<u32> {
+    KERNEL.with(|k| k.borrow_mut().sys_setsid())
+}
+
+/// getsid - Get session ID
+pub fn getsid(pid: Option<u32>) -> SyscallResult<u32> {
+    KERNEL.with(|k| k.borrow().sys_getsid(pid.map(Pid)))
+}
+
+/// Get information about the current session
+pub fn get_session_info() -> Option<(u32, u32, u32, String, String)> {
+    KERNEL.with(|k| {
+        let kernel = k.borrow();
+        kernel.current_process().map(|proc| {
+            (
+                proc.pid.0,
+                proc.sid.0,
+                proc.pgid.0,
+                proc.environ.get("USER").cloned().unwrap_or_default(),
+                proc.ctty.clone().unwrap_or_default(),
+            )
+        })
+    })
 }
 
 /// Push input to the console

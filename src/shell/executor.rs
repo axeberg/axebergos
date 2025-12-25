@@ -178,6 +178,8 @@ impl ProgramRegistry {
         // User login commands
         reg.register("login", prog_login);
         reg.register("logout", prog_logout);
+        reg.register("su", prog_su);
+        reg.register("sudo", prog_sudo);
         reg.register("who", prog_who);
         reg.register("w", prog_w);
 
@@ -6137,10 +6139,12 @@ fn prog_pkg(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 // ========== USER LOGIN COMMANDS ==========
 
 /// login - log in as a user with password authentication
+/// This behaves like real Linux login(1): it spawns a NEW shell process
+/// as the target user with proper session management.
 fn prog_login(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
     let (_, args) = extract_stdin(args);
 
-    if let Some(help) = check_help(&args, "Usage: login <username> [password]\n\nLog in as a user with password authentication.\n\nIf no password is provided, allows login for users without passwords.\nUse 'logout' to end the current session.\nUse 'passwd' to change your password.\n\nDefault users:\n  root     - password: root (uid 0)\n  user     - no password (uid 1000)\n  nobody   - no password (uid 65534)") {
+    if let Some(help) = check_help(&args, "Usage: login <username> [password]\n\nLog in as a user with password authentication.\n\nThis command spawns a new login shell as the specified user,\ncreating a proper session like Linux login(1).\n\nIf no password is provided, allows login for users without passwords.\nUse 'logout' to end the current session.\nUse 'passwd' to change your password.\n\nDefault users:\n  root     - password: root (uid 0)\n  user     - no password (uid 1000)\n  nobody   - no password (uid 65534)") {
         stdout.push_str(&help);
         return 0;
     }
@@ -6165,7 +6169,7 @@ fn prog_login(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 
             match (&user.password_hash, &password) {
                 (None, _) => {
                     // No password set - allow login
-                    Ok((user.uid.0, user.gid.0, user.home.clone()))
+                    Ok((user.uid.0, user.gid.0, user.home.clone(), user.shell.clone()))
                 }
                 (Some(_), None) => {
                     // Password required but not provided
@@ -6174,7 +6178,7 @@ fn prog_login(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 
                 (Some(_), Some(pwd)) => {
                     // Verify password
                     if user.check_password(pwd) {
-                        Ok((user.uid.0, user.gid.0, user.home.clone()))
+                        Ok((user.uid.0, user.gid.0, user.home.clone(), user.shell.clone()))
                     } else {
                         Err("Authentication failed".to_string())
                     }
@@ -6185,7 +6189,7 @@ fn prog_login(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 
         }
     });
 
-    let (uid, gid, home) = match auth_result {
+    let (uid, gid, home, shell) = match auth_result {
         Ok(info) => info,
         Err(msg) => {
             stderr.push_str(&format!("login: {}\n", msg));
@@ -6193,58 +6197,112 @@ fn prog_login(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 
         }
     };
 
-    // Set the current process's uid/gid
+    // Spawn a NEW login shell process with proper credentials
+    // This is how real Linux login(1) works - it forks and execs a shell
+    let new_pid = syscall::spawn_login_shell(&username, uid, gid, &home, &shell);
+
+    // Switch to the new process (make it the current process)
+    syscall::set_current_process(new_pid);
+
+    // Change to user's home directory
+    let _ = syscall::chdir(&home);
+
+    // Record login session in utmp
+    let session_file = "/var/run/utmp";
+    let now = syscall::now();
+    let session_data = format!("{}:{}:{}:{}:{}\n", username, uid, new_pid.0, now as u64, "tty1");
+
+    // Write session file as root (temporarily)
     syscall::KERNEL.with(|k| {
         let mut kernel = k.borrow_mut();
         if let Some(proc) = kernel.current_process_mut() {
-            proc.uid = crate::kernel::users::Uid(uid);
-            proc.euid = crate::kernel::users::Uid(uid);
-            proc.gid = crate::kernel::users::Gid(gid);
-            proc.egid = crate::kernel::users::Gid(gid);
+            let saved_euid = proc.euid;
+            proc.euid = crate::kernel::users::Uid(0); // Temporarily become root
+            drop(kernel); // Release borrow
+
+            if let Ok(fd) = syscall::open(session_file, syscall::OpenFlags::WRITE) {
+                let _ = syscall::write(fd, session_data.as_bytes());
+                let _ = syscall::close(fd);
+            }
+
+            // Restore euid
+            syscall::KERNEL.with(|k2| {
+                if let Some(p) = k2.borrow_mut().current_process_mut() {
+                    p.euid = saved_euid;
+                }
+            });
         }
     });
 
-    // Record login session
-    let session_file = "/var/run/utmp";
-    let now = syscall::now();
-    let session_data = format!("{}:{}:{}\n", username, uid, now as u64);
+    // Get session info for display
+    let (pid, sid, pgid, _, ctty) = syscall::get_session_info().unwrap_or((0, 0, 0, String::new(), String::new()));
 
-    if let Ok(fd) = syscall::open(session_file, syscall::OpenFlags::WRITE) {
-        let _ = syscall::write(fd, session_data.as_bytes());
-        let _ = syscall::close(fd);
-    }
-
-    stdout.push_str(&format!("Login: {}\n", username));
-    stdout.push_str(&format!("UID: {}, GID: {}\n", uid, gid));
-    stdout.push_str(&format!("Home: {}\n", home));
+    stdout.push_str(&format!("\nLogin successful: {}\n", username));
+    stdout.push_str(&format!("  PID: {}, SID: {}, PGID: {}\n", pid, sid, pgid));
+    stdout.push_str(&format!("  UID: {}, GID: {}\n", uid, gid));
+    stdout.push_str(&format!("  Home: {}\n", home));
+    stdout.push_str(&format!("  Shell: {}\n", shell));
+    stdout.push_str(&format!("  TTY: {}\n", if ctty.is_empty() { "none" } else { &ctty }));
+    stdout.push_str("\nType 'logout' to end this session.\n");
 
     0
 }
 
 /// logout - log out current user
+/// In a real Linux system, this would exit the login shell and return to getty.
+/// Here we terminate the current session and switch back to the init/parent process.
 fn prog_logout(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
     let (_, args) = extract_stdin(args);
 
-    if let Some(help) = check_help(&args, "Usage: logout\n\nEnd the current login session.") {
+    if let Some(help) = check_help(&args, "Usage: logout\n\nEnd the current login session and return to the parent process.\nThis terminates the login shell that was spawned by 'login'.") {
         stdout.push_str(&help);
         return 0;
     }
 
+    // Get current session info before logging out
+    let (current_pid, current_sid, username) = syscall::KERNEL.with(|k| {
+        let kernel = k.borrow();
+        let proc = kernel.current_process();
+        let pid = proc.map(|p| p.pid.0).unwrap_or(0);
+        let sid = proc.map(|p| p.sid.0).unwrap_or(0);
+        let uid = proc.map(|p| p.uid.0).unwrap_or(1000);
+        let user = kernel.users().get_user(crate::kernel::users::Uid(uid))
+            .map(|u| u.name.clone())
+            .unwrap_or_else(|| "unknown".to_string());
+        (pid, sid, user)
+    });
+
     // Clear the session file
     let _ = syscall::remove_file("/var/run/utmp");
 
-    // Reset to default user
-    syscall::KERNEL.with(|k| {
+    // Mark current process as a zombie and switch to parent or spawn new init
+    let parent_pid = syscall::KERNEL.with(|k| {
         let mut kernel = k.borrow_mut();
+
+        // Get parent PID before we modify anything
+        let parent = kernel.current_process().and_then(|p| p.parent);
+
+        // Mark current session process as zombie
         if let Some(proc) = kernel.current_process_mut() {
-            proc.uid = crate::kernel::users::Uid(1000);
-            proc.euid = crate::kernel::users::Uid(1000);
-            proc.gid = crate::kernel::users::Gid(1000);
-            proc.egid = crate::kernel::users::Gid(1000);
+            proc.state = crate::kernel::process::ProcessState::Zombie(0);
         }
+
+        parent
     });
 
-    stdout.push_str("Logout successful. Returned to default user.\n");
+    // If there's a parent process, switch to it; otherwise spawn new init
+    if let Some(parent) = parent_pid {
+        syscall::set_current_process(parent);
+        stdout.push_str(&format!("Session {} ended for user '{}' (PID {})\n", current_sid, username, current_pid));
+        stdout.push_str("Returned to parent process.\n");
+    } else {
+        // No parent - spawn a new shell as default user
+        let new_pid = syscall::spawn_login_shell("user", 1000, 1000, "/home/user", "/bin/sh");
+        syscall::set_current_process(new_pid);
+        stdout.push_str(&format!("Session {} ended for user '{}'\n", current_sid, username));
+        stdout.push_str("Started new session as 'user'.\n");
+    }
+
     0
 }
 
