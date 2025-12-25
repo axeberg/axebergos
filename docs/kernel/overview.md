@@ -292,9 +292,9 @@ Dynamic content generation for system information:
 ## Related Documentation
 
 - [Syscall Interface](syscalls.md) - Full syscall reference
-- [Process Model](processes.md) - Process details
+- [Process Model](processes.md) - Process details and sessions
+- [Users & Groups](users.md) - Multi-user system
 - [Memory Management](memory.md) - Memory operations
 - [Object Table](objects.md) - Object lifecycle
 - [Signals](signals.md) - Signal handling
 - [IPC](ipc.md) - Inter-process communication
-- [Bare Metal](../architecture/bare-metal.md) - Running on real hardware

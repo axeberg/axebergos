@@ -216,16 +216,17 @@ Critical subsystems have TLA+ specifications:
 
 ## Version
 
-**axeberg v0.1.0** - Early development
+**axeberg v0.1.0**
 
 Current capabilities:
-- ✅ Working shell with pipes and redirects
-- ✅ 15 Unix-like commands (cat, ls, grep, etc.)
-- ✅ In-memory filesystem
-- ✅ WASM module ABI defined and loader implemented
-- 🚧 Actual WASM command execution (in progress)
-- 🚧 File browser GUI (planned)
-- 🚧 Persistent storage via OPFS (planned)
+- ✅ Working shell with pipes, redirects, and job control
+- ✅ 98 Unix-like commands
+- ✅ Multi-user system with sessions (`login`, `logout`, `su`, `sudo`)
+- ✅ Permission enforcement (Unix rwx model)
+- ✅ User persistence (`/etc/passwd`, `/etc/shadow`, `/etc/group`)
+- ✅ In-memory VFS with proc/sys/dev virtual filesystems
+- ✅ WASM build and deployment verified
+- 🚧 WASM command modules (ABI defined, execution in progress)
 
 ## License
 
