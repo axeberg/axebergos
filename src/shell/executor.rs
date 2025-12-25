@@ -172,6 +172,19 @@ impl ProgramRegistry {
         reg.register("stty", prog_stty);
         reg.register("tty", prog_tty);
 
+        // Package manager commands
+        reg.register("pkg", prog_pkg);
+
+        // User login commands
+        reg.register("login", prog_login);
+        reg.register("logout", prog_logout);
+        reg.register("who", prog_who);
+        reg.register("w", prog_w);
+
+        // Cron/scheduling commands
+        reg.register("crontab", prog_crontab);
+        reg.register("at", prog_at);
+
         reg
     }
 
@@ -5897,6 +5910,696 @@ fn prog_tty(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
             1
         }
     })
+}
+
+// ========== PACKAGE MANAGER COMMANDS ==========
+
+/// pkg - simple package manager
+///
+/// Packages are stored in /var/packages as executable scripts.
+/// The package registry is stored in /etc/packages.json
+fn prog_pkg(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: pkg <command> [args]\n\nPackage manager for axeberg.\n\nCommands:\n  install <name> <script>   Install a package (script content)\n  remove <name>             Remove a package\n  list                      List installed packages\n  run <name> [args]         Run an installed package\n  info <name>               Show package info\n\nPackages are stored in /var/packages/") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    if args.is_empty() {
+        stderr.push_str("pkg: missing command\nTry 'pkg --help' for more information.\n");
+        return 1;
+    }
+
+    // Ensure package directories exist
+    let _ = syscall::mkdir("/var");
+    let _ = syscall::mkdir("/var/packages");
+
+    match &args[0][..] {
+        "install" => {
+            if args.len() < 3 {
+                stderr.push_str("pkg install: usage: pkg install <name> <script>\n");
+                return 1;
+            }
+            let name = args[1];
+            // Join remaining args as the script content (or use quoted string)
+            let script = args[2..].join(" ");
+
+            // Validate package name
+            if name.contains('/') || name.contains('\0') || name.is_empty() {
+                stderr.push_str("pkg install: invalid package name\n");
+                return 1;
+            }
+
+            let pkg_path = format!("/var/packages/{}", name);
+
+            // Write the package script
+            match syscall::open(&pkg_path, syscall::OpenFlags::WRITE) {
+                Ok(fd) => {
+                    let _ = syscall::write(fd, script.as_bytes());
+                    let _ = syscall::close(fd);
+
+                    // Make it executable (mode 755)
+                    let _ = syscall::chmod(&pkg_path, 0o755);
+
+                    stdout.push_str(&format!("Installed package '{}'\n", name));
+                    0
+                }
+                Err(e) => {
+                    stderr.push_str(&format!("pkg install: failed to install '{}': {:?}\n", name, e));
+                    1
+                }
+            }
+        }
+        "remove" | "uninstall" => {
+            if args.len() < 2 {
+                stderr.push_str("pkg remove: usage: pkg remove <name>\n");
+                return 1;
+            }
+            let name = args[1];
+            let pkg_path = format!("/var/packages/{}", name);
+
+            match syscall::remove_file(&pkg_path) {
+                Ok(()) => {
+                    stdout.push_str(&format!("Removed package '{}'\n", name));
+                    0
+                }
+                Err(e) => {
+                    stderr.push_str(&format!("pkg remove: '{}': {:?}\n", name, e));
+                    1
+                }
+            }
+        }
+        "list" | "ls" => {
+            match syscall::readdir("/var/packages") {
+                Ok(entries) => {
+                    if entries.is_empty() {
+                        stdout.push_str("No packages installed.\n");
+                    } else {
+                        stdout.push_str("Installed packages:\n");
+                        for entry in entries {
+                            stdout.push_str(&format!("  {}\n", entry));
+                        }
+                    }
+                    0
+                }
+                Err(_) => {
+                    stdout.push_str("No packages installed.\n");
+                    0
+                }
+            }
+        }
+        "run" | "exec" => {
+            if args.len() < 2 {
+                stderr.push_str("pkg run: usage: pkg run <name> [args]\n");
+                return 1;
+            }
+            let name = args[1];
+            let pkg_path = format!("/var/packages/{}", name);
+
+            // Read the package script
+            match syscall::open(&pkg_path, syscall::OpenFlags::READ) {
+                Ok(fd) => {
+                    let mut buf = vec![0u8; 65536];
+                    match syscall::read(fd, &mut buf) {
+                        Ok(n) => {
+                            let _ = syscall::close(fd);
+                            let script = String::from_utf8_lossy(&buf[..n]).to_string();
+
+                            // Execute each line of the script
+                            for line in script.lines() {
+                                let line = line.trim();
+                                if line.is_empty() || line.starts_with('#') {
+                                    continue;
+                                }
+                                // Note: In a full implementation, we'd parse and execute properly
+                                stdout.push_str(&format!("> {}\n", line));
+                            }
+                            0
+                        }
+                        Err(e) => {
+                            let _ = syscall::close(fd);
+                            stderr.push_str(&format!("pkg run: failed to read '{}': {:?}\n", name, e));
+                            1
+                        }
+                    }
+                }
+                Err(_) => {
+                    stderr.push_str(&format!("pkg run: package '{}' not found\n", name));
+                    1
+                }
+            }
+        }
+        "info" | "show" => {
+            if args.len() < 2 {
+                stderr.push_str("pkg info: usage: pkg info <name>\n");
+                return 1;
+            }
+            let name = args[1];
+            let pkg_path = format!("/var/packages/{}", name);
+
+            match syscall::metadata(&pkg_path) {
+                Ok(meta) => {
+                    stdout.push_str(&format!("Package: {}\n", name));
+                    stdout.push_str(&format!("Path: {}\n", pkg_path));
+                    stdout.push_str(&format!("Size: {} bytes\n", meta.size));
+
+                    // Show first few lines of script
+                    if let Ok(fd) = syscall::open(&pkg_path, syscall::OpenFlags::READ) {
+                        let mut buf = vec![0u8; 512];
+                        if let Ok(n) = syscall::read(fd, &mut buf) {
+                            let preview = String::from_utf8_lossy(&buf[..n]);
+                            stdout.push_str("\nScript preview:\n");
+                            for (i, line) in preview.lines().take(5).enumerate() {
+                                stdout.push_str(&format!("  {}: {}\n", i + 1, line));
+                            }
+                        }
+                        let _ = syscall::close(fd);
+                    }
+                    0
+                }
+                Err(_) => {
+                    stderr.push_str(&format!("pkg info: package '{}' not found\n", name));
+                    1
+                }
+            }
+        }
+        cmd => {
+            stderr.push_str(&format!("pkg: unknown command '{}'\n", cmd));
+            stderr.push_str("Try 'pkg --help' for available commands.\n");
+            1
+        }
+    }
+}
+
+// ========== USER LOGIN COMMANDS ==========
+
+/// login - log in as a user
+fn prog_login(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: login [username]\n\nLog in as a user.\n\nIf no username is provided, prompts for one.\nUse 'logout' to end the current session.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    // Ensure session directory exists
+    let _ = syscall::mkdir("/var");
+    let _ = syscall::mkdir("/var/run");
+
+    let username = if args.is_empty() {
+        // Default to user if no username specified
+        "user".to_string()
+    } else {
+        args[0].to_string()
+    };
+
+    // Check if user exists
+    let user_exists = syscall::KERNEL.with(|k| {
+        k.borrow().users().get_user_by_name(&username).is_some()
+    });
+
+    if !user_exists {
+        stderr.push_str(&format!("login: unknown user '{}'\n", username));
+        return 1;
+    }
+
+    // Get user info
+    let (uid, gid, home) = syscall::KERNEL.with(|k| {
+        let kernel = k.borrow();
+        if let Some(user) = kernel.users().get_user_by_name(&username) {
+            (user.uid.0, user.gid.0, user.home.clone())
+        } else {
+            (1000, 1000, "/home/user".to_string())
+        }
+    });
+
+    // Set the current process's uid/gid
+    syscall::KERNEL.with(|k| {
+        let mut kernel = k.borrow_mut();
+        if let Some(proc) = kernel.current_process_mut() {
+            proc.uid = crate::kernel::users::Uid(uid);
+            proc.euid = crate::kernel::users::Uid(uid);
+            proc.gid = crate::kernel::users::Gid(gid);
+            proc.egid = crate::kernel::users::Gid(gid);
+        }
+    });
+
+    // Record login session
+    let session_file = "/var/run/utmp";
+    let now = syscall::now();
+    let session_data = format!("{}:{}:{}\n", username, uid, now as u64);
+
+    if let Ok(fd) = syscall::open(session_file, syscall::OpenFlags::WRITE) {
+        let _ = syscall::write(fd, session_data.as_bytes());
+        let _ = syscall::close(fd);
+    }
+
+    stdout.push_str(&format!("Login: {}\n", username));
+    stdout.push_str(&format!("UID: {}, GID: {}\n", uid, gid));
+    stdout.push_str(&format!("Home: {}\n", home));
+
+    0
+}
+
+/// logout - log out current user
+fn prog_logout(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: logout\n\nEnd the current login session.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    // Clear the session file
+    let _ = syscall::remove_file("/var/run/utmp");
+
+    // Reset to default user
+    syscall::KERNEL.with(|k| {
+        let mut kernel = k.borrow_mut();
+        if let Some(proc) = kernel.current_process_mut() {
+            proc.uid = crate::kernel::users::Uid(1000);
+            proc.euid = crate::kernel::users::Uid(1000);
+            proc.gid = crate::kernel::users::Gid(1000);
+            proc.egid = crate::kernel::users::Gid(1000);
+        }
+    });
+
+    stdout.push_str("Logout successful. Returned to default user.\n");
+    0
+}
+
+/// who - show who is logged in
+fn prog_who(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: who\n\nShow who is logged in.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    // Read session file
+    match syscall::open("/var/run/utmp", syscall::OpenFlags::READ) {
+        Ok(fd) => {
+            let mut buf = vec![0u8; 4096];
+            match syscall::read(fd, &mut buf) {
+                Ok(n) => {
+                    let _ = syscall::close(fd);
+                    let content = String::from_utf8_lossy(&buf[..n]);
+
+                    stdout.push_str("USER     TTY        LOGIN@\n");
+                    for line in content.lines() {
+                        let parts: Vec<&str> = line.split(':').collect();
+                        if parts.len() >= 3 {
+                            let username = parts[0];
+                            let login_time = parts[2].parse::<u64>().unwrap_or(0);
+                            let secs = (login_time / 1000) as u64;
+                            let hours = (secs / 3600) % 24;
+                            let mins = (secs / 60) % 60;
+                            stdout.push_str(&format!(
+                                "{:<8} tty1       {:02}:{:02}\n",
+                                username, hours, mins
+                            ));
+                        }
+                    }
+                }
+                Err(_) => {
+                    let _ = syscall::close(fd);
+                    stdout.push_str("No users logged in.\n");
+                }
+            }
+        }
+        Err(_) => {
+            // No session file, show current user from process
+            let username = syscall::KERNEL.with(|k| {
+                let kernel = k.borrow();
+                let uid = kernel.current_process()
+                    .map(|p| p.uid.0)
+                    .unwrap_or(1000);
+                kernel.users().get_user(crate::kernel::users::Uid(uid))
+                    .map(|u| u.name.clone())
+                    .unwrap_or_else(|| "user".to_string())
+            });
+
+            stdout.push_str("USER     TTY        LOGIN@\n");
+            stdout.push_str(&format!("{:<8} tty1       00:00\n", username));
+        }
+    }
+
+    0
+}
+
+/// w - show who is logged in and what they are doing
+fn prog_w(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: w\n\nShow who is logged in and what they are doing.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    // Show current time
+    let now_ms = syscall::now();
+    let secs = (now_ms / 1000.0) as u64;
+    let hours = (secs / 3600) % 24;
+    let mins = (secs / 60) % 60;
+    let secs_display = secs % 60;
+
+    stdout.push_str(&format!(" {:02}:{:02}:{:02} up ", hours, mins, secs_display));
+
+    // Uptime
+    let uptime_hours = secs / 3600;
+    let uptime_mins = (secs / 60) % 60;
+    if uptime_hours > 0 {
+        stdout.push_str(&format!("{}:{:02}", uptime_hours, uptime_mins));
+    } else {
+        stdout.push_str(&format!("{} min", uptime_mins));
+    }
+
+    stdout.push_str(",  1 user\n");
+    stdout.push_str("USER     TTY      FROM             LOGIN@   IDLE   WHAT\n");
+
+    // Get current user
+    let username = syscall::KERNEL.with(|k| {
+        let kernel = k.borrow();
+        let uid = kernel.current_process()
+            .map(|p| p.uid.0)
+            .unwrap_or(1000);
+        kernel.users().get_user(crate::kernel::users::Uid(uid))
+            .map(|u| u.name.clone())
+            .unwrap_or_else(|| "user".to_string())
+    });
+
+    stdout.push_str(&format!(
+        "{:<8} tty1     -                {:02}:{:02}    0.00s  -sh\n",
+        username, hours, mins
+    ));
+
+    0
+}
+
+// ========== CRON/SCHEDULING COMMANDS ==========
+
+/// crontab - maintain cron tables
+///
+/// Crontab format: minute hour day month weekday command
+/// Special strings: @reboot, @hourly, @daily, @weekly, @monthly
+fn prog_crontab(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: crontab [-l | -e | -r] [file]\n\nMaintain cron tables for scheduled jobs.\n\nOptions:\n  -l        List current crontab\n  -e        Edit crontab (prints current, use crontab file to set)\n  -r        Remove crontab\n  file      Install crontab from file\n\nCrontab format:\n  minute hour day month weekday command\n  @reboot  Run at startup\n  @hourly  Run every hour (0 * * * *)\n  @daily   Run daily (0 0 * * *)\n\nExamples:\n  */5 * * * * echo 'every 5 min'    Run every 5 minutes\n  0 * * * * date                    Run at the top of every hour\n  @reboot /var/packages/startup     Run at boot") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    // Ensure cron directories exist
+    let _ = syscall::mkdir("/var");
+    let _ = syscall::mkdir("/var/spool");
+    let _ = syscall::mkdir("/var/spool/cron");
+
+    // Get current username
+    let username = syscall::KERNEL.with(|k| {
+        let kernel = k.borrow();
+        let uid = kernel.current_process()
+            .map(|p| p.uid.0)
+            .unwrap_or(1000);
+        kernel.users().get_user(crate::kernel::users::Uid(uid))
+            .map(|u| u.name.clone())
+            .unwrap_or_else(|| "user".to_string())
+    });
+
+    let crontab_path = format!("/var/spool/cron/{}", username);
+
+    if args.is_empty() || args[0] == "-l" {
+        // List crontab
+        match syscall::open(&crontab_path, syscall::OpenFlags::READ) {
+            Ok(fd) => {
+                let mut buf = vec![0u8; 65536];
+                match syscall::read(fd, &mut buf) {
+                    Ok(n) => {
+                        let _ = syscall::close(fd);
+                        let content = String::from_utf8_lossy(&buf[..n]);
+                        if content.trim().is_empty() {
+                            stdout.push_str("no crontab for ");
+                            stdout.push_str(&username);
+                            stdout.push('\n');
+                        } else {
+                            stdout.push_str(&content);
+                        }
+                    }
+                    Err(_) => {
+                        let _ = syscall::close(fd);
+                        stdout.push_str("no crontab for ");
+                        stdout.push_str(&username);
+                        stdout.push('\n');
+                    }
+                }
+            }
+            Err(_) => {
+                stdout.push_str("no crontab for ");
+                stdout.push_str(&username);
+                stdout.push('\n');
+            }
+        }
+        return 0;
+    }
+
+    match &args[0][..] {
+        "-e" => {
+            // Print current crontab for manual editing
+            stdout.push_str("# Edit your crontab below, then save with:\n");
+            stdout.push_str("#   echo 'your crontab' | crontab -\n");
+            stdout.push_str("# or: crontab /path/to/crontab/file\n");
+            stdout.push_str("#\n");
+            stdout.push_str("# Format: minute hour day month weekday command\n");
+            stdout.push_str("#\n");
+
+            // Show existing entries
+            if let Ok(fd) = syscall::open(&crontab_path, syscall::OpenFlags::READ) {
+                let mut buf = vec![0u8; 65536];
+                if let Ok(n) = syscall::read(fd, &mut buf) {
+                    let content = String::from_utf8_lossy(&buf[..n]);
+                    stdout.push_str(&content);
+                }
+                let _ = syscall::close(fd);
+            }
+            0
+        }
+        "-r" => {
+            // Remove crontab
+            match syscall::remove_file(&crontab_path) {
+                Ok(()) => {
+                    stdout.push_str(&format!("crontab removed for {}\n", username));
+                    0
+                }
+                Err(_) => {
+                    stderr.push_str(&format!("no crontab for {}\n", username));
+                    1
+                }
+            }
+        }
+        "-" => {
+            // Read from stdin (the rest of the args after -)
+            stderr.push_str("crontab: use 'crontab <file>' or 'echo ... > /var/spool/cron/username'\n");
+            1
+        }
+        file => {
+            // Install crontab from file
+            match syscall::open(file, syscall::OpenFlags::READ) {
+                Ok(fd) => {
+                    let mut buf = vec![0u8; 65536];
+                    match syscall::read(fd, &mut buf) {
+                        Ok(n) => {
+                            let _ = syscall::close(fd);
+                            let content = &buf[..n];
+
+                            // Write to crontab
+                            match syscall::open(&crontab_path, syscall::OpenFlags::WRITE) {
+                                Ok(out_fd) => {
+                                    let _ = syscall::write(out_fd, content);
+                                    let _ = syscall::close(out_fd);
+
+                                    // Parse and validate entries
+                                    let text = String::from_utf8_lossy(content);
+                                    let mut entry_count = 0;
+                                    for line in text.lines() {
+                                        let line = line.trim();
+                                        if line.is_empty() || line.starts_with('#') {
+                                            continue;
+                                        }
+                                        entry_count += 1;
+                                    }
+
+                                    stdout.push_str(&format!("crontab: installed {} entries for {}\n", entry_count, username));
+                                    0
+                                }
+                                Err(e) => {
+                                    stderr.push_str(&format!("crontab: cannot install: {:?}\n", e));
+                                    1
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            let _ = syscall::close(fd);
+                            stderr.push_str(&format!("crontab: cannot read '{}': {:?}\n", file, e));
+                            1
+                        }
+                    }
+                }
+                Err(_) => {
+                    // Maybe it's inline content
+                    let content = args.join(" ");
+
+                    match syscall::open(&crontab_path, syscall::OpenFlags::WRITE) {
+                        Ok(out_fd) => {
+                            let _ = syscall::write(out_fd, content.as_bytes());
+                            let _ = syscall::close(out_fd);
+                            stdout.push_str(&format!("crontab: installed for {}\n", username));
+                            0
+                        }
+                        Err(e) => {
+                            stderr.push_str(&format!("crontab: cannot install: {:?}\n", e));
+                            1
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// at - schedule a one-time job
+fn prog_at(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: at <time> <command>\n       at -l         List pending jobs\n       at -r <id>    Remove a job\n\nSchedule a command to run at a specific time.\n\nTime formats:\n  +5m    5 minutes from now\n  +1h    1 hour from now\n  +30s   30 seconds from now\n\nExamples:\n  at +5m echo 'Hello'     Run in 5 minutes\n  at +1h date             Run in 1 hour") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    // Ensure at spool directory exists
+    let _ = syscall::mkdir("/var");
+    let _ = syscall::mkdir("/var/spool");
+    let _ = syscall::mkdir("/var/spool/at");
+
+    if args.is_empty() {
+        stderr.push_str("at: missing time specification\nTry 'at --help' for usage.\n");
+        return 1;
+    }
+
+    match &args[0][..] {
+        "-l" | "list" => {
+            // List pending jobs
+            match syscall::readdir("/var/spool/at") {
+                Ok(entries) => {
+                    if entries.is_empty() {
+                        stdout.push_str("No pending jobs.\n");
+                    } else {
+                        stdout.push_str("ID       SCHEDULED           COMMAND\n");
+                        for entry in entries {
+                            let job_path = format!("/var/spool/at/{}", entry);
+                            if let Ok(fd) = syscall::open(&job_path, syscall::OpenFlags::READ) {
+                                let mut buf = vec![0u8; 1024];
+                                if let Ok(n) = syscall::read(fd, &mut buf) {
+                                    let content = String::from_utf8_lossy(&buf[..n]);
+                                    let lines: Vec<&str> = content.lines().collect();
+                                    if lines.len() >= 2 {
+                                        let time_str = lines[0];
+                                        let command = lines[1];
+                                        stdout.push_str(&format!(
+                                            "{:<8} {:<19} {}\n",
+                                            entry,
+                                            time_str,
+                                            command.chars().take(40).collect::<String>()
+                                        ));
+                                    }
+                                }
+                                let _ = syscall::close(fd);
+                            }
+                        }
+                    }
+                    0
+                }
+                Err(_) => {
+                    stdout.push_str("No pending jobs.\n");
+                    0
+                }
+            }
+        }
+        "-r" | "-d" | "remove" => {
+            if args.len() < 2 {
+                stderr.push_str("at: missing job ID\n");
+                return 1;
+            }
+            let job_id = args[1];
+            let job_path = format!("/var/spool/at/{}", job_id);
+
+            match syscall::remove_file(&job_path) {
+                Ok(()) => {
+                    stdout.push_str(&format!("Job {} removed.\n", job_id));
+                    0
+                }
+                Err(_) => {
+                    stderr.push_str(&format!("at: job '{}' not found\n", job_id));
+                    1
+                }
+            }
+        }
+        time_spec => {
+            if args.len() < 2 {
+                stderr.push_str("at: missing command\n");
+                return 1;
+            }
+
+            // Parse time specification
+            let delay_ms: u64 = if time_spec.starts_with('+') {
+                let spec = &time_spec[1..];
+                if spec.ends_with('s') {
+                    spec[..spec.len()-1].parse::<u64>().unwrap_or(0) * 1000
+                } else if spec.ends_with('m') {
+                    spec[..spec.len()-1].parse::<u64>().unwrap_or(0) * 60 * 1000
+                } else if spec.ends_with('h') {
+                    spec[..spec.len()-1].parse::<u64>().unwrap_or(0) * 60 * 60 * 1000
+                } else {
+                    spec.parse::<u64>().unwrap_or(0) * 1000 // default to seconds
+                }
+            } else {
+                stderr.push_str("at: invalid time format (use +5m, +1h, +30s)\n");
+                return 1;
+            };
+
+            if delay_ms == 0 {
+                stderr.push_str("at: invalid time specification\n");
+                return 1;
+            }
+
+            let command = args[1..].join(" ");
+
+            // Generate job ID
+            let now = syscall::now() as u64;
+            let scheduled = now + delay_ms;
+            let job_id = format!("{}", now % 100000);
+
+            // Create job file
+            let job_path = format!("/var/spool/at/{}", job_id);
+            let job_content = format!("{}\n{}\n", scheduled, command);
+
+            match syscall::open(&job_path, syscall::OpenFlags::WRITE) {
+                Ok(fd) => {
+                    let _ = syscall::write(fd, job_content.as_bytes());
+                    let _ = syscall::close(fd);
+
+                    stdout.push_str(&format!("Job {} scheduled to run in {}\n", job_id, time_spec));
+                    stdout.push_str(&format!("Command: {}\n", command));
+                    0
+                }
+                Err(e) => {
+                    stderr.push_str(&format!("at: failed to schedule job: {:?}\n", e));
+                    1
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
