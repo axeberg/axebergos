@@ -73,7 +73,8 @@ The kernel is the core of axeberg, managing processes, memory, and system resour
 | [Kernel Overview](kernel/overview.md) | High-level architecture |
 | [Syscall Interface](kernel/syscalls.md) | The syscall API |
 | [WASM Modules](kernel/wasm-modules.md) | **Command executable format and ABI** |
-| [Process Model](kernel/processes.md) | Processes and isolation |
+| [Process Model](kernel/processes.md) | Processes, sessions, and isolation |
+| [Users & Groups](kernel/users.md) | Multi-user system and permissions |
 | [Memory Management](kernel/memory.md) | Allocation and shared memory |
 | [Object Table](kernel/objects.md) | Kernel objects and handles |
 | [Executor](kernel/executor.md) | Async task execution |
