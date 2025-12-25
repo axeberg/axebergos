@@ -225,11 +225,190 @@ Spec ==
 EventualTermination ==
     (state = "running") ~> (state \in {"terminated", "error"})
 
+\* --- Executor State Machine ---
+
+(*
+ * The WasmExecutor coordinates WASM module execution:
+ *
+ *   IDLE --> COMPILING --> INSTANTIATING --> EXECUTING --> COMPLETED
+ *              |              |                  |
+ *              +-------------+------------------+--> FAILED
+ *
+ * Execution phases:
+ *   1. COMPILING: WebAssembly.compile() on module bytes
+ *   2. INSTANTIATING: Create import object, instantiate module
+ *   3. EXECUTING: Call main(argc, argv), handle syscalls
+ *   4. COMPLETED: Capture stdout, stderr, exit_code
+ *)
+
+VARIABLES
+    execState,      \* Executor state: "idle" | "compiling" | "instantiating" | "executing" | "completed" | "failed"
+    stdout,         \* Captured stdout buffer
+    stderr,         \* Captured stderr buffer
+    runtimeExitCode \* Exit code from runtime
+
+ExecutorTypeInvariant ==
+    /\ execState \in {"idle", "compiling", "instantiating", "executing", "completed", "failed"}
+    /\ runtimeExitCode \in -128..127 \cup {-999}
+
+\* Executor starts idle
+ExecutorInit ==
+    /\ execState = "idle"
+    /\ stdout = <<>>
+    /\ stderr = <<>>
+    /\ runtimeExitCode = -999
+
+\* Begin compiling WASM bytes
+BeginCompile(bytes) ==
+    /\ execState = "idle"
+    /\ execState' = "compiling"
+    /\ UNCHANGED <<stdout, stderr, runtimeExitCode>>
+
+\* Compilation succeeded, begin instantiation
+BeginInstantiate ==
+    /\ execState = "compiling"
+    /\ execState' = "instantiating"
+    /\ UNCHANGED <<stdout, stderr, runtimeExitCode>>
+
+\* Instantiation succeeded, begin execution
+BeginExecute(argCount, argvPtr) ==
+    /\ execState = "instantiating"
+    /\ execState' = "executing"
+    /\ UNCHANGED <<stdout, stderr, runtimeExitCode>>
+
+\* Execution completed normally
+CompleteExecution(code) ==
+    /\ execState = "executing"
+    /\ execState' = "completed"
+    /\ runtimeExitCode' = code
+    /\ UNCHANGED <<stdout, stderr>>
+
+\* Execution failed
+FailExecution(reason) ==
+    /\ execState \in {"compiling", "instantiating", "executing"}
+    /\ execState' = "failed"
+    /\ UNCHANGED <<stdout, stderr, runtimeExitCode>>
+
+\* --- Syscall Host Function Semantics ---
+
+(*
+ * Host functions are JavaScript closures that implement syscalls.
+ * Each syscall has access to SharedRuntime (Rc<RefCell<RuntimeState>>).
+ *
+ * Key invariants:
+ *   1. Syscalls only execute when execState = "executing"
+ *   2. Memory access checks bounds before read/write
+ *   3. FD operations validate descriptor state
+ *   4. exit() terminates execution immediately
+ *)
+
+\* Host function: write(fd, buf_ptr, len) -> bytes_written
+HostWrite(fd, bufPtr, len) ==
+    /\ execState = "executing"
+    /\ fd \in {0, 1, 2} \/ fd \in DOMAIN fdTable
+    /\ bufPtr >= 0 /\ bufPtr + len <= memorySize
+    /\ IF fd = 1 THEN
+           \* Append to stdout buffer
+           stdout' = stdout \o <<len>>
+       ELSE IF fd = 2 THEN
+           \* Append to stderr buffer
+           stderr' = stderr \o <<len>>
+       ELSE
+           UNCHANGED <<stdout, stderr>>
+    /\ UNCHANGED <<execState, runtimeExitCode>>
+
+\* Host function: read(fd, buf_ptr, len) -> bytes_read
+HostRead(fd, bufPtr, len) ==
+    /\ execState = "executing"
+    /\ fd \in {0, 1, 2} \/ fd \in DOMAIN fdTable
+    /\ bufPtr >= 0 /\ bufPtr + len <= memorySize
+    /\ UNCHANGED <<execState, stdout, stderr, runtimeExitCode>>
+
+\* Host function: exit(code) -> !
+HostExit(code) ==
+    /\ execState = "executing"
+    /\ execState' = "completed"
+    /\ runtimeExitCode' = code
+    /\ UNCHANGED <<stdout, stderr>>
+
+\* --- Command Runner Coordination ---
+
+(*
+ * WasmCommandRunner coordinates:
+ *   1. Finding commands in /bin, /usr/bin, /usr/local/bin
+ *   2. Loading and validating module bytes
+ *   3. Creating WasmExecutor instance
+ *   4. Returning CommandResult
+ *
+ * Key properties:
+ *   - Commands are searched in PATH order
+ *   - Module bytes are cached for repeated execution
+ *   - Each execution gets fresh runtime state
+ *)
+
+VARIABLES
+    commandCache,   \* Cache of loaded module bytes: path -> bytes
+    currentCommand  \* Currently executing command name
+
+CommandRunnerInit ==
+    /\ commandCache = [path \in {} |-> <<>>]
+    /\ currentCommand = ""
+
+\* Find and load a command
+LoadCommand(name, path) ==
+    /\ currentCommand = ""
+    /\ currentCommand' = name
+    /\ IF path \in DOMAIN commandCache THEN
+           \* Cache hit - use cached bytes
+           UNCHANGED <<commandCache>>
+       ELSE
+           \* Cache miss - load from filesystem
+           commandCache' = commandCache @@ (path :> <<1>>)
+
+\* Execute loaded command
+ExecuteCommand ==
+    /\ currentCommand # ""
+    /\ execState = "idle"
+    /\ BeginCompile(<<>>)
+    /\ UNCHANGED <<currentCommand, commandCache>>
+
+\* Command finished
+FinishCommand(result) ==
+    /\ execState \in {"completed", "failed"}
+    /\ currentCommand' = ""
+    /\ UNCHANGED <<commandCache>>
+
+\* --- Shell Integration ---
+
+(*
+ * Shell executor integration:
+ *   - try_execute_sync: Returns None for WASM commands
+ *   - execute_wasm_command: Async execution via WasmCommandRunner
+ *   - execute_single_async: Unified async command execution
+ *
+ * Command resolution order:
+ *   1. Built-in commands (cd, echo, export, etc.)
+ *   2. Program registry (70+ built-in programs)
+ *   3. WASM commands in /bin/*.wasm
+ *)
+
+\* --- Combined Executor Invariant ---
+
+ExecutorInvariant ==
+    /\ ExecutorTypeInvariant
+    \* Exit code only set when completed or terminated
+    /\ (runtimeExitCode # -999) => (execState = "completed")
+    \* Stdout/stderr only modified during execution
+    /\ (Len(stdout) > 0 \/ Len(stderr) > 0) =>
+           (execState \in {"executing", "completed", "failed"})
+
 \* --- Theorems ---
 
 THEOREM Spec => []Invariant
 THEOREM Spec => []TypeInvariant
+THEOREM Spec => []ExecutorInvariant
 
 =============================================================================
 \* Modification History
+\* Updated: Added executor state machine, host functions, command runner
 \* Created for axeberg WASM loader specification

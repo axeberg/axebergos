@@ -205,12 +205,16 @@
 //! ```
 
 mod abi;
+mod command;
 mod error;
+mod executor;
 mod loader;
 mod runtime;
 
 pub use abi::*;
+pub use command::*;
 pub use error::*;
+pub use executor::*;
 pub use loader::*;
 pub use runtime::*;
 
