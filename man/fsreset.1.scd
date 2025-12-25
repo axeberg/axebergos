@@ -6,7 +6,7 @@ fsreset - clear OPFS storage and reset filesystem
 
 # SYNOPSIS
 
-*fsreset* [-f]
+*fsreset* *-f*
 
 # DESCRIPTION
 

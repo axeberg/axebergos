@@ -1,5 +1,7 @@
 # Bare Metal Boot Plan
 
+> ⚠️ **Status**: Planning phase. None of this is implemented yet.
+
 Goal: Run axeberg directly on hardware (or QEMU) without a host OS.
 
 ## Background
@@ -180,7 +182,7 @@ munal-os makes unconventional simplifications that align with axeberg's philosop
    ```
 
 4. **Port Terminal struct**
-   - Adapt `src/shell/terminal.rs` to use framebuffer instead of Canvas2D
+   - Adapt terminal rendering code (currently in `src/shell/terminal.rs` for web) to use framebuffer instead of Canvas2D
 
 ### Success Criteria
 - Text renders to screen
@@ -227,7 +229,7 @@ munal-os makes unconventional simplifications that align with axeberg's philosop
 
 ### Steps
 
-1. **Make kernel `no_std` compatible**
+1. **Make kernel `no_std` compatible** (requires major refactoring)
    - Remove `std` dependencies from core kernel
    - Use `alloc` crate for Vec, String, HashMap
    - Implement global allocator (linked_list_allocator or similar)
@@ -364,11 +366,13 @@ munal-os makes unconventional simplifications that align with axeberg's philosop
 
 ### Build Requirements
 
-- Rust nightly (for `#![no_std]` features)
+- Rust stable (1.83+) (for `#![no_std]` features)
 - QEMU 8.0+ with OVMF firmware
 - `x86_64-unknown-uefi` target
 
 ## File Structure
+
+**Note:** The following structure is PROPOSED and not yet implemented. It represents the target architecture for bare metal support.
 
 ```
 axeberg/

@@ -157,7 +157,7 @@ When you type `cat file.txt | grep hello`:
 
 ### Test Coverage
 
-The kernel has 380+ tests covering:
+The kernel has 674 tests covering:
 
 - Executor scheduling and priorities
 - Process creation and lifecycle
@@ -195,12 +195,9 @@ axebergos/
 │   │   ├── executor.rs      # Pipeline execution
 │   │   ├── builtins.rs      # Built-in commands
 │   │   └── terminal.rs      # Terminal emulator
-│   ├── vfs/
-│   │   ├── mod.rs           # VFS traits
-│   │   └── memory.rs        # In-memory filesystem
-│   └── compositor/
-│       ├── mod.rs           # Window management
-│       └── surface.rs       # Canvas rendering
+│   └── vfs/
+│       ├── mod.rs           # VFS traits
+│       └── memory.rs        # In-memory filesystem
 ├── docs/                    # This documentation
 ├── index.html               # Browser entry point
 └── Cargo.toml

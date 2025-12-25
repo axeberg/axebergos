@@ -6,7 +6,7 @@ sort - sort lines of text
 
 # SYNOPSIS
 
-*sort* [*-rn*] [_FILE_...]
+*sort* [*-rnu*] [_FILE_...]
 
 # DESCRIPTION
 
@@ -18,7 +18,10 @@ Sort lines of text. If no files are given, reads from standard input.
 	Reverse the result of comparisons.
 
 *-n*
-	Sort numerically.
+	Sort numerically. (Note: Not yet implemented)
+
+*-u*
+	Remove duplicate lines.
 
 # EXAMPLES
 

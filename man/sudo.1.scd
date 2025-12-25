@@ -13,6 +13,9 @@ sudo - execute a command as root
 Run a command with root privileges. The current user must be in
 the wheel group (sudoers) to use sudo.
 
+Note: In the current implementation, sudo displays what would be executed
+but does not actually run the command.
+
 # OPTIONS
 
 *--help*

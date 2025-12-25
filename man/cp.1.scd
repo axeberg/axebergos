@@ -12,6 +12,11 @@ cp - copy files
 
 Copy _SOURCE_ to _DEST_. Does not support copying directories.
 
+# OPTIONS
+
+*--help*
+	Display usage information and exit.
+
 # EXAMPLES
 
 Copy a file:

@@ -74,7 +74,7 @@ Get the default boot target:
 
 Set the default boot target:
 
-	systemctl set-default graphical
+	systemctl set-default graphical.target
 
 # SEE ALSO
 

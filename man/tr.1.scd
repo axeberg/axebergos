@@ -28,11 +28,11 @@ _SET2_
 
 # EXAMPLES
 
-Lowercase to uppercase:
+Translate characters:
 
-	echo "hello" | tr abc ABC
+	echo "abc" | tr abc ABC
 
-Result: ABCllo
+Result: ABC
 
 Replace spaces with newlines:
 

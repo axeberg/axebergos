@@ -21,7 +21,6 @@ _JOB_
 	- %N - Job number N
 	- %+ or %% - Current job
 	- %- - Previous job
-	- %string - Job whose command begins with string
 
 # OPTIONS
 

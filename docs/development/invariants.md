@@ -148,6 +148,16 @@ Formal specifications in `specs/tla/`:
    - Proves no missed timers
    - Checks cancel effectiveness
 
+4. **PathValidation.tla** - VFS path normalization and validation
+   - Verifies path canonicalization invariants
+   - Proves no directory traversal vulnerabilities
+   - Models symbolic link resolution
+
+5. **HistoryBuffer.tla** - Terminal history buffer
+   - Verifies circular buffer correctness
+   - Proves no data loss or corruption
+   - Models navigation and search
+
 Run with TLC model checker to find bugs before implementation.
 See `specs/tla/README.md` for usage instructions.
 

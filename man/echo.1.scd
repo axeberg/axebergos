@@ -19,7 +19,7 @@ Print arguments to standard output followed by a newline.
 
 *-e*
 	Enable interpretation of backslash escapes: \\n (newline), \\t (tab),
-	\\\\ (backslash).
+	\\r (carriage return), \\a (alert), \\b (backspace), \\\\ (backslash).
 
 # EXAMPLES
 

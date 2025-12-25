@@ -63,4 +63,4 @@ Create a file of zeros:
 
 # SEE ALSO
 
-*proc*(5), *cat*(1), *null*(4)
+*proc*(5), *sysfs*(5), *cat*(1)

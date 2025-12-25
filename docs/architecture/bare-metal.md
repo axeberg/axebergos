@@ -1,5 +1,7 @@
 # Bare Metal Boot Architecture
 
+> ⚠️ **Status**: This document describes planned bare metal support. Currently only Browser (WASM) and WASI targets are implemented.
+
 This document explores options for running AxebergOS on bare metal hardware, separate from the WASM/browser approach.
 
 ## Current Architecture (WASM)
@@ -130,13 +132,12 @@ src/
 ├── kernel/
 │   ├── mod.rs       # Kernel abstractions
 │   ├── process.rs   # Process management
-│   ├── vfs.rs       # Virtual filesystem
 │   └── syscall.rs   # Syscall interface
+├── vfs/             # Virtual filesystem (separate module)
 ├── platform/
 │   ├── mod.rs       # Platform trait
 │   ├── web.rs       # Browser/WASM implementation
-│   ├── uefi.rs      # UEFI implementation (new)
-│   └── bare.rs      # Bare metal implementation (new)
+│   └── wasi.rs      # WASI CLI implementation
 └── main.rs          # Entry point (cfg-gated)
 ```
 
@@ -144,20 +145,44 @@ The `Platform` trait abstracts hardware differences:
 
 ```rust
 pub trait Platform {
-    // Console I/O
+    // ===== Terminal Output =====
+
+    /// Write text to the terminal
     fn write(&mut self, text: &str);
-    fn read_key(&mut self) -> Option<KeyEvent>;
 
-    // Timing
+    /// Clear the terminal screen
+    fn clear(&mut self);
+
+    /// Get terminal dimensions
+    fn term_size(&self) -> TermSize;
+
+    // ===== Input =====
+
+    /// Poll for a key event (non-blocking)
+    fn poll_key(&mut self) -> Option<KeyEvent>;
+
+    // ===== Timing =====
+
+    /// Get current time in milliseconds since some epoch
     fn now_ms(&self) -> f64;
-    fn sleep(&mut self, ms: u64);
 
-    // Storage
-    fn read_sector(&mut self, lba: u64, buf: &mut [u8]) -> Result<()>;
-    fn write_sector(&mut self, lba: u64, buf: &[u8]) -> Result<()>;
+    // ===== Persistence =====
 
-    // Graphics (optional)
-    fn framebuffer(&mut self) -> Option<&mut Framebuffer>;
+    /// Save state to persistent storage
+    fn save_state(&mut self, data: &[u8]) -> PlatformResult<()>;
+
+    /// Load state from persistent storage
+    fn load_state(&mut self) -> PlatformResult<Option<Vec<u8>>>;
+
+    // ===== Lifecycle =====
+
+    /// Called each frame/tick of the main loop
+    fn tick(&mut self) {}
+
+    /// Check if the platform wants to exit
+    fn should_exit(&self) -> bool {
+        false
+    }
 }
 ```
 

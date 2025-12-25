@@ -6,7 +6,7 @@ tail - output the last part of files
 
 # SYNOPSIS
 
-*tail* [*-n* _COUNT_] [_FILE_...]
+*tail* [*-n* _COUNT_] [_FILE_]
 
 # DESCRIPTION
 

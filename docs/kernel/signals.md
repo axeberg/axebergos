@@ -48,9 +48,10 @@ pub enum SignalAction {
     Default,    // Use the signal's default action
     Ignore,     // Ignore the signal
     Terminate,  // Terminate the process
+    Kill,       // Kill the process (unconditional)
     Stop,       // Stop (pause) the process
     Continue,   // Resume a stopped process
-    Handle,     // Custom handler (future support)
+    Handle,     // Call a handler (task will be notified)
 }
 ```
 
@@ -157,8 +158,9 @@ use axeberg::kernel::syscall::{signal, sigpending, getpid};
 use axeberg::kernel::{Signal, SignalAction};
 
 async fn main_loop() {
-    // Set up signal handling
-    signal(Signal::SIGTERM, SignalAction::Handle).unwrap();
+    // Set up signal handling - ignore SIGTERM instead of Handle
+    // (Handle is for future use, not fully implemented yet)
+    signal(Signal::SIGTERM, SignalAction::Ignore).unwrap();
 
     loop {
         // Check for signals

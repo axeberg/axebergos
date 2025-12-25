@@ -12,6 +12,11 @@ touch - create files or update timestamps
 
 Create empty files or update modification timestamps of existing files.
 
+# OPTIONS
+
+*-h*, *--help*
+	Display usage information and exit.
+
 # EXAMPLES
 
 Create an empty file:

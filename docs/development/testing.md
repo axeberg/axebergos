@@ -4,7 +4,7 @@ axeberg has a comprehensive test suite ensuring kernel reliability.
 
 ## Test Overview
 
-**99 tests** across all major components:
+**674 tests (646 unit tests + 28 integration tests)** across all major components:
 
 | Component | Tests | Coverage |
 |-----------|-------|----------|
@@ -15,7 +15,6 @@ axeberg has a comprehensive test suite ensuring kernel reliability.
 | Process | 5 | Creation, file tables |
 | Syscall | 17 | All syscall operations |
 | VFS | 17 | Files, directories, paths |
-| Compositor | 11 | Layout, windows, geometry |
 
 ## Running Tests
 

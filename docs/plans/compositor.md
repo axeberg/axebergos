@@ -1,4 +1,6 @@
-# Compositor
+# Compositor Design (Future Work)
+
+> ⚠️ **Status**: This is a design document for a planned feature. The compositor has not been implemented - the system currently uses xterm.js for terminal rendering.
 
 The compositor manages windows and renders the GUI using Canvas2D.
 

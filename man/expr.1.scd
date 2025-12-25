@@ -26,7 +26,7 @@ _NUM1_ *+* _NUM2_
 _NUM1_ *-* _NUM2_
 	Subtraction.
 
-_NUM1_ *\** _NUM2_
+_NUM1_ *\\** _NUM2_
 	Multiplication (escape the asterisk in shell).
 
 _NUM1_ */* _NUM2_

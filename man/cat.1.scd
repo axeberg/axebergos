@@ -14,6 +14,11 @@ Concatenate files and print to standard output.
 
 If no files are given or file is *-*, reads from standard input.
 
+# OPTIONS
+
+*-h*, *--help*
+	Display usage information and exit.
+
 # EXAMPLES
 
 Print a file:
