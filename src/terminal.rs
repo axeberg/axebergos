@@ -99,6 +99,8 @@ thread_local! {
 
 const PROMPT: &str = "$ ";
 const SEARCH_PROMPT: &str = "(reverse-i-search)`";
+/// Maximum number of commands to keep in history
+const MAX_HISTORY_SIZE: usize = 1000;
 
 /// Initialize the xterm.js terminal
 pub fn init() -> Result<(), JsValue> {
@@ -715,6 +717,10 @@ fn setup_keyboard_handler(term: Rc<XTerm>) {
                             HISTORY.with(|h| {
                                 let mut history = h.borrow_mut();
                                 if history.last() != Some(&input) {
+                                    // Enforce history size limit
+                                    if history.len() >= MAX_HISTORY_SIZE {
+                                        history.remove(0);
+                                    }
                                     history.push(input.clone());
                                 }
                                 HISTORY_POS.with(|p| {

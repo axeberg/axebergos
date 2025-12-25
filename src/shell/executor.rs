@@ -62,7 +62,15 @@ impl ExecResult {
 }
 
 /// A program that can be executed by the shell
-pub type ProgramFn = fn(&[String], &mut String, &mut String) -> i32;
+///
+/// Parameters:
+/// - args: Command line arguments (not including stdin data)
+/// - stdin: Standard input data (from pipe or input redirection)
+/// - stdout: Buffer for standard output
+/// - stderr: Buffer for standard error
+///
+/// Returns: Exit code (0 for success)
+pub type ProgramFn = fn(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32;
 
 /// Registry of available programs
 pub struct ProgramRegistry {
@@ -178,8 +186,7 @@ impl ProgramRegistry {
         // User login commands
         reg.register("login", prog_login);
         reg.register("logout", prog_logout);
-        reg.register("su", prog_su);
-        reg.register("sudo", prog_sudo);
+        // Note: su and sudo are already registered above with user management commands
         reg.register("who", prog_who);
         reg.register("w", prog_w);
 
@@ -342,7 +349,7 @@ impl Executor {
             let mut stderr = String::new();
 
             // Handle input redirection
-            let input = if let Some(ref redir) = cmd.stdin {
+            let stdin = if let Some(ref redir) = cmd.stdin {
                 match self.read_file(&redir.path) {
                     Ok(content) => content,
                     Err(e) => return ExecResult::success().with_error(e),
@@ -352,19 +359,10 @@ impl Executor {
             };
 
             // Expand glob patterns in arguments
-            let expanded_args = self.expand_args(&cmd.args);
+            let args = self.expand_args(&cmd.args);
 
-            // Prepare args with input if needed
-            let args: Vec<String> = if input.is_empty() {
-                expanded_args
-            } else {
-                // For programs that read stdin, we pass input via a special mechanism
-                let mut args = expanded_args;
-                args.insert(0, format!("__STDIN__:{}", input));
-                args
-            };
-
-            let code = prog(&args, &mut stdout, &mut stderr);
+            // Execute program with stdin passed directly
+            let code = prog(&args, &stdin, &mut stdout, &mut stderr);
 
             // Handle output redirection
             if let Some(ref redir) = cmd.stdout {
@@ -449,15 +447,34 @@ impl Executor {
                         self.change_directory(&path);
                         last_code = 0;
                     }
+                    BuiltinResult::Export(pairs) => {
+                        for (name, value) in pairs {
+                            self.state.set_env(&name, &value);
+                        }
+                        last_code = 0;
+                    }
+                    BuiltinResult::Unset(vars) => {
+                        for var in vars {
+                            self.state.unset_env(&var);
+                        }
+                        last_code = 0;
+                    }
+                    BuiltinResult::SetAlias(pairs) => {
+                        for (name, value) in pairs {
+                            self.state.set_alias(&name, &value);
+                        }
+                        last_code = 0;
+                    }
+                    BuiltinResult::UnsetAlias(names) => {
+                        for name in names {
+                            self.state.unalias(&name);
+                        }
+                        last_code = 0;
+                    }
                 }
             } else if let Some(prog) = self.registry.get(&cmd.program) {
-                // Pass pipe input via special arg
-                let mut args = expanded_args;
-                if !pipe_input.is_empty() {
-                    args.insert(0, format!("__STDIN__:{}", pipe_input));
-                }
-
-                last_code = prog(&args, &mut stdout, &mut stderr);
+                // Pass pipe input directly via stdin parameter
+                last_code = prog(&expanded_args, &pipe_input, &mut stdout, &mut stderr);
             } else {
                 return ExecResult::success()
                     .with_error(format!("{}: command not found", cmd.program))
@@ -504,52 +521,19 @@ impl Executor {
         let result = builtins::execute(&cmd.program, &expanded_args, &self.state);
 
         match result {
-            BuiltinResult::Success(mut output) => {
-                // Handle special export/unset responses
-                if output.starts_with("__EXPORT__:") {
-                    let pairs = &output["__EXPORT__:".len()..];
-                    for pair in pairs.split('\x00') {
-                        if let Some(eq) = pair.find('=') {
-                            let name = &pair[..eq];
-                            let value = &pair[eq + 1..];
-                            self.state.set_env(name, value);
-                        }
-                    }
-                    output.clear();
-                } else if output.starts_with("__UNSET__:") {
-                    let vars = &output["__UNSET__:".len()..];
-                    for var in vars.split('\x00') {
-                        self.state.unset_env(var);
-                    }
-                    output.clear();
-                } else if output.starts_with("__ALIAS__:") {
-                    let pairs = &output["__ALIAS__:".len()..];
-                    for pair in pairs.split('\x00') {
-                        if let Some(eq) = pair.find('=') {
-                            let name = &pair[..eq];
-                            let value = &pair[eq + 1..];
-                            self.state.set_alias(name, value);
-                        }
-                    }
-                    output.clear();
-                } else if output.starts_with("__UNALIAS__:") {
-                    let names = &output["__UNALIAS__:".len()..];
-                    for name in names.split('\x00') {
-                        self.state.unalias(name);
-                    }
-                    output.clear();
-                }
-
+            BuiltinResult::Success(output) => {
                 // Handle output redirection
-                if let Some(ref redir) = cmd.stdout {
+                let final_output = if let Some(ref redir) = cmd.stdout {
                     if let Err(e) = self.write_file(&redir.path, &output, redir.append) {
                         return ExecResult::success().with_error(e);
                     }
-                    output.clear();
-                }
+                    String::new()
+                } else {
+                    output
+                };
 
                 self.state.last_status = 0;
-                ExecResult::success().with_output(output)
+                ExecResult::success().with_output(final_output)
             }
             BuiltinResult::Ok => {
                 self.state.last_status = 0;
@@ -575,6 +559,34 @@ impl Executor {
             }
             BuiltinResult::Cd(path) => {
                 self.change_directory(&path)
+            }
+            BuiltinResult::Export(pairs) => {
+                for (name, value) in pairs {
+                    self.state.set_env(&name, &value);
+                }
+                self.state.last_status = 0;
+                ExecResult::success()
+            }
+            BuiltinResult::Unset(vars) => {
+                for var in vars {
+                    self.state.unset_env(&var);
+                }
+                self.state.last_status = 0;
+                ExecResult::success()
+            }
+            BuiltinResult::SetAlias(pairs) => {
+                for (name, value) in pairs {
+                    self.state.set_alias(&name, &value);
+                }
+                self.state.last_status = 0;
+                ExecResult::success()
+            }
+            BuiltinResult::UnsetAlias(names) => {
+                for name in names {
+                    self.state.unalias(&name);
+                }
+                self.state.last_status = 0;
+                ExecResult::success()
             }
         }
     }
@@ -1146,19 +1158,14 @@ fn read_file_content(path: &str) -> Result<String, String> {
 }
 
 /// Extract stdin from args if present
-fn extract_stdin(args: &[String]) -> (Option<String>, Vec<&str>) {
-    if !args.is_empty() && args[0].starts_with("__STDIN__:") {
-        let stdin = args[0]["__STDIN__:".len()..].to_string();
-        let rest: Vec<&str> = args[1..].iter().map(|s| s.as_str()).collect();
-        (Some(stdin), rest)
-    } else {
-        (None, args.iter().map(|s| s.as_str()).collect())
-    }
+/// Convert String slice to &str slice for easier handling
+fn args_to_strs(args: &[String]) -> Vec<&str> {
+    args.iter().map(|s| s.as_str()).collect()
 }
 
 /// cat - concatenate files or stdin
-fn prog_cat(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (stdin, files) = extract_stdin(args);
+fn prog_cat(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let files = args_to_strs(args);
 
     if let Some(help) = check_help(&files, "Usage: cat [FILE]...\nConcatenate files and print to stdout. See 'man cat' for details.") {
         stdout.push_str(&help);
@@ -1167,8 +1174,8 @@ fn prog_cat(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 
     if files.is_empty() {
         // Read from stdin
-        if let Some(input) = stdin {
-            stdout.push_str(&input);
+        if !stdin.is_empty() {
+            stdout.push_str(stdin);
         }
         return 0;
     }
@@ -1205,8 +1212,8 @@ fn prog_cat(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// ls - list directory contents
-fn prog_ls(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, paths) = extract_stdin(args);
+fn prog_ls(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let paths = args_to_strs(args);
 
     if let Some(help) = check_help(&paths, "Usage: ls [-la] [PATH]...\nList directory contents. See 'man ls' for details.") {
         stdout.push_str(&help);
@@ -1278,8 +1285,8 @@ fn prog_ls(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// mkdir - create directories
-fn prog_mkdir(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, paths) = extract_stdin(args);
+fn prog_mkdir(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let paths = args_to_strs(args);
 
     if let Some(help) = check_help(&paths, "Usage: mkdir DIRECTORY...\nCreate directories. See 'man mkdir' for details.") {
         stdout.push_str(&help);
@@ -1302,8 +1309,8 @@ fn prog_mkdir(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 
 }
 
 /// touch - create empty files
-fn prog_touch(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, paths) = extract_stdin(args);
+fn prog_touch(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let paths = args_to_strs(args);
 
     if let Some(help) = check_help(&paths, "Usage: touch FILE...\nCreate empty files or update timestamps. See 'man touch' for details.") {
         stdout.push_str(&help);
@@ -1332,8 +1339,8 @@ fn prog_touch(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 
 }
 
 /// rm - remove files
-fn prog_rm(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_rm(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: rm [-r] FILE...\nRemove files or directories. See 'man rm' for details.") {
         stdout.push_str(&help);
@@ -1388,8 +1395,8 @@ fn prog_rm(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// cp - copy files
-fn prog_cp(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_cp(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: cp SOURCE DEST\nCopy files. See 'man cp' for details.") {
         stdout.push_str(&help);
@@ -1414,8 +1421,8 @@ fn prog_cp(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// mv - move/rename files
-fn prog_mv(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_mv(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: mv SOURCE DEST\nMove or rename files. See 'man mv' for details.") {
         stdout.push_str(&help);
@@ -1440,8 +1447,8 @@ fn prog_mv(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// head - output first lines
-fn prog_head(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
-    let (stdin, args) = extract_stdin(args);
+fn prog_head(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: head [-n N] [FILE]\nOutput first N lines (default 10). See 'man head' for details.") {
         stdout.push_str(&help);
@@ -1466,7 +1473,7 @@ fn prog_head(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 
     }
 
     let input = if files.is_empty() {
-        stdin.unwrap_or_default()
+        stdin.to_string()
     } else {
         // Read first file
         match syscall::read_file(files[0]) {
@@ -1491,8 +1498,8 @@ fn prog_head(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 
 }
 
 /// tail - output last lines
-fn prog_tail(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
-    let (stdin, args) = extract_stdin(args);
+fn prog_tail(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: tail [-n N] [FILE]\nOutput last N lines (default 10). See 'man tail' for details.") {
         stdout.push_str(&help);
@@ -1509,7 +1516,7 @@ fn prog_tail(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 
         }
     }
 
-    let input = stdin.unwrap_or_default();
+    let input = stdin.to_string();
     let lines: Vec<&str> = input.lines().collect();
     let start = lines.len().saturating_sub(n);
 
@@ -1526,8 +1533,8 @@ fn prog_tail(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 
 }
 
 /// wc - word, line, character count
-fn prog_wc(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
-    let (stdin, args) = extract_stdin(args);
+fn prog_wc(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: wc [-lwc] [FILE]\nCount lines, words, and characters. See 'man wc' for details.") {
         stdout.push_str(&help);
@@ -1539,7 +1546,7 @@ fn prog_wc(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
     let show_chars = args.contains(&"-c") || args.contains(&"-m");
     let show_all = !show_lines && !show_words && !show_chars;
 
-    let input = stdin.unwrap_or_default();
+    let input = stdin.to_string();
     let lines = input.lines().count();
     let words = input.split_whitespace().count();
     let chars = input.len();
@@ -1564,8 +1571,8 @@ fn prog_wc(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
 }
 
 /// grep - search for patterns
-fn prog_grep(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (stdin, args) = extract_stdin(args);
+fn prog_grep(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: grep [-inv] PATTERN [FILE]...\nSearch for patterns in files. See 'man grep' for details.") {
         stdout.push_str(&help);
@@ -1582,7 +1589,7 @@ fn prog_grep(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
     const RESET: &str = "\x1b[0m";
 
     let pattern = args[0];
-    let input = stdin.unwrap_or_default();
+    let input = stdin.to_string();
     let mut found = false;
 
     for line in input.lines() {
@@ -1603,8 +1610,8 @@ fn prog_grep(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// sort - sort lines
-fn prog_sort(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
-    let (stdin, args) = extract_stdin(args);
+fn prog_sort(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: sort [-ru] [FILE]\nSort lines of text. See 'man sort' for details.") {
         stdout.push_str(&help);
@@ -1614,7 +1621,7 @@ fn prog_sort(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 
     let reverse = args.contains(&"-r");
     let unique = args.contains(&"-u");
 
-    let input = stdin.unwrap_or_default();
+    let input = stdin.to_string();
     let mut lines: Vec<&str> = input.lines().collect();
 
     lines.sort();
@@ -1630,8 +1637,8 @@ fn prog_sort(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 
 }
 
 /// uniq - filter adjacent duplicate lines
-fn prog_uniq(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
-    let (stdin, args) = extract_stdin(args);
+fn prog_uniq(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: uniq [-c] [FILE]\nFilter adjacent duplicate lines. See 'man uniq' for details.") {
         stdout.push_str(&help);
@@ -1640,7 +1647,7 @@ fn prog_uniq(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 
 
     let count = args.contains(&"-c");
 
-    let input = stdin.unwrap_or_default();
+    let input = stdin.to_string();
     let mut prev: Option<&str> = None;
     let mut cnt = 0;
 
@@ -1674,15 +1681,15 @@ fn prog_uniq(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 
 }
 
 /// tee - read stdin and write to files
-fn prog_tee(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (stdin, files) = extract_stdin(args);
+fn prog_tee(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let files = args_to_strs(args);
 
     if let Some(help) = check_help(&files, "Usage: tee [-a] FILE\nCopy stdin to file and stdout. See 'man tee' for details.") {
         stdout.push_str(&help);
         return 0;
     }
 
-    let input = stdin.unwrap_or_default();
+    let input = stdin.to_string();
 
     // Write to stdout
     stdout.push_str(&input);
@@ -1713,13 +1720,13 @@ fn prog_tee(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// clear - clear screen (outputs ANSI escape)
-fn prog_clear(_args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
+fn prog_clear(_args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
     stdout.push_str("\x1b[2J\x1b[H");
     0
 }
 
 /// save - persist filesystem to OPFS
-fn prog_save(_args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
+fn prog_save(_args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
     // Queue the async save operation
     #[cfg(target_arch = "wasm32")]
     {
@@ -1754,8 +1761,8 @@ fn prog_save(_args: &[String], stdout: &mut String, _stderr: &mut String) -> i32
 }
 
 /// fsload - reload filesystem from OPFS
-fn prog_fsload(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_fsload(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
     if let Some(help) = check_help(&args, "Usage: fsload\nReload filesystem from OPFS storage.\nSee 'man fsload' for details.") {
         stdout.push_str(&help);
         return 0;
@@ -1796,8 +1803,8 @@ fn prog_fsload(args: &[String], stdout: &mut String, _stderr: &mut String) -> i3
 }
 
 /// fsreset - clear OPFS and reset to fresh filesystem
-fn prog_fsreset(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_fsreset(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
     if let Some(help) = check_help(&args, "Usage: fsreset [-f]\nClear OPFS storage and reset filesystem.\n  -f  Force reset without confirmation\nSee 'man fsreset' for details.") {
         stdout.push_str(&help);
         return 0;
@@ -1828,8 +1835,8 @@ fn prog_fsreset(args: &[String], stdout: &mut String, stderr: &mut String) -> i3
 }
 
 /// autosave - configure automatic filesystem saving
-fn prog_autosave(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_autosave(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
     if let Some(help) = check_help(&args, "Usage: autosave [on|off|status|interval N]\nConfigure automatic filesystem saving.\n  on       Enable auto-save\n  off      Disable auto-save\n  status   Show current settings\n  interval Set commands between saves (default: 10)\nSee 'man autosave' for details.") {
         stdout.push_str(&help);
         return 0;
@@ -1889,8 +1896,8 @@ fn prog_autosave(args: &[String], stdout: &mut String, stderr: &mut String) -> i
 
 /// curl - transfer URL (HTTP client)
 #[allow(unused_variables)]
-fn prog_curl(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_curl(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
     if let Some(help) = check_help(&args, "Usage: curl [OPTIONS] URL\nTransfer data from URL.\n  -i  Include headers in output\n  -s  Silent mode\n  -X METHOD  Specify request method\n  -H HEADER  Add custom header\nSee 'man curl' for details.") {
         stdout.push_str(&help);
         return 0;
@@ -1997,8 +2004,8 @@ fn prog_curl(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 
 /// wget - download file from URL
 #[allow(unused_variables)]
-fn prog_wget(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_wget(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
     if let Some(help) = check_help(&args, "Usage: wget [OPTIONS] URL\nDownload file from URL.\n  -O FILE  Save to FILE instead of default\n  -q       Quiet mode\nSee 'man wget' for details.") {
         stdout.push_str(&help);
         return 0;
@@ -2082,8 +2089,8 @@ fn prog_wget(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// tree - display directory tree
-fn prog_tree(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, paths) = extract_stdin(args);
+fn prog_tree(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let paths = args_to_strs(args);
 
     if let Some(help) = check_help(&paths, "Usage: tree [DIRECTORY]\nDisplay directory tree. See 'man tree' for details.") {
         stdout.push_str(&help);
@@ -2165,8 +2172,8 @@ fn prog_tree(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// history - display command history
-fn prog_history(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_history(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     // Get history from terminal module
     #[cfg(target_arch = "wasm32")]
@@ -2202,8 +2209,8 @@ fn prog_history(args: &[String], stdout: &mut String, _stderr: &mut String) -> i
 }
 
 /// sleep - pause for specified seconds
-fn prog_sleep(args: &[String], _stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_sleep(args: &[String], _stdin: &str, _stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if args.is_empty() {
         stderr.push_str("sleep: missing operand\n");
@@ -2236,8 +2243,8 @@ fn prog_sleep(args: &[String], _stdout: &mut String, stderr: &mut String) -> i32
 }
 
 /// ln - create links (symlinks with -s)
-fn prog_ln(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_ln(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: ln -s TARGET LINK_NAME\nCreate symbolic links. See 'man ln' for details.") {
         stdout.push_str(&help);
@@ -2300,8 +2307,8 @@ fn prog_ln(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// readlink - print value of a symbolic link
-fn prog_readlink(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_readlink(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if args.is_empty() {
         stderr.push_str("readlink: missing file operand\n");
@@ -2324,8 +2331,8 @@ fn prog_readlink(args: &[String], stdout: &mut String, stderr: &mut String) -> i
 
 /// Text editor - opens a file for editing
 #[allow(unused_variables)]
-fn prog_edit(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_edit(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: edit [FILE]\nOpen text editor. Ctrl+Q to quit, Ctrl+S to save. See 'man edit' for details.") {
         stdout.push_str(&help);
@@ -2357,8 +2364,8 @@ fn prog_edit(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// man - display manual pages
-fn prog_man(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_man(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: man COMMAND\nDisplay manual page for a command. See 'man man' for details.") {
         stdout.push_str(&help);
@@ -2447,8 +2454,8 @@ fn prog_man(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// printenv - print environment variables (uses kernel syscalls)
-fn prog_printenv(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_printenv(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: printenv [NAME...]\nPrint environment variables from the kernel process.") {
         stdout.push_str(&help);
@@ -2484,8 +2491,8 @@ fn prog_printenv(args: &[String], stdout: &mut String, stderr: &mut String) -> i
 }
 
 /// id - print process and user IDs (uses kernel syscalls)
-fn prog_id(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_id(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: id [USER]\nPrint user and group IDs.") {
         stdout.push_str(&help);
@@ -2572,8 +2579,8 @@ fn prog_id(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// jobs - list background jobs
-fn prog_jobs(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_jobs(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: jobs [-l]\nList background jobs.") {
         stdout.push_str(&help);
@@ -2621,8 +2628,8 @@ fn prog_jobs(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 
 }
 
 /// fg - bring job to foreground
-fn prog_fg(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_fg(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: fg [%JOB]\nBring job to foreground.") {
         stdout.push_str(&help);
@@ -2680,8 +2687,8 @@ fn prog_fg(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// bg - continue job in background
-fn prog_bg(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_bg(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: bg [%JOB]\nContinue job in background.") {
         stdout.push_str(&help);
@@ -2737,8 +2744,8 @@ fn prog_bg(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// strace - trace system calls
-fn prog_strace(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_strace(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: strace [-c] COMMAND [ARGS...]\nTrace system calls.") {
         stdout.push_str(&help);
@@ -2798,8 +2805,8 @@ fn prog_strace(args: &[String], stdout: &mut String, stderr: &mut String) -> i32
 }
 
 /// whoami - print effective username
-fn prog_whoami(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_whoami(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: whoami\nPrint effective username.") {
         stdout.push_str(&help);
@@ -2833,8 +2840,8 @@ fn prog_whoami(args: &[String], stdout: &mut String, stderr: &mut String) -> i32
 }
 
 /// groups - print group memberships
-fn prog_groups(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_groups(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: groups [USER]\nPrint group memberships.") {
         stdout.push_str(&help);
@@ -2893,8 +2900,8 @@ fn prog_groups(args: &[String], stdout: &mut String, stderr: &mut String) -> i32
 }
 
 /// su - switch user (simulated)
-fn prog_su(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_su(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: su [-] [USER]\nSwitch user. Defaults to root.") {
         stdout.push_str(&help);
@@ -2959,8 +2966,8 @@ fn prog_su(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// sudo - run command as root (simulated)
-fn prog_sudo(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_sudo(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if args.is_empty() || args.first().map(|s| s.as_ref()) == Some("--help") {
         stdout.push_str("Usage: sudo COMMAND [ARG]...\nRun command as root.\n");
@@ -3005,8 +3012,8 @@ fn prog_sudo(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// useradd - create a new user
-fn prog_useradd(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_useradd(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if args.is_empty() || args.first().map(|s| s.as_ref()) == Some("--help") {
         stdout.push_str("Usage: useradd [-g GID] USERNAME\nCreate a new user.\n");
@@ -3077,8 +3084,8 @@ fn prog_useradd(args: &[String], stdout: &mut String, stderr: &mut String) -> i3
 }
 
 /// groupadd - create a new group
-fn prog_groupadd(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_groupadd(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if args.is_empty() || args.first().map(|s| s.as_ref()) == Some("--help") {
         stdout.push_str("Usage: groupadd GROUPNAME\nCreate a new group.\n");
@@ -3116,8 +3123,8 @@ fn prog_groupadd(args: &[String], stdout: &mut String, stderr: &mut String) -> i
 }
 
 /// passwd - change password
-fn prog_passwd(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_passwd(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: passwd [USER] [PASSWORD]\n\nChange user password.\n\nExamples:\n  passwd mypassword          Set your own password\n  passwd root newpass        Set root's password (requires root)\n  passwd user                Clear user's password (requires root)") {
         stdout.push_str(&help);
@@ -3200,8 +3207,8 @@ fn prog_passwd(args: &[String], stdout: &mut String, stderr: &mut String) -> i32
 }
 
 /// chmod - change file permissions
-fn prog_chmod(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_chmod(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if args.len() < 2 || args.first().map(|s| s.as_ref()) == Some("--help") {
         stdout.push_str("Usage: chmod MODE FILE...\nChange file permissions.\n\n");
@@ -3235,8 +3242,8 @@ fn prog_chmod(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 
 }
 
 /// chown - change file owner
-fn prog_chown(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_chown(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if args.len() < 2 || args.first().map(|s| s.as_ref()) == Some("--help") {
         stdout.push_str("Usage: chown [OWNER][:GROUP] FILE...\nChange file owner and group.\n");
@@ -3302,8 +3309,8 @@ fn prog_chown(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 
 }
 
 /// chgrp - change file group
-fn prog_chgrp(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_chgrp(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if args.len() < 2 || args.first().map(|s| s.as_ref()) == Some("--help") {
         stdout.push_str("Usage: chgrp GROUP FILE...\nChange file group.\n");
@@ -3335,8 +3342,8 @@ fn prog_chgrp(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 
 }
 
 /// hostname - show or set system hostname
-fn prog_hostname(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_hostname(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: hostname [NAME]\nShow or set system hostname.") {
         stdout.push_str(&help);
@@ -3375,8 +3382,8 @@ fn prog_hostname(args: &[String], stdout: &mut String, stderr: &mut String) -> i
 }
 
 /// uname - print system information
-fn prog_uname(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_uname(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: uname [-amnrsv]\nPrint system information.") {
         stdout.push_str(&help);
@@ -3427,8 +3434,8 @@ fn prog_uname(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32
 }
 
 /// find - search for files
-fn prog_find(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_find(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: find [PATH] [-name PATTERN] [-type TYPE]\nSearch for files.") {
         stdout.push_str(&help);
@@ -3542,8 +3549,8 @@ fn prog_find(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// du - disk usage
-fn prog_du(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_du(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: du [-s] [-h] [PATH...]\nEstimate file space usage.") {
         stdout.push_str(&help);
@@ -3626,8 +3633,8 @@ fn prog_du(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
 }
 
 /// df - filesystem space
-fn prog_df(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_df(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: df [-h]\nShow filesystem disk space usage.") {
         stdout.push_str(&help);
@@ -3692,8 +3699,8 @@ fn prog_df(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
 }
 
 /// ps - process status
-fn prog_ps(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_ps(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: ps [-a] [-l]\nReport process status.") {
         stdout.push_str(&help);
@@ -3735,8 +3742,8 @@ fn prog_ps(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
 }
 
 /// kill - send signal to process
-fn prog_kill(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_kill(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: kill [-s SIGNAL] PID...\nSend signal to processes.") {
         stdout.push_str(&help);
@@ -3808,8 +3815,8 @@ fn prog_kill(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// time - time command execution
-fn prog_time(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_time(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: time COMMAND [ARGS...]\nTime command execution.") {
         stdout.push_str(&help);
@@ -3841,8 +3848,8 @@ fn prog_time(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// date - print current date and time
-fn prog_date(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_date(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: date [+FORMAT]\nPrint current date and time.") {
         stdout.push_str(&help);
@@ -3865,8 +3872,8 @@ fn prog_date(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 
 }
 
 /// seq - print sequence of numbers
-fn prog_seq(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_seq(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: seq [FIRST] [INCREMENT] LAST\nPrint sequence of numbers.") {
         stdout.push_str(&help);
@@ -3911,8 +3918,8 @@ fn prog_seq(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// yes - output string repeatedly (limited iterations for safety)
-fn prog_yes(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_yes(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: yes [STRING]\nRepeatedly output STRING (limited to 100 lines).") {
         stdout.push_str(&help);
@@ -3931,8 +3938,8 @@ fn prog_yes(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
 }
 
 /// basename - strip directory and suffix from filename
-fn prog_basename(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_basename(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: basename PATH [SUFFIX]\nStrip directory and suffix from PATH.") {
         stdout.push_str(&help);
@@ -3963,8 +3970,8 @@ fn prog_basename(args: &[String], stdout: &mut String, stderr: &mut String) -> i
 }
 
 /// dirname - strip last component from filename
-fn prog_dirname(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_dirname(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: dirname PATH\nStrip last component from PATH.") {
         stdout.push_str(&help);
@@ -3995,16 +4002,16 @@ fn prog_dirname(args: &[String], stdout: &mut String, stderr: &mut String) -> i3
 }
 
 /// rev - reverse lines
-fn prog_rev(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (stdin, args) = extract_stdin(args);
+fn prog_rev(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: rev [FILE]\nReverse characters in each line.") {
         stdout.push_str(&help);
         return 0;
     }
 
-    let content = if let Some(input) = stdin {
-        input
+    let content = if !stdin.is_empty() {
+        stdin.to_string()
     } else if !args.is_empty() {
         match read_file_content(args[0]) {
             Ok(c) => c,
@@ -4027,8 +4034,8 @@ fn prog_rev(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// cut - remove sections from each line
-fn prog_cut(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (stdin, args) = extract_stdin(args);
+fn prog_cut(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: cut -d DELIM -f FIELDS [FILE]\nRemove sections from each line.") {
         stdout.push_str(&help);
@@ -4081,8 +4088,8 @@ fn prog_cut(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
         }
     };
 
-    let content = if let Some(input) = stdin {
-        input
+    let content = if !stdin.is_empty() {
+        stdin.to_string()
     } else if let Some(path) = file {
         match read_file_content(path) {
             Ok(c) => c,
@@ -4109,8 +4116,8 @@ fn prog_cut(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// tr - translate characters
-fn prog_tr(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (stdin, args) = extract_stdin(args);
+fn prog_tr(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: tr SET1 SET2\nTranslate characters from SET1 to SET2.") {
         stdout.push_str(&help);
@@ -4125,7 +4132,7 @@ fn prog_tr(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
     let set1: Vec<char> = args[0].chars().collect();
     let set2: Vec<char> = args[1].chars().collect();
 
-    let content = stdin.unwrap_or_default();
+    let content = stdin.to_string();
 
     for ch in content.chars() {
         let translated = if let Some(pos) = set1.iter().position(|&c| c == ch) {
@@ -4140,8 +4147,8 @@ fn prog_tr(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// xargs - build and execute commands from stdin
-fn prog_xargs(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
-    let (stdin, args) = extract_stdin(args);
+fn prog_xargs(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: xargs [COMMAND] [ARGS]\nBuild command lines from stdin.") {
         stdout.push_str(&help);
@@ -4153,11 +4160,7 @@ fn prog_xargs(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32
     let cmd_args: Vec<&str> = if args.len() > 1 { args[1..].to_vec() } else { vec![] };
 
     // Read items from stdin
-    let items: Vec<&str> = stdin
-        .as_deref()
-        .unwrap_or("")
-        .split_whitespace()
-        .collect();
+    let items: Vec<&str> = stdin.split_whitespace().collect();
 
     if items.is_empty() {
         return 0;
@@ -4172,8 +4175,8 @@ fn prog_xargs(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32
 }
 
 /// cal - display a calendar
-fn prog_cal(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_cal(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: cal [MONTH] [YEAR]\nDisplay a calendar.") {
         stdout.push_str(&help);
@@ -4305,8 +4308,8 @@ fn day_of_week(day: u32, month: u32, year: i32) -> u32 {
 }
 
 /// printf - format and print data
-fn prog_printf(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_printf(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if args.is_empty() {
         stderr.push_str("printf: usage: printf FORMAT [ARG]...\n");
@@ -4399,7 +4402,7 @@ fn prog_printf(args: &[String], stdout: &mut String, stderr: &mut String) -> i32
 }
 
 /// test - evaluate conditional expression
-fn prog_test(args: &[String], _stdout: &mut String, stderr: &mut String) -> i32 {
+fn prog_test(args: &[String], _stdin: &str, _stdout: &mut String, stderr: &mut String) -> i32 {
     if args.is_empty() {
         return 1; // No arguments = false
     }
@@ -4423,7 +4426,7 @@ fn prog_test(args: &[String], _stdout: &mut String, stderr: &mut String) -> i32 
     if args[0] == "!" {
         // Negation
         let rest: Vec<String> = args[1..].iter().map(|s| s.to_string()).collect();
-        let result = prog_test(&rest, &mut String::new(), stderr);
+        let result = prog_test(&rest, "", &mut String::new(), stderr);
         return if result == 0 { 1 } else { 0 };
     }
 
@@ -4510,8 +4513,8 @@ fn prog_test(args: &[String], _stdout: &mut String, stderr: &mut String) -> i32 
 }
 
 /// expr - evaluate expressions
-fn prog_expr(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args_ref) = extract_stdin(args);
+fn prog_expr(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args_ref = args_to_strs(args);
 
     if args_ref.is_empty() {
         stderr.push_str("expr: missing operand\n");
@@ -4637,8 +4640,8 @@ fn prog_expr(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// which - locate a command
-fn prog_which(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_which(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if args.is_empty() {
         stderr.push_str("which: missing argument\n");
@@ -4668,8 +4671,8 @@ fn prog_which(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 
 }
 
 /// type - describe a command
-fn prog_type(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_type(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if args.is_empty() {
         stderr.push_str("type: missing argument\n");
@@ -4699,8 +4702,8 @@ fn prog_type(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// uptime - show how long system has been running
-fn prog_uptime(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_uptime(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: uptime\nShow how long the system has been running.") {
         stdout.push_str(&help);
@@ -4739,8 +4742,8 @@ fn prog_uptime(args: &[String], stdout: &mut String, _stderr: &mut String) -> i3
 }
 
 /// free - display amount of free and used memory
-fn prog_free(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_free(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
     let human = args.iter().any(|a| *a == "-h" || *a == "--human");
 
     if let Some(help) = check_help(&args, "Usage: free [-h]\nDisplay memory usage.\n  -h  Human readable output") {
@@ -4784,8 +4787,8 @@ fn prog_free(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 
 }
 
 /// diff - compare files line by line
-fn prog_diff(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_diff(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: diff FILE1 FILE2\nCompare files line by line.") {
         stdout.push_str(&help);
@@ -4852,8 +4855,8 @@ fn prog_diff(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// base64 - encode/decode base64
-fn prog_base64(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (stdin, args) = extract_stdin(args);
+fn prog_base64(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: base64 [-d] [FILE]\nBase64 encode or decode.\n  -d  Decode") {
         stdout.push_str(&help);
@@ -4872,7 +4875,7 @@ fn prog_base64(args: &[String], stdout: &mut String, stderr: &mut String) -> i32
             }
         }
     } else {
-        stdin.unwrap_or_default()
+        stdin.to_string()
     };
 
     if decode {
@@ -4942,8 +4945,8 @@ fn base64_decode_char(c: char) -> u8 {
 }
 
 /// xxd - hex dump
-fn prog_xxd(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (stdin, args) = extract_stdin(args);
+fn prog_xxd(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: xxd [FILE]\nMake a hexdump.") {
         stdout.push_str(&help);
@@ -4959,7 +4962,7 @@ fn prog_xxd(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
             }
         }
     } else {
-        stdin.unwrap_or_default()
+        stdin.to_string()
     };
 
     let bytes = input.as_bytes();
@@ -4996,8 +4999,8 @@ fn prog_xxd(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// nl - number lines
-fn prog_nl(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (stdin, args) = extract_stdin(args);
+fn prog_nl(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: nl [FILE]\nNumber lines of a file.") {
         stdout.push_str(&help);
@@ -5013,7 +5016,7 @@ fn prog_nl(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
             }
         }
     } else {
-        stdin.unwrap_or_default()
+        stdin.to_string()
     };
 
     for (i, line) in input.lines().enumerate() {
@@ -5024,8 +5027,8 @@ fn prog_nl(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// fold - wrap lines
-fn prog_fold(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (stdin, args) = extract_stdin(args);
+fn prog_fold(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: fold [-w WIDTH] [FILE]\nWrap lines at specified width.\n  -w WIDTH  Width (default 80)") {
         stdout.push_str(&help);
@@ -5057,7 +5060,7 @@ fn prog_fold(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
             }
         }
     } else {
-        stdin.unwrap_or_default()
+        stdin.to_string()
     };
 
     for line in input.lines() {
@@ -5073,8 +5076,8 @@ fn prog_fold(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// paste - merge lines of files
-fn prog_paste(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_paste(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: paste FILE1 FILE2...\nMerge lines of files.") {
         stdout.push_str(&help);
@@ -5117,8 +5120,8 @@ fn prog_paste(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 
 }
 
 /// comm - compare sorted files
-fn prog_comm(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_comm(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: comm [-123] FILE1 FILE2\nCompare sorted files line by line.\n  -1  Suppress column 1 (lines unique to FILE1)\n  -2  Suppress column 2 (lines unique to FILE2)\n  -3  Suppress column 3 (common lines)") {
         stdout.push_str(&help);
@@ -5201,8 +5204,8 @@ fn prog_comm(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// strings - print strings from binary
-fn prog_strings(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (stdin, args) = extract_stdin(args);
+fn prog_strings(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: strings [-n MIN] [FILE]\nPrint printable strings from file.\n  -n MIN  Minimum string length (default 4)") {
         stdout.push_str(&help);
@@ -5234,7 +5237,7 @@ fn prog_strings(args: &[String], stdout: &mut String, stderr: &mut String) -> i3
             }
         }
     } else {
-        stdin.unwrap_or_default()
+        stdin.to_string()
     };
 
     let bytes = input.as_bytes();
@@ -5261,8 +5264,8 @@ fn prog_strings(args: &[String], stdout: &mut String, stderr: &mut String) -> i3
 }
 
 /// systemctl - service management
-fn prog_systemctl(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_systemctl(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if args.is_empty() {
         stdout.push_str("Usage: systemctl COMMAND [NAME...]\n\n");
@@ -5466,8 +5469,8 @@ fn prog_systemctl(args: &[String], stdout: &mut String, stderr: &mut String) -> 
 }
 
 /// reboot - reboot the system
-fn prog_reboot(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_reboot(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: reboot\nReboot the system.") {
         stdout.push_str(&help);
@@ -5485,8 +5488,8 @@ fn prog_reboot(args: &[String], stdout: &mut String, _stderr: &mut String) -> i3
 }
 
 /// poweroff - power off the system
-fn prog_poweroff(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_poweroff(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: poweroff\nPower off the system.") {
         stdout.push_str(&help);
@@ -5505,8 +5508,8 @@ fn prog_poweroff(args: &[String], stdout: &mut String, _stderr: &mut String) -> 
 
 // ========== IPC COMMANDS ==========
 
-fn prog_mkfifo(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_mkfifo(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: mkfifo NAME...\nCreate named pipes (FIFOs).\n\nOptions:\n  -m MODE  Set permission mode (octal)") {
         stdout.push_str(&help);
@@ -5541,8 +5544,8 @@ fn prog_mkfifo(args: &[String], stdout: &mut String, stderr: &mut String) -> i32
     exit_code
 }
 
-fn prog_ipcs(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_ipcs(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: ipcs [options]\nShow IPC facilities.\n\nOptions:\n  -a  Show all (default)\n  -q  Show message queues\n  -s  Show semaphores\n  -m  Show shared memory") {
         stdout.push_str(&help);
@@ -5618,8 +5621,8 @@ fn prog_ipcs(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 
     0
 }
 
-fn prog_ipcrm(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_ipcrm(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: ipcrm [options]\nRemove IPC resources.\n\nOptions:\n  -q ID   Remove message queue with ID\n  -s ID   Remove semaphore set with ID\n  -m ID   Remove shared memory with ID\n  -a      Remove all IPC resources") {
         stdout.push_str(&help);
@@ -5719,8 +5722,8 @@ fn prog_ipcrm(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 
 
 // ========== MOUNT COMMANDS ==========
 
-fn prog_mount(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_mount(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: mount [-t TYPE] [-o OPTIONS] SOURCE TARGET\n       mount (show all mounts)\n\nMount a filesystem.\n\nOptions:\n  -t TYPE   Filesystem type (proc, sysfs, devfs, tmpfs)\n  -o OPTS   Mount options (ro, noexec, noatime, etc.)") {
         stdout.push_str(&help);
@@ -5809,8 +5812,8 @@ fn prog_mount(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 
     }
 }
 
-fn prog_umount(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_umount(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: umount TARGET\nUnmount a filesystem.") {
         stdout.push_str(&help);
@@ -5837,8 +5840,8 @@ fn prog_umount(args: &[String], stdout: &mut String, stderr: &mut String) -> i32
     }
 }
 
-fn prog_findmnt(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_findmnt(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: findmnt [TARGET]\nFind a filesystem mount point.\n\nWith no arguments, lists all mounts in a tree-like format.") {
         stdout.push_str(&help);
@@ -5893,8 +5896,8 @@ fn prog_findmnt(args: &[String], stdout: &mut String, _stderr: &mut String) -> i
 
 // ========== TTY COMMANDS ==========
 
-fn prog_stty(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_stty(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: stty [SETTING]...\n       stty -a\n       stty sane\n       stty raw\n\nChange and print terminal line settings.\n\nSettings:\n  -echo/-icanon/-isig  Toggle flags\n  sane                 Reset to sane defaults\n  raw                  Set raw mode\n  -a                   Print all settings") {
         stdout.push_str(&help);
@@ -5941,8 +5944,8 @@ fn prog_stty(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
     })
 }
 
-fn prog_tty(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_tty(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: tty\nPrint the file name of the terminal connected to standard input.") {
         stdout.push_str(&help);
@@ -5973,8 +5976,8 @@ fn prog_tty(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
 ///
 /// Packages are stored in /var/packages as executable scripts.
 /// The package registry is stored in /etc/packages.json
-fn prog_pkg(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_pkg(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: pkg <command> [args]\n\nPackage manager for axeberg.\n\nCommands:\n  install <name> <script>   Install a package (script content)\n  remove <name>             Remove a package\n  list                      List installed packages\n  run <name> [args]         Run an installed package\n  info <name>               Show package info\n\nPackages are stored in /var/packages/") {
         stdout.push_str(&help);
@@ -6152,8 +6155,8 @@ fn prog_pkg(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 /// login - log in as a user with password authentication
 /// This behaves like real Linux login(1): it spawns a NEW shell process
 /// as the target user with proper session management.
-fn prog_login(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_login(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: login <username> [password]\n\nLog in as a user with password authentication.\n\nThis command spawns a new login shell as the specified user,\ncreating a proper session like Linux login(1).\n\nIf no password is provided, allows login for users without passwords.\nUse 'logout' to end the current session.\nUse 'passwd' to change your password.\n\nDefault users:\n  root     - password: root (uid 0)\n  user     - no password (uid 1000)\n  nobody   - no password (uid 65534)") {
         stdout.push_str(&help);
@@ -6262,8 +6265,8 @@ fn prog_login(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 
 /// logout - log out current user
 /// In a real Linux system, this would exit the login shell and return to getty.
 /// Here we terminate the current session and switch back to the init/parent process.
-fn prog_logout(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_logout(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: logout\n\nEnd the current login session and return to the parent process.\nThis terminates the login shell that was spawned by 'login'.") {
         stdout.push_str(&help);
@@ -6318,8 +6321,8 @@ fn prog_logout(args: &[String], stdout: &mut String, _stderr: &mut String) -> i3
 }
 
 /// who - show who is logged in
-fn prog_who(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_who(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: who\n\nShow who is logged in.") {
         stdout.push_str(&help);
@@ -6378,8 +6381,8 @@ fn prog_who(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
 }
 
 /// w - show who is logged in and what they are doing
-fn prog_w(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_w(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: w\n\nShow who is logged in and what they are doing.") {
         stdout.push_str(&help);
@@ -6432,8 +6435,8 @@ fn prog_w(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
 ///
 /// Crontab format: minute hour day month weekday command
 /// Special strings: @reboot, @hourly, @daily, @weekly, @monthly
-fn prog_crontab(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_crontab(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: crontab [-l | -e | -r] [file]\n\nMaintain cron tables for scheduled jobs.\n\nOptions:\n  -l        List current crontab\n  -e        Edit crontab (prints current, use crontab file to set)\n  -r        Remove crontab\n  file      Install crontab from file\n\nCrontab format:\n  minute hour day month weekday command\n  @reboot  Run at startup\n  @hourly  Run every hour (0 * * * *)\n  @daily   Run daily (0 0 * * *)\n\nExamples:\n  */5 * * * * echo 'every 5 min'    Run every 5 minutes\n  0 * * * * date                    Run at the top of every hour\n  @reboot /var/packages/startup     Run at boot") {
         stdout.push_str(&help);
@@ -6597,8 +6600,8 @@ fn prog_crontab(args: &[String], stdout: &mut String, stderr: &mut String) -> i3
 }
 
 /// at - schedule a one-time job
-fn prog_at(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
-    let (_, args) = extract_stdin(args);
+fn prog_at(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+    let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: at <time> <command>\n       at -l         List pending jobs\n       at -r <id>    Remove a job\n\nSchedule a command to run at a specific time.\n\nTime formats:\n  +5m    5 minutes from now\n  +1h    1 hour from now\n  +30s   30 seconds from now\n\nExamples:\n  at +5m echo 'Hello'     Run in 5 minutes\n  at +1h date             Run in 1 hour") {
         stdout.push_str(&help);
@@ -6904,10 +6907,11 @@ mod tests {
 
     #[test]
     fn test_prog_wc() {
-        let args = vec!["__STDIN__:hello world\nfoo bar baz".to_string()];
+        let args: Vec<String> = vec![];
+        let stdin = "hello world\nfoo bar baz";
         let mut stdout = String::new();
         let mut stderr = String::new();
-        let code = prog_wc(&args, &mut stdout, &mut stderr);
+        let code = prog_wc(&args, stdin, &mut stdout, &mut stderr);
         assert_eq!(code, 0);
         assert!(stdout.contains("2")); // 2 lines
         assert!(stdout.contains("5")); // 5 words
@@ -6915,13 +6919,11 @@ mod tests {
 
     #[test]
     fn test_prog_grep() {
-        let args = vec![
-            "__STDIN__:apple\nbanana\napricot\ncherry".to_string(),
-            "ap".to_string(),
-        ];
+        let args = vec!["ap".to_string()];
+        let stdin = "apple\nbanana\napricot\ncherry";
         let mut stdout = String::new();
         let mut stderr = String::new();
-        let code = prog_grep(&args, &mut stdout, &mut stderr);
+        let code = prog_grep(&args, stdin, &mut stdout, &mut stderr);
         assert_eq!(code, 0, "grep failed with stderr: {}", stderr);
         // Output contains ANSI codes highlighting "ap", so check for the pattern and rest of words
         // Strip ANSI codes for easier checking
@@ -6951,48 +6953,44 @@ mod tests {
 
     #[test]
     fn test_prog_sort() {
-        let args = vec!["__STDIN__:banana\napple\ncherry".to_string()];
+        let args: Vec<String> = vec![];
+        let stdin = "banana\napple\ncherry";
         let mut stdout = String::new();
         let mut stderr = String::new();
-        let code = prog_sort(&args, &mut stdout, &mut stderr);
+        let code = prog_sort(&args, stdin, &mut stdout, &mut stderr);
         assert_eq!(code, 0);
         assert_eq!(stdout, "apple\nbanana\ncherry");
     }
 
     #[test]
     fn test_prog_uniq() {
-        let args = vec!["__STDIN__:a\na\nb\nb\nb\nc".to_string()];
+        let args: Vec<String> = vec![];
+        let stdin = "a\na\nb\nb\nb\nc";
         let mut stdout = String::new();
         let mut stderr = String::new();
-        let code = prog_uniq(&args, &mut stdout, &mut stderr);
+        let code = prog_uniq(&args, stdin, &mut stdout, &mut stderr);
         assert_eq!(code, 0);
         assert_eq!(stdout, "a\nb\nc");
     }
 
     #[test]
     fn test_prog_head() {
-        let args = vec![
-            "__STDIN__:1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12".to_string(),
-            "-n".to_string(),
-            "3".to_string(),
-        ];
+        let args = vec!["-n".to_string(), "3".to_string()];
+        let stdin = "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12";
         let mut stdout = String::new();
         let mut stderr = String::new();
-        let code = prog_head(&args, &mut stdout, &mut stderr);
+        let code = prog_head(&args, stdin, &mut stdout, &mut stderr);
         assert_eq!(code, 0);
         assert_eq!(stdout, "1\n2\n3");
     }
 
     #[test]
     fn test_prog_tail() {
-        let args = vec![
-            "__STDIN__:1\n2\n3\n4\n5".to_string(),
-            "-n".to_string(),
-            "2".to_string(),
-        ];
+        let args = vec!["-n".to_string(), "2".to_string()];
+        let stdin = "1\n2\n3\n4\n5";
         let mut stdout = String::new();
         let mut stderr = String::new();
-        let code = prog_tail(&args, &mut stdout, &mut stderr);
+        let code = prog_tail(&args, stdin, &mut stdout, &mut stderr);
         assert_eq!(code, 0);
         assert_eq!(stdout, "4\n5");
     }
@@ -7017,13 +7015,14 @@ mod tests {
         let mut stderr = String::new();
 
         // Sort
-        let args = vec!["__STDIN__:b\na\na\nc\nb".to_string()];
-        prog_sort(&args, &mut stdout, &mut stderr);
+        let args: Vec<String> = vec![];
+        let stdin = "b\na\na\nc\nb";
+        prog_sort(&args, stdin, &mut stdout, &mut stderr);
 
-        // Feed to uniq
-        let args = vec![format!("__STDIN__:{}", stdout)];
+        // Feed to uniq (use sorted output as stdin)
+        let sorted = stdout.clone();
         stdout.clear();
-        prog_uniq(&args, &mut stdout, &mut stderr);
+        prog_uniq(&args, &sorted, &mut stdout, &mut stderr);
 
         assert_eq!(stdout, "a\nb\nc");
     }

@@ -36,7 +36,18 @@ pub fn boot() {
                 }
             }
             Err(e) => {
-                console_log!("[boot] Filesystem error: {}, using fresh", e);
+                // Log to console for debugging
+                console_log!("[boot] Filesystem restore failed: {}", e);
+                web_sys::console::warn_1(
+                    &format!("[boot] Previous session data could not be restored: {}", e).into(),
+                );
+
+                // Notify user through terminal that we're starting fresh
+                terminal::writeln(
+                    "\x1b[33m⚠ Could not restore previous session - starting fresh\x1b[0m",
+                );
+
+                // Initialize fresh filesystem
                 init_filesystem();
             }
         }
