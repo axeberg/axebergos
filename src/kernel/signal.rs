@@ -4,11 +4,38 @@
 //!
 //! Signals are asynchronous notifications sent to processes.
 //! Each signal has a default action that can be overridden.
+//!
+//! ## Signal Numbers
+//!
+//! Note: axeberg uses its own signal numbering scheme for simplicity and clarity.
+//! These numbers intentionally differ from POSIX conventions:
+//!
+//! | Signal   | axeberg | POSIX |
+//! |----------|---------|-------|
+//! | SIGTERM  | 1       | 15    |
+//! | SIGKILL  | 2       | 9     |
+//! | SIGSTOP  | 3       | 19    |
+//! | SIGCONT  | 4       | 18    |
+//! | SIGINT   | 5       | 2     |
+//! | SIGQUIT  | 6       | 3     |
+//! | SIGHUP   | 7       | 1     |
+//! | SIGUSR1  | 8       | 10    |
+//! | SIGUSR2  | 9       | 12    |
+//! | SIGCHLD  | 10      | 17    |
+//! | SIGALRM  | 11      | 14    |
+//! | SIGPIPE  | 12      | 13    |
+//!
+//! The rationale for custom numbering:
+//! - Simpler mental model (signals numbered 1-12)
+//! - Easier to remember (no gaps like POSIX)
+//! - axeberg is not POSIX-compatible, so no confusion expected
 
 use super::process::Pid;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Signal types
+///
+/// See module documentation for signal number mapping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum Signal {

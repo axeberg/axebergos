@@ -443,40 +443,16 @@ pub struct Kernel {
     ttys: TtyManager,
 }
 
-/// Simple PRNG for /dev/random and /dev/urandom
-/// Uses xorshift64 algorithm seeded from current time
+/// Cryptographically secure random bytes for /dev/random and /dev/urandom
+///
+/// Uses the `getrandom` crate which provides OS-level cryptographic randomness.
+/// In WASM environments, this uses the Web Crypto API (crypto.getRandomValues).
 fn generate_random_bytes(len: usize) -> Vec<u8> {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    // Get seed from current time (or use a fixed seed in WASM)
-    let mut state: u64 = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0x123456789ABCDEF0);
-
-    // Ensure non-zero state
-    if state == 0 {
-        state = 0xDEADBEEFCAFEBABE;
-    }
-
-    let mut result = Vec::with_capacity(len);
-
-    while result.len() < len {
-        // xorshift64
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-
-        // Extract bytes from the state
-        let bytes = state.to_le_bytes();
-        for &b in &bytes {
-            if result.len() < len {
-                result.push(b);
-            }
-        }
-    }
-
-    result
+    let mut buf = vec![0u8; len];
+    // getrandom uses crypto.getRandomValues in WASM (via js feature)
+    // This is cryptographically secure, unlike the previous xorshift64 implementation
+    getrandom::getrandom(&mut buf).expect("getrandom failed - crypto API unavailable");
+    buf
 }
 
 impl Kernel {
@@ -1367,8 +1343,8 @@ impl Kernel {
                 Ok(self.objects.insert(KernelObject::File(file)))
             }
             "random" | "urandom" => {
-                // /dev/random and /dev/urandom - return random bytes
-                // Using a simple PRNG seeded from current time
+                // /dev/random and /dev/urandom - return cryptographically secure random bytes
+                // Uses Web Crypto API in WASM environments
                 let random_data = generate_random_bytes(4096);
                 let file = FileObject::new(path.to_path_buf(), random_data, true, false);
                 Ok(self.objects.insert(KernelObject::File(file)))
@@ -3744,5 +3720,98 @@ mod tests {
 
         let content = std::str::from_utf8(&buf[..n]).unwrap();
         assert!(content.contains("AxebergOS"));
+    }
+
+    // ============ Random Number Generation Tests ============
+
+    #[test]
+    fn test_generate_random_bytes_returns_requested_length() {
+        let bytes = generate_random_bytes(32);
+        assert_eq!(bytes.len(), 32);
+
+        let bytes = generate_random_bytes(1024);
+        assert_eq!(bytes.len(), 1024);
+
+        let bytes = generate_random_bytes(1);
+        assert_eq!(bytes.len(), 1);
+    }
+
+    #[test]
+    fn test_generate_random_bytes_not_all_zeros() {
+        // Generate 256 bytes - statistically impossible to be all zeros with true randomness
+        let bytes = generate_random_bytes(256);
+        let non_zero_count = bytes.iter().filter(|&&b| b != 0).count();
+        // With true randomness, expect ~255 non-zero bytes (255/256 probability each)
+        // Being conservative: at least 100 should be non-zero
+        assert!(
+            non_zero_count > 100,
+            "Random bytes appear to have too many zeros: {} non-zero out of 256",
+            non_zero_count
+        );
+    }
+
+    #[test]
+    fn test_generate_random_bytes_not_constant() {
+        // Two calls should produce different results
+        let bytes1 = generate_random_bytes(32);
+        let bytes2 = generate_random_bytes(32);
+        assert_ne!(
+            bytes1, bytes2,
+            "Two random byte generations should not be identical"
+        );
+    }
+
+    #[test]
+    fn test_generate_random_bytes_has_entropy() {
+        // Check that random bytes have reasonable distribution
+        let bytes = generate_random_bytes(1024);
+        let mut counts = [0usize; 256];
+        for &b in &bytes {
+            counts[b as usize] += 1;
+        }
+        // With 1024 bytes, each value should appear ~4 times on average
+        // Check that no single value dominates (appears more than 32 times = 8x expected)
+        let max_count = *counts.iter().max().unwrap();
+        assert!(
+            max_count < 32,
+            "Random distribution appears skewed: max count {} for 1024 bytes",
+            max_count
+        );
+    }
+
+    #[test]
+    fn test_dev_random_provides_random_bytes() {
+        setup_test_kernel();
+
+        let fd = open("/dev/random", OpenFlags::READ).unwrap();
+        let mut buf1 = [0u8; 32];
+        let n1 = read(fd, &mut buf1).unwrap();
+        close(fd).unwrap();
+
+        assert_eq!(n1, 32);
+
+        // Open again and read - should be different
+        let fd = open("/dev/random", OpenFlags::READ).unwrap();
+        let mut buf2 = [0u8; 32];
+        let n2 = read(fd, &mut buf2).unwrap();
+        close(fd).unwrap();
+
+        assert_eq!(n2, 32);
+        assert_ne!(buf1, buf2, "/dev/random should provide different bytes on each open");
+    }
+
+    #[test]
+    fn test_dev_urandom_provides_random_bytes() {
+        setup_test_kernel();
+
+        let fd = open("/dev/urandom", OpenFlags::READ).unwrap();
+        let mut buf = [0u8; 64];
+        let n = read(fd, &mut buf).unwrap();
+        close(fd).unwrap();
+
+        assert_eq!(n, 64);
+        // Check not all zeros
+        let non_zero = buf.iter().filter(|&&b| b != 0).count();
+        assert!(non_zero > 10, "urandom should provide actual random bytes");
     }
 }

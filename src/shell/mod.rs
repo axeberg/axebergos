@@ -12,6 +12,7 @@
 pub mod builtins;
 pub mod executor;
 pub mod parser;
+pub mod programs;
 pub mod terminal;
 
 pub use builtins::{execute as execute_builtin, is_builtin, BuiltinResult, ShellState};

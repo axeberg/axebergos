@@ -19,6 +19,14 @@ pub enum BuiltinResult {
     Exit(i32),
     /// Request to change directory
     Cd(PathBuf),
+    /// Request to set environment variables (name, value pairs)
+    Export(Vec<(String, String)>),
+    /// Request to unset environment variables
+    Unset(Vec<String>),
+    /// Request to set aliases (name, value pairs)
+    SetAlias(Vec<(String, String)>),
+    /// Request to remove aliases
+    UnsetAlias(Vec<String>),
 }
 
 /// Shell state accessible to built-in commands
@@ -294,9 +302,7 @@ fn builtin_export(args: &[String], state: &ShellState) -> BuiltinResult {
     if to_set.is_empty() {
         BuiltinResult::Ok
     } else {
-        // Encode as special format for caller to parse
-        let pairs: Vec<String> = to_set.iter().map(|(n, v)| format!("{}={}", n, v)).collect();
-        BuiltinResult::Success(format!("__EXPORT__:{}", pairs.join("\x00")))
+        BuiltinResult::Export(to_set)
     }
 }
 
@@ -319,14 +325,15 @@ fn builtin_unset(args: &[String]) -> BuiltinResult {
         return BuiltinResult::Ok;
     }
 
+    let mut vars_to_unset = Vec::new();
     for arg in args {
         if !is_valid_var_name(arg) {
             return BuiltinResult::Error(format!("unset: `{}': not a valid identifier", arg));
         }
+        vars_to_unset.push(arg.clone());
     }
 
-    // Return variables to unset
-    BuiltinResult::Success(format!("__UNSET__:{}", args.join("\x00")))
+    BuiltinResult::Unset(vars_to_unset)
 }
 
 /// env - list environment variables
@@ -440,8 +447,7 @@ fn builtin_alias(args: &[String], state: &ShellState) -> BuiltinResult {
     if to_set.is_empty() {
         BuiltinResult::Ok
     } else {
-        let pairs: Vec<String> = to_set.iter().map(|(n, v)| format!("{}={}", n, v)).collect();
-        BuiltinResult::Success(format!("__ALIAS__:{}", pairs.join("\x00")))
+        BuiltinResult::SetAlias(to_set)
     }
 }
 
@@ -451,8 +457,7 @@ fn builtin_unalias(args: &[String]) -> BuiltinResult {
         return BuiltinResult::Error("unalias: usage: unalias name [name ...]".into());
     }
 
-    // Return aliases to remove (caller will apply them)
-    BuiltinResult::Success(format!("__UNALIAS__:{}", args.join("\x00")))
+    BuiltinResult::UnsetAlias(args.to_vec())
 }
 
 #[cfg(test)]
@@ -643,11 +648,11 @@ mod tests {
         let state = make_state();
         let result = execute("export", &["FOO=bar".into()], &state);
         match result {
-            BuiltinResult::Success(s) => {
-                assert!(s.starts_with("__EXPORT__:"));
-                assert!(s.contains("FOO=bar"));
+            BuiltinResult::Export(pairs) => {
+                assert_eq!(pairs.len(), 1);
+                assert_eq!(pairs[0], ("FOO".to_string(), "bar".to_string()));
             }
-            _ => panic!("expected Success"),
+            _ => panic!("expected Export, got {:?}", result),
         }
     }
 
@@ -665,11 +670,11 @@ mod tests {
         let state = make_state();
         let result = execute("unset", &["FOO".into()], &state);
         match result {
-            BuiltinResult::Success(s) => {
-                assert!(s.starts_with("__UNSET__:"));
-                assert!(s.contains("FOO"));
+            BuiltinResult::Unset(vars) => {
+                assert_eq!(vars.len(), 1);
+                assert_eq!(vars[0], "FOO");
             }
-            _ => panic!("expected Success"),
+            _ => panic!("expected Unset, got {:?}", result),
         }
     }
 

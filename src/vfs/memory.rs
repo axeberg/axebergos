@@ -99,6 +99,42 @@ impl MemoryFs {
         fs
     }
 
+    /// Maximum path length (similar to Linux PATH_MAX)
+    const MAX_PATH_LEN: usize = 4096;
+    /// Maximum length for a single path component (filename)
+    const MAX_NAME_LEN: usize = 255;
+
+    /// Validate a path for security and correctness
+    pub fn validate_path(path: &str) -> io::Result<()> {
+        // Check for null bytes (security issue)
+        if path.contains('\0') {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "path contains null byte",
+            ));
+        }
+
+        // Check total path length
+        if path.len() > Self::MAX_PATH_LEN {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("path too long: {} bytes (max {})", path.len(), Self::MAX_PATH_LEN),
+            ));
+        }
+
+        // Check individual component lengths
+        for component in path.split('/') {
+            if component.len() > Self::MAX_NAME_LEN {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("path component too long: {} bytes (max {})", component.len(), Self::MAX_NAME_LEN),
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
     /// Normalize a path (ensure leading slash, no trailing slash except root, resolve . and ..)
     fn normalize_path(path: &str) -> String {
         let path = if path.starts_with('/') {
@@ -231,6 +267,8 @@ impl MemoryFs {
 
 impl FileSystem for MemoryFs {
     fn open(&mut self, path: &str, options: OpenOptions) -> io::Result<FileHandle> {
+        // Validate path before processing
+        Self::validate_path(path)?;
         let path = Self::normalize_path(path);
 
         // Check if file exists
@@ -377,14 +415,18 @@ impl FileSystem for MemoryFs {
             SeekFrom::Start(n) => n,
             SeekFrom::End(n) => {
                 if n >= 0 {
-                    size + n as u64
+                    size.checked_add(n as u64).ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::InvalidInput, "seek position overflow")
+                    })?
                 } else {
                     size.saturating_sub((-n) as u64)
                 }
             }
             SeekFrom::Current(n) => {
                 if n >= 0 {
-                    current + n as u64
+                    current.checked_add(n as u64).ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::InvalidInput, "seek position overflow")
+                    })?
                 } else {
                     current.saturating_sub((-n) as u64)
                 }
@@ -439,6 +481,7 @@ impl FileSystem for MemoryFs {
     }
 
     fn create_dir(&mut self, path: &str) -> io::Result<()> {
+        Self::validate_path(path)?;
         let path = Self::normalize_path(path);
 
         if self.nodes.contains_key(&path) {
@@ -504,6 +547,7 @@ impl FileSystem for MemoryFs {
     }
 
     fn remove_file(&mut self, path: &str) -> io::Result<()> {
+        Self::validate_path(path)?;
         let path = Self::normalize_path(path);
 
         match self.nodes.get(&path) {
@@ -521,6 +565,7 @@ impl FileSystem for MemoryFs {
     }
 
     fn remove_dir(&mut self, path: &str) -> io::Result<()> {
+        Self::validate_path(path)?;
         let path = Self::normalize_path(path);
 
         if path == "/" {
