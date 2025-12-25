@@ -25,8 +25,8 @@ pub struct Runtime {
     /// Captured stderr
     stderr: Vec<u8>,
 
-    /// Stdin data (to be read)
-    stdin: Vec<u8>,
+    /// Stdin data (to be read) - public for executor access
+    pub stdin: Vec<u8>,
 
     /// Current read position in stdin
     stdin_pos: usize,

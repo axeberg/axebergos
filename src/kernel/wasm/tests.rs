@@ -587,3 +587,353 @@ mod integration_tests {
         assert_eq!(r2.exit_code, 0);
     }
 }
+
+// =============================================================================
+// Executor Tests
+// =============================================================================
+
+mod executor_tests {
+    use super::super::executor::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_executor_creation() {
+        let executor = WasmExecutor::new();
+        // Just verify creation succeeds (fields are private)
+        let _ = executor;
+    }
+
+    #[test]
+    fn test_executor_set_cwd() {
+        let mut executor = WasmExecutor::new();
+        executor.set_cwd("/home/user");
+        // Verify set_cwd doesn't panic (no getter available)
+    }
+
+    #[test]
+    fn test_executor_set_env() {
+        let mut executor = WasmExecutor::new();
+        let mut env = HashMap::new();
+        env.insert("HOME".to_string(), "/home/user".to_string());
+        env.insert("PATH".to_string(), "/bin:/usr/bin".to_string());
+        executor.set_env(env);
+        // Verify set_env doesn't panic (env is used internally)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn test_wasm_memory_ref_read_write() {
+        let mut mem = WasmMemoryRef::new(65536);
+
+        // Write some data
+        mem.write(0, b"Hello, World!");
+
+        // Read it back
+        let data = mem.read(0, 13);
+        assert_eq!(&data, b"Hello, World!");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn test_wasm_memory_ref_read_string() {
+        let mut mem = WasmMemoryRef::new(65536);
+
+        // Write null-terminated string
+        mem.write(0, b"test\0garbage");
+
+        // Read string (should stop at null)
+        let s = mem.read_string(0, 20);
+        assert_eq!(s, "test");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn test_wasm_memory_ref_read_string_len() {
+        let mut mem = WasmMemoryRef::new(65536);
+
+        // Write some data
+        mem.write(100, b"Hello, World!");
+
+        // Read with explicit length
+        let s = mem.read_string_len(100, 5);
+        assert_eq!(s, "Hello");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn test_wasm_memory_ref_size() {
+        let mem = WasmMemoryRef::new(65536);
+        assert_eq!(mem.size(), 65536);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn test_wasm_memory_ref_boundary_write() {
+        let mut mem = WasmMemoryRef::new(100);
+
+        // Write at boundary (should truncate)
+        mem.write(90, b"1234567890abcdef");
+
+        // Only first 10 bytes should be written
+        let data = mem.read(90, 10);
+        assert_eq!(&data, b"1234567890");
+    }
+}
+
+// =============================================================================
+// Command Runner Tests
+// =============================================================================
+
+mod command_runner_tests {
+    use super::super::command::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_runner_creation() {
+        let runner = WasmCommandRunner::new();
+        // Just verify creation succeeds
+        assert!(!runner.command_exists("nonexistent_command_xyz"));
+    }
+
+    #[test]
+    fn test_runner_set_cwd() {
+        let mut runner = WasmCommandRunner::new();
+        runner.set_cwd("/tmp");
+        // Verify set_cwd doesn't panic (no getter available)
+    }
+
+    #[test]
+    fn test_runner_add_env() {
+        let mut runner = WasmCommandRunner::new();
+        runner.add_env("TEST", "value");
+        // Verify add_env doesn't panic (env is used internally)
+    }
+
+    #[test]
+    fn test_runner_set_env_bulk() {
+        let mut runner = WasmCommandRunner::new();
+        let mut env = HashMap::new();
+        env.insert("A".to_string(), "1".to_string());
+        env.insert("B".to_string(), "2".to_string());
+        runner.set_env(env);
+        // Verify set_env doesn't panic
+    }
+
+    #[test]
+    fn test_bin_paths_constant() {
+        assert!(BIN_PATHS.contains(&"/bin"));
+        assert!(BIN_PATHS.contains(&"/usr/bin"));
+        assert!(BIN_PATHS.contains(&"/usr/local/bin"));
+    }
+
+    #[test]
+    fn test_runner_clear_cache() {
+        let mut runner = WasmCommandRunner::new();
+        // Cache should be empty initially
+        runner.clear_cache();
+        // No assertion needed - just verify it doesn't panic
+    }
+
+    #[test]
+    fn test_runner_list_commands_empty() {
+        let runner = WasmCommandRunner::new();
+        // Without a real filesystem, this returns empty
+        let commands = runner.list_commands();
+        // Just verify it returns a vector (empty or not)
+        let _ = commands;
+    }
+
+    #[test]
+    fn test_runner_command_exists_nonexistent() {
+        let runner = WasmCommandRunner::new();
+        assert!(!runner.command_exists("this_command_definitely_does_not_exist"));
+    }
+
+    #[test]
+    fn test_runner_find_command_nonexistent() {
+        let runner = WasmCommandRunner::new();
+        assert!(runner.find_command("this_command_definitely_does_not_exist").is_none());
+    }
+}
+
+// =============================================================================
+// RuntimeState Tests
+// =============================================================================
+
+mod runtime_state_tests {
+    use super::super::executor::RuntimeState;
+    use super::super::runtime::Runtime;
+
+    #[test]
+    fn test_runtime_state_creation() {
+        let runtime = Runtime::new();
+        let state = RuntimeState::new(runtime);
+
+        assert!(!state.terminated);
+        assert!(state.memory.is_none());
+    }
+
+    #[test]
+    fn test_runtime_state_terminated() {
+        let runtime = Runtime::new();
+        let mut state = RuntimeState::new(runtime);
+
+        assert!(!state.terminated);
+        state.terminated = true;
+        assert!(state.terminated);
+    }
+}
+
+// =============================================================================
+// CommandResult Tests
+// =============================================================================
+
+mod command_result_tests {
+    use super::super::error::CommandResult;
+
+    #[test]
+    fn test_command_result_success() {
+        let result = CommandResult::success();
+        assert!(result.is_success());
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.is_empty());
+        assert!(result.stderr.is_empty());
+    }
+
+    #[test]
+    fn test_command_result_with_code() {
+        let result = CommandResult::with_code(42);
+        assert!(!result.is_success());
+        assert_eq!(result.exit_code, 42);
+    }
+
+    #[test]
+    fn test_command_result_stdout_str() {
+        let mut result = CommandResult::success();
+        result.stdout = b"Hello, World!\n".to_vec();
+        assert_eq!(result.stdout_str(), "Hello, World!\n");
+    }
+
+    #[test]
+    fn test_command_result_stderr_str() {
+        let mut result = CommandResult::success();
+        result.stderr = b"Error occurred\n".to_vec();
+        assert_eq!(result.stderr_str(), "Error occurred\n");
+    }
+
+    #[test]
+    fn test_command_result_lossy_utf8() {
+        let mut result = CommandResult::success();
+        // Invalid UTF-8 sequence
+        result.stdout = vec![0xFF, 0xFE, 0x41, 0x42]; // Invalid + "AB"
+        let s = result.stdout_str();
+        // Should contain replacement characters for invalid bytes
+        assert!(s.contains("AB"));
+    }
+}
+
+// =============================================================================
+// OpenFlags Tests
+// =============================================================================
+
+mod open_flags_tests {
+    use super::super::abi::OpenFlags;
+
+    #[test]
+    fn test_open_flags_read() {
+        let flags = OpenFlags::READ;
+        assert!(flags.is_read());
+        assert!(!flags.is_write());
+        assert!(!flags.is_create());
+        assert!(!flags.is_truncate());
+    }
+
+    #[test]
+    fn test_open_flags_write() {
+        let flags = OpenFlags::WRITE;
+        assert!(!flags.is_read());
+        assert!(flags.is_write());
+        assert!(!flags.is_create());
+        assert!(!flags.is_truncate());
+    }
+
+    #[test]
+    fn test_open_flags_read_write() {
+        let flags = OpenFlags::READ_WRITE;
+        assert!(flags.is_read());
+        assert!(flags.is_write());
+    }
+
+    #[test]
+    fn test_open_flags_create() {
+        let flags = OpenFlags::CREATE;
+        assert!(flags.is_create());
+    }
+
+    #[test]
+    fn test_open_flags_truncate() {
+        let flags = OpenFlags::TRUNCATE;
+        assert!(flags.is_truncate());
+    }
+
+    #[test]
+    fn test_open_flags_combined() {
+        let flags = OpenFlags(OpenFlags::WRITE.0 | OpenFlags::CREATE.0 | OpenFlags::TRUNCATE.0);
+        assert!(flags.is_write());
+        assert!(flags.is_create());
+        assert!(flags.is_truncate());
+    }
+}
+
+// =============================================================================
+// SyscallError Tests
+// =============================================================================
+
+mod syscall_error_tests {
+    use super::super::abi::SyscallError;
+
+    #[test]
+    fn test_error_codes() {
+        assert_eq!(SyscallError::Generic.code(), -1);
+        assert_eq!(SyscallError::NotFound.code(), -2);
+        assert_eq!(SyscallError::PermissionDenied.code(), -3);
+        assert_eq!(SyscallError::AlreadyExists.code(), -4);
+        assert_eq!(SyscallError::NotADirectory.code(), -5);
+        assert_eq!(SyscallError::IsADirectory.code(), -6);
+        assert_eq!(SyscallError::InvalidArgument.code(), -7);
+        assert_eq!(SyscallError::NoSpace.code(), -8);
+        assert_eq!(SyscallError::IoError.code(), -9);
+        assert_eq!(SyscallError::BadFd.code(), -10);
+        assert_eq!(SyscallError::NotEmpty.code(), -11);
+    }
+
+    #[test]
+    fn test_error_from_code() {
+        assert_eq!(SyscallError::from_code(-1), Some(SyscallError::Generic));
+        assert_eq!(SyscallError::from_code(-2), Some(SyscallError::NotFound));
+        assert_eq!(SyscallError::from_code(-3), Some(SyscallError::PermissionDenied));
+        assert_eq!(SyscallError::from_code(-100), None);
+        assert_eq!(SyscallError::from_code(0), None);
+    }
+
+    #[test]
+    fn test_error_roundtrip() {
+        for error in [
+            SyscallError::Generic,
+            SyscallError::NotFound,
+            SyscallError::PermissionDenied,
+            SyscallError::AlreadyExists,
+            SyscallError::NotADirectory,
+            SyscallError::IsADirectory,
+            SyscallError::InvalidArgument,
+            SyscallError::NoSpace,
+            SyscallError::IoError,
+            SyscallError::BadFd,
+            SyscallError::NotEmpty,
+        ] {
+            let code = error.code();
+            let recovered = SyscallError::from_code(code);
+            assert_eq!(recovered, Some(error));
+        }
+    }
+}

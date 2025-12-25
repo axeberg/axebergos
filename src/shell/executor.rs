@@ -5,11 +5,13 @@
 //! 2. Handling input/output redirections
 //! 3. Running built-in commands directly
 //! 4. Running external commands via the program registry
+//! 5. Running WASM command modules from /bin
 
 use super::builtins::{self, BuiltinResult, ShellState};
 use super::parser::{CommandList, LogicalOp, Pipeline, SimpleCommand};
 use super::programs;
 use crate::kernel::syscall;
+use crate::kernel::wasm::{WasmCommandRunner, CommandResult as WasmCommandResult};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -244,6 +246,8 @@ impl Default for ProgramRegistry {
 pub struct Executor {
     pub state: ShellState,
     pub registry: ProgramRegistry,
+    /// WASM command runner for executing /bin/*.wasm modules
+    pub wasm_runner: WasmCommandRunner,
 }
 
 impl Executor {
@@ -254,10 +258,107 @@ impl Executor {
             #[cfg(all(target_arch = "wasm32", not(test)))]
             crate::console_log!("[shell] Warning: Failed to set initial cwd: {:?}", _e);
         }
+
+        // Initialize WASM runner with default PATH
+        let mut wasm_runner = WasmCommandRunner::new();
+        wasm_runner.add_env("PATH", "/bin:/usr/bin:/usr/local/bin");
+        wasm_runner.set_cwd(&state.cwd.display().to_string());
+
         Self {
             state,
             registry: ProgramRegistry::new(),
+            wasm_runner,
         }
+    }
+
+    /// Sync WASM runner state with shell state
+    #[cfg(target_arch = "wasm32")]
+    fn sync_wasm_runner(&mut self) {
+        self.wasm_runner.set_cwd(&self.state.cwd.display().to_string());
+        // Sync environment variables
+        let mut env = HashMap::new();
+        for (k, v) in &self.state.env {
+            env.insert(k.clone(), v.clone());
+        }
+        self.wasm_runner.set_env(env);
+    }
+
+    /// Check if a command is available as a WASM module
+    pub fn is_wasm_command(&self, name: &str) -> bool {
+        self.wasm_runner.command_exists(name)
+    }
+
+    /// Execute a WASM command asynchronously
+    #[cfg(target_arch = "wasm32")]
+    pub async fn execute_wasm_command(
+        &mut self,
+        name: &str,
+        args: &[String],
+        stdin: &str,
+    ) -> ExecResult {
+        self.sync_wasm_runner();
+
+        match self.wasm_runner.run(name, args, stdin).await {
+            Ok(result) => {
+                self.state.last_status = result.exit_code;
+                ExecResult {
+                    code: result.exit_code,
+                    output: result.stdout_str(),
+                    error: result.stderr_str(),
+                    should_exit: false,
+                }
+            }
+            Err(e) => {
+                self.state.last_status = 1;
+                ExecResult::success()
+                    .with_error(format!("{}: {}", name, e))
+                    .with_code(1)
+            }
+        }
+    }
+
+    /// Execute a WASM command (non-WASM stub)
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn execute_wasm_command(
+        &mut self,
+        name: &str,
+        _args: &[String],
+        _stdin: &str,
+    ) -> ExecResult {
+        self.state.last_status = 127;
+        ExecResult::success()
+            .with_error(format!("{}: command not found", name))
+            .with_code(127)
+    }
+
+    /// Execute a single command, trying WASM if not built-in or in registry
+    /// Returns Some(result) if executed synchronously, None if WASM command needs async
+    pub fn try_execute_sync(&mut self, cmd: &SimpleCommand) -> Option<ExecResult> {
+        // Built-ins are always sync
+        if builtins::is_builtin(&cmd.program) {
+            return Some(self.execute_builtin(cmd));
+        }
+
+        // Registry programs are sync
+        if self.registry.contains(&cmd.program) {
+            return Some(self.execute_single(cmd));
+        }
+
+        // Check for WASM command - return None to indicate async needed
+        if self.is_wasm_command(&cmd.program) {
+            return None;
+        }
+
+        // Command not found
+        self.state.last_status = 127;
+        Some(ExecResult::success()
+            .with_error(format!("{}: command not found", cmd.program))
+            .with_code(127))
+    }
+
+    /// List available WASM commands
+    pub fn list_wasm_commands(&self) -> Vec<String> {
+        self.wasm_runner.list_commands()
     }
 
     /// Execute a command line string
@@ -361,7 +462,7 @@ impl Executor {
             return self.execute_builtin(cmd);
         }
 
-        // Handle external programs
+        // Handle external programs from registry
         if let Some(prog) = self.registry.get(&cmd.program) {
             let mut stdout = String::new();
             let mut stderr = String::new();
@@ -408,11 +509,127 @@ impl Executor {
             };
         }
 
+        // Check for WASM command - note: this requires async execution
+        // For sync execution, we return a special message indicating WASM
+        if self.is_wasm_command(&cmd.program) {
+            // Return a marker indicating WASM command needs async execution
+            // The caller should use execute_wasm_command instead
+            return ExecResult::success()
+                .with_error(format!(
+                    "{}: WASM command - use execute_single_async for async execution",
+                    cmd.program
+                ))
+                .with_code(126); // 126 = command found but cannot execute (needs async)
+        }
+
         // Command not found
         self.state.last_status = 127;
         ExecResult::success()
             .with_error(format!("{}: command not found", cmd.program))
             .with_code(127)
+    }
+
+    /// Execute a single command asynchronously (supports WASM commands)
+    #[cfg(target_arch = "wasm32")]
+    pub async fn execute_single_async(&mut self, cmd: &SimpleCommand) -> ExecResult {
+        // Handle built-in commands (sync)
+        if builtins::is_builtin(&cmd.program) {
+            return self.execute_builtin(cmd);
+        }
+
+        // Handle registry programs (sync)
+        if self.registry.contains(&cmd.program) {
+            return self.execute_single(cmd);
+        }
+
+        // Handle WASM commands (async)
+        if self.is_wasm_command(&cmd.program) {
+            // Handle input redirection
+            let stdin = if let Some(ref redir) = cmd.stdin {
+                match self.read_file(&redir.path) {
+                    Ok(content) => content,
+                    Err(e) => return ExecResult::success().with_error(e),
+                }
+            } else {
+                String::new()
+            };
+
+            // Expand glob patterns in arguments
+            let args = self.expand_args(&cmd.args);
+
+            // Execute WASM command
+            let mut result = self.execute_wasm_command(&cmd.program, &args, &stdin).await;
+
+            // Handle output redirection
+            if let Some(ref redir) = cmd.stdout {
+                if let Err(e) = self.write_file(&redir.path, &result.output, redir.append) {
+                    return ExecResult::success().with_error(e);
+                }
+                result.output.clear();
+            }
+
+            // Handle stderr redirection
+            if let Some(ref redir) = cmd.stderr {
+                if let Err(e) = self.write_file(&redir.path, &result.error, redir.append) {
+                    return ExecResult::success().with_error(e);
+                }
+                result.error.clear();
+            }
+
+            return result;
+        }
+
+        // Command not found
+        self.state.last_status = 127;
+        ExecResult::success()
+            .with_error(format!("{}: command not found", cmd.program))
+            .with_code(127)
+    }
+
+    /// Execute a single command asynchronously (non-WASM stub)
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn execute_single_async(&mut self, cmd: &SimpleCommand) -> ExecResult {
+        self.execute_single(cmd)
+    }
+
+    /// Execute a command line asynchronously (supports WASM commands)
+    #[cfg(target_arch = "wasm32")]
+    pub async fn execute_line_async(&mut self, line: &str) -> ExecResult {
+        // Skip empty lines and comments
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            return ExecResult::success();
+        }
+
+        // Expand aliases in the line
+        let line = self.expand_aliases(line);
+
+        // Expand command substitution
+        let line = self.expand_substitution_in_line(&line);
+
+        #[cfg(all(target_arch = "wasm32", not(test)))]
+        crate::console_log!("[exec] Running async: {}", line);
+
+        // Parse the command
+        let cmd_list = match super::parser::parse_command_list(&line) {
+            Ok(c) => c,
+            Err(e) => return ExecResult::success().with_error(format!("parse error: {}", e)),
+        };
+
+        // For now, handle simple single commands asynchronously
+        // TODO: Full async pipeline support
+        if cmd_list.rest.is_empty() && cmd_list.first.commands.len() == 1 {
+            return self.execute_single_async(&cmd_list.first.commands[0]).await;
+        }
+
+        // Fall back to sync execution for complex commands
+        self.execute_command_list(&cmd_list)
+    }
+
+    /// Execute a command line asynchronously (non-WASM stub)
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn execute_line_async(&mut self, line: &str) -> ExecResult {
+        self.execute_line(line)
     }
 
     /// Execute a pipeline of commands
