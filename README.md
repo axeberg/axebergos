@@ -114,7 +114,7 @@ Required files:
     └── axeberg_bg.wasm
 ```
 
-### Option 3: Docker
+### Option 3: Docker (untested)
 
 ```dockerfile
 FROM rust:latest as builder
