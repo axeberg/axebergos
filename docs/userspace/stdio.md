@@ -31,8 +31,16 @@ Process                    Kernel
 
 ```rust
 pub struct ConsoleObject {
-    input_buffer: VecDeque<u8>,
-    output_buffer: Vec<u8>,
+    input: VecDeque<u8>,
+    output: Vec<u8>,
+}
+
+impl ConsoleObject {
+    pub fn push_input(&mut self, data: &[u8]);
+    pub fn take_output(&mut self) -> Vec<u8>;
+    pub fn peek_output(&self) -> &[u8];
+    pub fn clear_input(&mut self);
+    pub fn clear_output(&mut self);
 }
 ```
 

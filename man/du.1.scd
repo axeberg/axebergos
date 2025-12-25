@@ -20,7 +20,7 @@ Summarize disk usage of each file and directory recursively.
 *-h*
 	Print sizes in human readable format (e.g., 1K, 234M, 2G).
 
-*-h*, *--help*
+*--help*
 	Display usage information and exit.
 
 # EXAMPLES

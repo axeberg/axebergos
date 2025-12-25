@@ -4,7 +4,7 @@ Instructions for building and running axeberg.
 
 ## Prerequisites
 
-- **Rust**: Latest stable (1.70+)
+- **Rust**: Latest stable (1.80+)
 - **wasm-pack**: For building WASM
 - **Modern browser**: Chrome, Firefox, Safari, or Edge
 
@@ -28,7 +28,6 @@ axebergos/
 ├── src/
 │   ├── lib.rs          # Library entry point
 │   ├── boot.rs         # Boot sequence
-│   ├── runtime.rs      # Browser integration
 │   ├── kernel/         # Kernel components
 │   │   ├── mod.rs
 │   │   ├── executor.rs # Task scheduler
@@ -42,16 +41,9 @@ axebergos/
 │   ├── vfs/            # Virtual filesystem
 │   │   ├── mod.rs
 │   │   └── memory.rs   # In-memory backend
-│   ├── compositor/     # Window management
-│   │   ├── mod.rs
-│   │   ├── window.rs
-│   │   ├── layout.rs
-│   │   └── surface.rs
 │   └── bin/
 │       └── serve.rs    # Dev server
-├── static/
-│   ├── index.html      # HTML shell
-│   └── style.css       # Styles
+├── index.html          # HTML shell (project root)
 ├── docs/               # Documentation
 ├── Cargo.toml
 └── README.md
@@ -89,7 +81,7 @@ cargo run --bin serve
 Then open: http://localhost:8080
 
 The server:
-- Serves static files from `static/`
+- Serves static files from project root
 - Serves WASM from `pkg/`
 - Supports hot reload (rebuild and refresh)
 
@@ -141,9 +133,11 @@ cargo test -- --nocapture
 ### Test Coverage
 
 ```bash
-cargo install cargo-tarpaulin
+cargo install cargo-tarpaulin  # Optional tool
 cargo tarpaulin
 ```
+
+**Note**: cargo-watch and cargo-tarpaulin are optional development tools that can enhance the development workflow but are not required for building or testing the project.
 
 ## Code Quality
 

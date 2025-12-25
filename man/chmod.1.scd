@@ -14,7 +14,7 @@ Change the file mode (permissions) of each FILE to MODE.
 
 # MODE
 
-MODE can be specified in octal:
+MODE must be specified in octal:
 
 - *755* - rwxr-xr-x (owner rwx, group rx, other rx)
 - *644* - rw-r--r-- (owner rw, group r, other r)

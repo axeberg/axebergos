@@ -15,8 +15,7 @@ the password for the current user.
 
 Only root can change other users' passwords.
 
-Note: In this demo implementation, passwords are not actually
-stored or used for authentication.
+Note: Passwords are stored and used for authentication in the system.
 
 # OPTIONS
 

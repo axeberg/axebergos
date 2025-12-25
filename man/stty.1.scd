@@ -6,7 +6,7 @@ stty - change and print terminal line settings
 
 # SYNOPSIS
 
-*stty* [-a]
+*stty* [-a] ++
 *stty* [SETTING]...
 
 # DESCRIPTION

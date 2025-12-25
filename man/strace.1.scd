@@ -24,6 +24,7 @@ Each syscall is displayed with its name, arguments, and return value.
 *-e* _EXPR_
 	Filter expression. Only trace syscalls matching _EXPR_. Can be a
 	syscall name (e.g., "read") or category (e.g., "file").
+	(Note: Not yet implemented)
 
 *-h*, *--help*
 	Display usage information and exit.

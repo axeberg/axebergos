@@ -74,15 +74,16 @@ Runs async tasks cooperatively:
 
 ```rust
 pub struct Executor {
-    tasks: Vec<Task>,
-    ready: VecDeque<TaskId>,
-    task_priorities: HashMap<TaskId, Priority>,
+    tasks: BTreeMap<TaskId, ManagedTask>,
+    ready: Rc<RefCell<HashSet<TaskId>>>,
+    pending_spawn: RefCell<VecDeque<ManagedTask>>,
+    next_id: u64,
 }
 
 pub enum Priority {
-    Critical,  // UI, input handling
-    Normal,    // Regular work
-    Background, // Low-priority tasks
+    Critical = 0,   // UI, input handling
+    Normal = 1,     // Regular work
+    Background = 2, // Low-priority tasks
 }
 ```
 

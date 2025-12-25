@@ -111,12 +111,12 @@ pub struct OpenOptions {
     pub truncate: bool, // Truncate existing content
 }
 
-// Convenience constants
-impl OpenFlags {
-    pub const READ: OpenFlags;   // Read only
-    pub const WRITE: OpenFlags;  // Write, create, truncate
-    pub const RDWR: OpenFlags;   // Read and write
-    pub const APPEND: OpenFlags; // Append mode
+impl OpenOptions {
+    pub fn new() -> Self;
+    pub fn read(mut self, read: bool) -> Self;
+    pub fn write(mut self, write: bool) -> Self;
+    pub fn create(mut self, create: bool) -> Self;
+    pub fn truncate(mut self, truncate: bool) -> Self;
 }
 ```
 
@@ -127,6 +127,11 @@ pub struct Metadata {
     pub size: u64,
     pub is_dir: bool,
     pub is_file: bool,
+    pub is_symlink: bool,
+    pub symlink_target: Option<String>,
+    pub uid: u32,        // Owner user ID
+    pub gid: u32,        // Owner group ID
+    pub mode: u16,       // Unix permission mode (rwxrwxrwx)
 }
 ```
 
@@ -136,6 +141,7 @@ pub struct Metadata {
 pub struct DirEntry {
     pub name: String,
     pub is_dir: bool,
+    pub is_symlink: bool,
 }
 ```
 

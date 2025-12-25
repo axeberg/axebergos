@@ -13,6 +13,11 @@ tree - display directory tree
 Display the directory structure as a tree. If no _DIRECTORY_ is given,
 displays the current directory.
 
+# OPTIONS
+
+*-h*, *--help*
+	Display usage information and exit.
+
 # EXAMPLES
 
 Show current directory:

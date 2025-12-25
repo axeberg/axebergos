@@ -35,6 +35,10 @@ is generated dynamically when the file is read.
 */proc/stat*
 	Overall system statistics including CPU time and boot time.
 
+*/proc/mounts*
+	Information about currently mounted filesystems. Shows mount point,
+	filesystem type, and mount options for each mounted filesystem.
+
 */proc/self*
 	A symbolic link to the current process's /proc/[pid] directory.
 
@@ -57,14 +61,14 @@ Each running process has a directory /proc/[pid] containing:
 */proc/[pid]/cwd*
 	Current working directory (simulated link).
 
+*/proc/[pid]/exe*
+	Symbolic link to the executable file of the process.
+
 */proc/[pid]/stat*
 	Process status in a single-line format for parsing.
 
-*/proc/[pid]/statm*
-	Memory usage statistics.
-
 */proc/[pid]/maps*
-	Memory mappings (placeholder).
+	Memory mappings showing code and heap regions.
 
 */proc/[pid]/fd*
 	Directory containing open file descriptors.

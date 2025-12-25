@@ -6,7 +6,7 @@ date - print current date and time
 
 # SYNOPSIS
 
-*date* [+_FORMAT_]
+*date*
 
 # DESCRIPTION
 

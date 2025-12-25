@@ -19,11 +19,22 @@ Open a file or device.
 pub fn open(path: &str, flags: OpenFlags) -> SyscallResult<Fd>
 ```
 
-**Flags:**
-- `OpenFlags::READ` - Open for reading
-- `OpenFlags::WRITE` - Open for writing (creates if needed)
+**OpenFlags** is a struct with boolean fields:
+```rust
+pub struct OpenFlags {
+    pub read: bool,
+    pub write: bool,
+    pub create: bool,
+    pub truncate: bool,
+    pub append: bool,
+}
+```
+
+**Predefined constants:**
+- `OpenFlags::READ` - Open for reading only
+- `OpenFlags::WRITE` - Open for writing (creates and truncates)
 - `OpenFlags::RDWR` - Open for reading and writing
-- `OpenFlags::APPEND` - Append mode
+- `OpenFlags::APPEND` - Open for appending (creates but doesn't truncate)
 
 **Special paths:**
 - `/dev/console` - System console

@@ -280,12 +280,14 @@ pub struct Pipeline {
 pub struct SimpleCommand {
     pub program: String,
     pub args: Vec<String>,
-    pub redirects: Vec<Redirect>,
+    pub stdin: Option<Redirect>,   // Input redirection: < file
+    pub stdout: Option<Redirect>,  // Output redirection: > file or >> file
+    pub stderr: Option<Redirect>,  // Error redirection: 2> file or 2>> file
 }
 
 pub struct Redirect {
-    pub kind: RedirectKind,  // In, Out, Append, Err
-    pub target: String,      // File path
+    pub path: String,    // Target file path
+    pub append: bool,    // Append mode (>> vs >)
 }
 ```
 

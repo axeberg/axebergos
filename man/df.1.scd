@@ -18,7 +18,7 @@ size, used space, available space, and usage percentage.
 *-h*
 	Print sizes in human readable format (e.g., 1K, 234M, 2G).
 
-*-h*, *--help*
+*--help*
 	Display usage information and exit.
 
 # OUTPUT COLUMNS

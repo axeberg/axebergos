@@ -44,7 +44,7 @@ Display January 2025:
 
 	cal 1 2025
 
-Display full year 2024:
+Display current month of 2024:
 
 	cal 2024
 

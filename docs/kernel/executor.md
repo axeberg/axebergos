@@ -13,38 +13,36 @@ The executor is axeberg's async task scheduler, designed for browser integration
 
 ```rust
 pub struct Executor {
-    /// All tasks in the system
-    tasks: Vec<Task>,
+    /// All tasks, indexed by ID
+    tasks: BTreeMap<TaskId, ManagedTask>,
 
-    /// Queue of ready task IDs
-    ready: VecDeque<TaskId>,
+    /// Tasks that are ready to be polled (signaled by waker)
+    ready: Rc<RefCell<HashSet<TaskId>>>,
 
-    /// Priority for each task
-    task_priorities: HashMap<TaskId, Priority>,
+    /// Tasks waiting to be spawned (added during tick)
+    pending_spawn: RefCell<VecDeque<ManagedTask>>,
 
-    /// Next task ID to allocate
-    next_task_id: u64,
+    /// Next task ID
+    next_id: u64,
 }
 ```
 
 ## Tasks
 
-A task wraps an async future:
+The Task trait defines the interface for programs/modules:
 
 ```rust
-pub struct Task {
-    id: TaskId,
-    future: Pin<Box<dyn Future<Output = ()>>>,
-    state: TaskState,
+pub trait Task: Send + 'static {
+    /// Human-readable name for this task
+    fn name(&self) -> &'static str;
+
+    /// The task's main execution. Returns a future that drives the task.
+    fn run(&mut self) -> Pin<Box<dyn Future<Output = ()> + '_>>;
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum TaskState {
-    Ready,
-    Running,
-    Blocked,
-    Completed,
-}
+// Tasks are compiled in and registered with the kernel at boot.
+// For spawned futures, the executor uses BoxFuture:
+pub type BoxFuture = Pin<Box<dyn Future<Output = ()> + 'static>>;
 ```
 
 ## Priority Levels
@@ -52,9 +50,9 @@ pub enum TaskState {
 ```rust
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Priority {
-    Background = 0,  // Low priority
+    Critical = 0,    // High priority (UI, input)
     Normal = 1,      // Default
-    Critical = 2,    // High priority (UI, input)
+    Background = 2,  // Low priority
 }
 ```
 
@@ -86,7 +84,7 @@ The executor is driven by `requestAnimationFrame`:
 
 ```rust
 // Called ~60 times per second
-pub fn tick() -> usize {
+pub fn tick(&mut self) -> usize {
     let mut polled = 0;
 
     // Sort ready queue by priority (highest first)

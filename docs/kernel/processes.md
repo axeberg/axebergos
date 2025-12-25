@@ -91,6 +91,7 @@ pub enum ProcessState {
     Running,       // Ready to run or currently running
     Sleeping,      // Waiting for I/O or timer
     Blocked(Pid),  // Waiting for another process
+    Stopped,       // Process is stopped (by signal)
     Zombie(i32),   // Exited, waiting to be reaped
 }
 ```

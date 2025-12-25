@@ -62,8 +62,8 @@ Mount proc filesystem:
 	Information about currently mounted filesystems.
 
 */etc/fstab*
-	Static filesystem information (for automatic mounting).
+	Static filesystem information (not yet implemented).
 
 # SEE ALSO
 
-*umount*(8), *findmnt*(1), *fstab*(5)
+*umount*(8), *findmnt*(1), *proc*(5)

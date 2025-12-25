@@ -13,6 +13,9 @@ xargs - build and execute command lines from stdin
 Build command lines by appending arguments read from stdin. If no
 COMMAND is specified, echo is used.
 
+Note: In the current implementation, xargs shows the command that would
+be executed but does not actually run it.
+
 # ARGUMENTS
 
 _COMMAND_
@@ -39,11 +42,6 @@ Execute with command:
 With initial args:
 
 	echo "arg1 arg2" | xargs echo prefix
-
-# NOTES
-
-In axebergOS, xargs shows the command that would be executed but does
-not actually run it.
 
 # SEE ALSO
 
