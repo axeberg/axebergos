@@ -75,49 +75,50 @@ $ logout                   # End session
 
 Users persist to `/etc/passwd`, `/etc/shadow`, `/etc/group`.
 
-## Deployment Options
+## Deployment
 
-### 1. Local Development Server
+### Prerequisites
+
+```bash
+# Install wasm-pack (required for all deployment methods)
+curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+```
+
+### Build
+
+```bash
+# Build WASM binary
+wasm-pack build --target web
+
+# This generates:
+# - pkg/axeberg.js      (JavaScript bindings)
+# - pkg/axeberg_bg.wasm (WebAssembly binary)
+```
+
+### Option 1: Local Development
 
 ```bash
 cargo run --bin serve
 # Open http://localhost:8080
 ```
 
-### 2. Static Web Hosting
+### Option 2: Static Hosting
 
-Build and deploy to any static host (GitHub Pages, Netlify, Vercel, S3):
+Deploy to any static host (GitHub Pages, Netlify, Vercel, S3, etc.):
 
-```bash
-# Build WASM
-wasm-pack build --target web --release
-
-# Files to deploy:
-# - index.html
-# - pkg/axeberg.js
-# - pkg/axeberg_bg.wasm
+```
+Required files:
+├── index.html
+└── pkg/
+    ├── axeberg.js
+    └── axeberg_bg.wasm
 ```
 
-**GitHub Pages:**
-```bash
-# In your repo settings, enable Pages from main branch
-git add index.html pkg/
-git commit -m "Deploy axeberg"
-git push
-```
-
-**Netlify/Vercel:**
-```bash
-# Just connect your repo - auto-deploys on push
-# Set build command: wasm-pack build --target web
-# Publish directory: .
-```
-
-### 3. Docker Container
+### Option 3: Docker
 
 ```dockerfile
 FROM rust:latest as builder
-RUN cargo install wasm-pack
+RUN curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 WORKDIR /app
 COPY . .
 RUN wasm-pack build --target web --release
@@ -128,58 +129,14 @@ COPY --from=builder /app/pkg /usr/share/nginx/html/pkg/
 EXPOSE 80
 ```
 
-```bash
-docker build -t axeberg .
-docker run -p 8080:80 axeberg
-```
-
-### 4. Embedded in Other Apps
-
-Import as ES module:
+### Option 4: Embed in Other Apps
 
 ```javascript
-import init, { boot } from './pkg/axeberg.js';
-
-async function startOS() {
-    await init();
-    const terminal = document.getElementById('terminal');
-    boot(terminal);
-}
+import init from './pkg/axeberg.js';
+await init();  // Terminal auto-attaches to DOM
 ```
 
-### 5. Electron Desktop App
-
-```javascript
-// main.js
-const { app, BrowserWindow } = require('electron');
-
-app.whenReady().then(() => {
-    const win = new BrowserWindow({ width: 800, height: 600 });
-    win.loadFile('index.html');
-});
-```
-
-### 6. PWA (Progressive Web App)
-
-Add to `index.html`:
-```html
-<link rel="manifest" href="manifest.json">
-<script>
-if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js');
-}
-</script>
-```
-
-With `manifest.json`:
-```json
-{
-    "name": "axeberg",
-    "display": "standalone",
-    "start_url": "/",
-    "icons": [{"src": "icon.png", "sizes": "512x512"}]
-}
-```
+> **Note**: These deployment methods follow standard wasm-pack conventions but have not been individually verified.
 
 ## Project Structure
 
