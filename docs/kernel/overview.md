@@ -297,3 +297,4 @@ Dynamic content generation for system information:
 - [Object Table](objects.md) - Object lifecycle
 - [Signals](signals.md) - Signal handling
 - [IPC](ipc.md) - Inter-process communication
+- [Bare Metal](../architecture/bare-metal.md) - Running on real hardware
