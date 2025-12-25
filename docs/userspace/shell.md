@@ -191,6 +191,13 @@ Programs run via the executor with full pipe/redirect support:
 | `fsreset [-f]` | Clear OPFS and reset filesystem |
 | `autosave [on\|off\|status\|interval N]` | Configure auto-save |
 
+### Networking
+
+| Command | Description |
+|---------|-------------|
+| `curl [options] URL` | HTTP client (fetch API) |
+| `wget [-O file] URL` | Download file from URL |
+
 ## Syntax
 
 ### Pipes

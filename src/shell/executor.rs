@@ -95,6 +95,8 @@ impl ProgramRegistry {
         reg.register("fsload", prog_fsload);
         reg.register("fsreset", prog_fsreset);
         reg.register("autosave", prog_autosave);
+        reg.register("curl", prog_curl);
+        reg.register("wget", prog_wget);
         reg.register("tree", prog_tree);
         reg.register("sleep", prog_sleep);
         reg.register("history", prog_history);
@@ -1865,6 +1867,200 @@ fn prog_autosave(args: &[String], stdout: &mut String, stderr: &mut String) -> i
     {
         let _ = stderr;
         stdout.push_str("autosave: not available in this build\n");
+    }
+
+    0
+}
+
+/// curl - transfer URL (HTTP client)
+#[allow(unused_variables)]
+fn prog_curl(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+    if let Some(help) = check_help(&args, "Usage: curl [OPTIONS] URL\nTransfer data from URL.\n  -i  Include headers in output\n  -s  Silent mode\n  -X METHOD  Specify request method\n  -H HEADER  Add custom header\nSee 'man curl' for details.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    // Parse arguments
+    let mut url = String::new();
+    let mut include_headers = false;
+    let mut method = "GET";
+    let mut headers: Vec<(String, String)> = Vec::new();
+    let mut i = 0;
+
+    #[allow(unused_assignments)]
+    while i < args.len() {
+        match args[i] {
+            "-i" => include_headers = true,
+            "-s" => {} // silent mode
+            "-X" => {
+                i += 1;
+                if i < args.len() {
+                    method = args[i];
+                }
+            }
+            "-H" => {
+                i += 1;
+                if i < args.len() {
+                    if let Some(pos) = args[i].find(':') {
+                        let name = args[i][..pos].trim().to_string();
+                        let value = args[i][pos+1..].trim().to_string();
+                        headers.push((name, value));
+                    }
+                }
+            }
+            s if !s.starts_with('-') => {
+                url = s.to_string();
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    if url.is_empty() {
+        stderr.push_str("curl: no URL specified\n");
+        return 1;
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        use crate::kernel::network::{HttpMethod, HttpRequest};
+
+        let http_method = match method.to_uppercase().as_str() {
+            "GET" => HttpMethod::Get,
+            "POST" => HttpMethod::Post,
+            "PUT" => HttpMethod::Put,
+            "DELETE" => HttpMethod::Delete,
+            "HEAD" => HttpMethod::Head,
+            "PATCH" => HttpMethod::Patch,
+            _ => {
+                stderr.push_str(&format!("curl: unsupported method: {}\n", method));
+                return 1;
+            }
+        };
+
+        let url_clone = url.clone();
+        let include_headers_clone = include_headers;
+        let headers_clone = headers.clone();
+
+        wasm_bindgen_futures::spawn_local(async move {
+            let mut req = HttpRequest::new(http_method, &url_clone);
+            for (name, value) in headers_clone {
+                req = req.header(&name, &value);
+            }
+
+            match req.send().await {
+                Ok(resp) => {
+                    if include_headers_clone {
+                        crate::console_log!("HTTP/{} {}", resp.status, resp.status_text);
+                        for (name, value) in &resp.headers {
+                            crate::console_log!("{}: {}", name, value);
+                        }
+                        crate::console_log!("");
+                    }
+                    match resp.text() {
+                        Ok(text) => crate::console_log!("{}", text),
+                        Err(_) => crate::console_log!("[binary data: {} bytes]", resp.body.len()),
+                    }
+                }
+                Err(e) => {
+                    crate::console_log!("curl: {}", e);
+                }
+            }
+        });
+        stdout.push_str(&format!("Fetching {}...\n", url));
+        stdout.push_str("(Check browser console for result)\n");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        stdout.push_str("curl: not available in this build (requires WASM)\n");
+    }
+
+    0
+}
+
+/// wget - download file from URL
+#[allow(unused_variables)]
+fn prog_wget(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+    if let Some(help) = check_help(&args, "Usage: wget [OPTIONS] URL\nDownload file from URL.\n  -O FILE  Save to FILE instead of default\n  -q       Quiet mode\nSee 'man wget' for details.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    // Parse arguments
+    let mut url = String::new();
+    let mut output_file = String::new();
+    let mut i = 0;
+
+    while i < args.len() {
+        match args[i] {
+            "-q" => {} // quiet mode
+            "-O" => {
+                i += 1;
+                if i < args.len() {
+                    output_file = args[i].to_string();
+                }
+            }
+            s if !s.starts_with('-') => {
+                url = s.to_string();
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    if url.is_empty() {
+        stderr.push_str("wget: no URL specified\n");
+        return 1;
+    }
+
+    // Determine output filename
+    let filename = if output_file.is_empty() {
+        // Extract filename from URL
+        url.rsplit('/').next().unwrap_or("index.html").to_string()
+    } else {
+        output_file
+    };
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        use crate::kernel::network::HttpRequest;
+
+        let url_clone = url.clone();
+        let filename_clone = filename.clone();
+
+        wasm_bindgen_futures::spawn_local(async move {
+            match HttpRequest::get(&url_clone).send().await {
+                Ok(resp) => {
+                    if resp.status >= 200 && resp.status < 300 {
+                        // Write to file
+                        match syscall::write_file(&filename_clone, &String::from_utf8_lossy(&resp.body)) {
+                            Ok(_) => {
+                                crate::console_log!("Downloaded {} -> {} ({} bytes)",
+                                    url_clone, filename_clone, resp.body.len());
+                            }
+                            Err(e) => {
+                                crate::console_log!("wget: failed to write {}: {}", filename_clone, e);
+                            }
+                        }
+                    } else {
+                        crate::console_log!("wget: HTTP {} {}", resp.status, resp.status_text);
+                    }
+                }
+                Err(e) => {
+                    crate::console_log!("wget: {}", e);
+                }
+            }
+        });
+        stdout.push_str(&format!("Downloading {} -> {}...\n", url, filename));
+        stdout.push_str("(Check browser console for result)\n");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        stdout.push_str("wget: not available in this build (requires WASM)\n");
     }
 
     0

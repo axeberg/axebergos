@@ -66,6 +66,17 @@ features = [
     "BeforeUnloadEvent",
     # Clipboard API for copy/paste
     "Clipboard",
+    # Fetch API for HTTP requests
+    "Request",
+    "RequestInit",
+    "RequestMode",
+    "Response",
+    "Headers",
+    # WebSocket for bidirectional communication
+    "WebSocket",
+    "MessageEvent",
+    "CloseEvent",
+    "ErrorEvent",
 ]
 
 # Dev server (native only, not compiled to WASM)

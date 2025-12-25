@@ -34,6 +34,9 @@ pub mod tty;
 pub mod users;
 pub mod wasm;
 
+#[cfg(target_arch = "wasm32")]
+pub mod network;
+
 #[cfg(test)]
 mod invariants_test;
 
