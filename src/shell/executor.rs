@@ -3059,6 +3059,13 @@ fn prog_useradd(args: &[String], stdout: &mut String, stderr: &mut String) -> i3
     // Create the user
     match syscall::add_user(username, gid) {
         Ok(uid) => {
+            // Create home directory
+            let home = format!("/home/{}", username);
+            let _ = syscall::mkdir(&home);
+
+            // Save updated user database to /etc/passwd, /etc/shadow, /etc/group
+            syscall::save_user_db();
+
             stdout.push_str(&format!("Created user '{}' with uid={}\n", username, uid.0));
             0
         }
@@ -3096,6 +3103,8 @@ fn prog_groupadd(args: &[String], stdout: &mut String, stderr: &mut String) -> i
     // Create the group
     match syscall::add_group(groupname) {
         Ok(gid) => {
+            // Save updated user database to /etc/group
+            syscall::save_user_db();
             stdout.push_str(&format!("Created group '{}' with gid={}\n", groupname, gid.0));
             0
         }
@@ -3178,6 +3187,8 @@ fn prog_passwd(args: &[String], stdout: &mut String, stderr: &mut String) -> i32
 
     match result {
         Ok(msg) => {
+            // Save updated user database to /etc/passwd, /etc/shadow
+            syscall::save_user_db();
             stdout.push_str(&msg);
             0
         }

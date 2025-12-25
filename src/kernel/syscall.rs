@@ -492,10 +492,12 @@ impl Kernel {
         // Create standard directories
         let _ = vfs.create_dir("/dev");
         let _ = vfs.create_dir("/home");
+        let _ = vfs.create_dir("/home/user");
         let _ = vfs.create_dir("/tmp");
         let _ = vfs.create_dir("/etc");
+        let _ = vfs.create_dir("/root");
 
-        Self {
+        let mut kernel = Self {
             processes: HashMap::new(),
             next_pid: 1, // PID 0 is reserved
             objects,
@@ -517,7 +519,12 @@ impl Kernel {
             semaphores: SemaphoreManager::new(),
             mounts: MountTable::with_defaults(0.0),
             ttys: TtyManager::new(),
-        }
+        };
+
+        // Write initial user database to /etc/passwd, /etc/shadow, /etc/group
+        kernel.save_user_db();
+
+        kernel
     }
 
     /// Get a reference to the VFS
@@ -2158,6 +2165,56 @@ impl Kernel {
         &mut self.users
     }
 
+    /// Save user database to /etc/passwd, /etc/shadow, /etc/group
+    pub fn save_user_db(&mut self) {
+        use crate::vfs::write_string;
+
+        // Generate file contents
+        let passwd_content = self.users.to_passwd();
+        let shadow_content = self.users.to_shadow();
+        let group_content = self.users.to_group();
+
+        // Write /etc/passwd (readable by all)
+        let _ = write_string(&mut self.vfs, "/etc/passwd", &passwd_content);
+
+        // Write /etc/shadow (readable only by root)
+        let _ = write_string(&mut self.vfs, "/etc/shadow", &shadow_content);
+
+        // Write /etc/group (readable by all)
+        let _ = write_string(&mut self.vfs, "/etc/group", &group_content);
+
+        // Note: File permissions would be set here if the VFS supported chmod.
+        // For now, the files are created with default permissions.
+    }
+
+    /// Load user database from /etc/passwd, /etc/shadow, /etc/group
+    /// Returns true if files existed and were loaded
+    pub fn load_user_db(&mut self) -> bool {
+        use crate::vfs::read_to_string;
+
+        let mut loaded = false;
+
+        // Try to read /etc/passwd
+        if let Ok(content) = read_to_string(&mut self.vfs, "/etc/passwd") {
+            // Clear existing users and parse from files
+            self.users = UserDb::empty();
+            self.users.parse_passwd(&content);
+            loaded = true;
+        }
+
+        // Try to read /etc/group
+        if let Ok(content) = read_to_string(&mut self.vfs, "/etc/group") {
+            self.users.parse_group(&content);
+        }
+
+        // Try to read /etc/shadow (must be after passwd)
+        if let Ok(content) = read_to_string(&mut self.vfs, "/etc/shadow") {
+            self.users.parse_shadow(&content);
+        }
+
+        loaded
+    }
+
     /// Lookup user by name
     pub fn get_user_by_name(&self, name: &str) -> Option<&User> {
         self.users.get_user_by_name(name)
@@ -2490,6 +2547,16 @@ pub fn get_session_info() -> Option<(u32, u32, u32, String, String)> {
             )
         })
     })
+}
+
+/// Save user database to /etc/passwd, /etc/shadow, /etc/group
+pub fn save_user_db() {
+    KERNEL.with(|k| k.borrow_mut().save_user_db())
+}
+
+/// Load user database from /etc/passwd, /etc/shadow, /etc/group
+pub fn load_user_db() -> bool {
+    KERNEL.with(|k| k.borrow_mut().load_user_db())
 }
 
 /// Push input to the console
@@ -2949,16 +3016,16 @@ mod tests {
     fn test_mkdir_readdir() {
         setup_test_kernel();
 
-        // Create a directory
-        mkdir("/home/user").unwrap();
+        // Create a directory (use a unique name to avoid conflicts)
+        mkdir("/home/testuser").unwrap();
 
         // Create a file in it
-        let fd = open("/home/user/file.txt", OpenFlags::WRITE).unwrap();
+        let fd = open("/home/testuser/file.txt", OpenFlags::WRITE).unwrap();
         write(fd, b"content").unwrap();
         close(fd).unwrap();
 
         // List directory
-        let entries = readdir("/home/user").unwrap();
+        let entries = readdir("/home/testuser").unwrap();
         assert!(entries.contains(&"file.txt".to_string()));
     }
 
