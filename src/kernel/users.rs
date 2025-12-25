@@ -241,6 +241,18 @@ impl Default for UserDb {
 }
 
 impl UserDb {
+    /// Create an empty user database (no default users)
+    pub fn empty() -> Self {
+        Self {
+            users: HashMap::new(),
+            users_by_name: HashMap::new(),
+            groups: HashMap::new(),
+            groups_by_name: HashMap::new(),
+            next_uid: 1000,
+            next_gid: 1000,
+        }
+    }
+
     pub fn new() -> Self {
         let mut db = Self {
             users: HashMap::new(),
@@ -280,6 +292,8 @@ impl UserDb {
         user.home = home.to_string();
         if name == "root" {
             user.shell = "/bin/sh".to_string();
+            // Set default root password to "root"
+            user.set_password("root");
         }
         self.users.insert(uid, user);
         self.users_by_name.insert(name.to_string(), uid);
@@ -289,6 +303,151 @@ impl UserDb {
         let group = Group::new(name, gid);
         self.groups.insert(gid, group);
         self.groups_by_name.insert(name.to_string(), gid);
+    }
+
+    // ========== /etc/passwd FORMAT ==========
+    // Format: name:x:uid:gid:gecos:home:shell
+
+    /// Generate /etc/passwd content
+    pub fn to_passwd(&self) -> String {
+        let mut lines: Vec<_> = self.users.values().collect();
+        lines.sort_by_key(|u| u.uid.0);
+
+        lines.iter()
+            .map(|u| format!(
+                "{}:x:{}:{}:{}:{}:{}",
+                u.name, u.uid.0, u.gid.0, u.gecos, u.home, u.shell
+            ))
+            .collect::<Vec<_>>()
+            .join("\n") + "\n"
+    }
+
+    /// Parse /etc/passwd content
+    pub fn parse_passwd(&mut self, content: &str) {
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            let parts: Vec<&str> = line.split(':').collect();
+            if parts.len() >= 7 {
+                let name = parts[0];
+                let uid = parts[2].parse::<u32>().unwrap_or(65534);
+                let gid = parts[3].parse::<u32>().unwrap_or(65534);
+                let gecos = parts[4];
+                let home = parts[5];
+                let shell = parts[6];
+
+                let uid = Uid(uid);
+                let gid = Gid(gid);
+
+                // Update next_uid if needed
+                if uid.0 >= 1000 && uid.0 < 65534 && uid.0 >= self.next_uid {
+                    self.next_uid = uid.0 + 1;
+                }
+
+                let mut user = User::new(name, uid, gid);
+                user.gecos = gecos.to_string();
+                user.home = home.to_string();
+                user.shell = shell.to_string();
+
+                self.users.insert(uid, user);
+                self.users_by_name.insert(name.to_string(), uid);
+            }
+        }
+    }
+
+    // ========== /etc/shadow FORMAT ==========
+    // Format: name:password_hash:lastchange:min:max:warn:inactive:expire:
+
+    /// Generate /etc/shadow content
+    pub fn to_shadow(&self) -> String {
+        let mut lines: Vec<_> = self.users.values().collect();
+        lines.sort_by_key(|u| u.uid.0);
+
+        lines.iter()
+            .map(|u| {
+                let hash = u.password_hash.as_deref().unwrap_or("!");
+                format!("{}:{}:19000:0:99999:7:::", u.name, hash)
+            })
+            .collect::<Vec<_>>()
+            .join("\n") + "\n"
+    }
+
+    /// Parse /etc/shadow content
+    pub fn parse_shadow(&mut self, content: &str) {
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            let parts: Vec<&str> = line.split(':').collect();
+            if parts.len() >= 2 {
+                let name = parts[0];
+                let hash = parts[1];
+
+                if let Some(user) = self.get_user_by_name_mut(name) {
+                    if hash == "!" || hash == "*" || hash.is_empty() {
+                        user.password_hash = None;
+                    } else {
+                        user.password_hash = Some(hash.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    // ========== /etc/group FORMAT ==========
+    // Format: name:x:gid:member1,member2,...
+
+    /// Generate /etc/group content
+    pub fn to_group(&self) -> String {
+        let mut lines: Vec<_> = self.groups.values().collect();
+        lines.sort_by_key(|g| g.gid.0);
+
+        lines.iter()
+            .map(|g| format!(
+                "{}:x:{}:{}",
+                g.name, g.gid.0, g.members.join(",")
+            ))
+            .collect::<Vec<_>>()
+            .join("\n") + "\n"
+    }
+
+    /// Parse /etc/group content
+    pub fn parse_group(&mut self, content: &str) {
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            let parts: Vec<&str> = line.split(':').collect();
+            if parts.len() >= 4 {
+                let name = parts[0];
+                let gid = parts[2].parse::<u32>().unwrap_or(65534);
+                let members_str = parts[3];
+
+                let gid = Gid(gid);
+
+                // Update next_gid if needed
+                if gid.0 >= 1000 && gid.0 < 65534 && gid.0 >= self.next_gid {
+                    self.next_gid = gid.0 + 1;
+                }
+
+                let mut group = Group::new(name, gid);
+                if !members_str.is_empty() {
+                    group.members = members_str.split(',')
+                        .map(|s| s.to_string())
+                        .collect();
+                }
+
+                self.groups.insert(gid, group);
+                self.groups_by_name.insert(name.to_string(), gid);
+            }
+        }
     }
 
     /// Add a new user
@@ -345,6 +504,12 @@ impl UserDb {
 
     /// Look up user mutably by UID
     pub fn get_user_mut(&mut self, uid: Uid) -> Option<&mut User> {
+        self.users.get_mut(&uid)
+    }
+
+    /// Look up user mutably by name
+    pub fn get_user_by_name_mut(&mut self, name: &str) -> Option<&mut User> {
+        let uid = self.users_by_name.get(name).copied()?;
         self.users.get_mut(&uid)
     }
 

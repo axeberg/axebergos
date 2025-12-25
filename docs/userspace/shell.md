@@ -139,17 +139,37 @@ Programs run via the executor with full pipe/redirect support:
 
 | Command | Description |
 |---------|-------------|
+| `login <user> [pass]` | Log in as user (spawns new session) |
+| `logout` | End current session |
 | `id [user]` | Print user/group IDs |
 | `whoami` | Print current username |
+| `who` | Show logged in users |
+| `w` | Show who is logged in and what they're doing |
 | `groups [user]` | Print group memberships |
 | `useradd <name>` | Create new user |
 | `groupadd <name>` | Create new group |
-| `passwd [user]` | Change password |
-| `su [user]` | Switch user |
+| `passwd [user] [pass]` | Change password |
+| `su [user]` | Switch user (spawns new shell) |
 | `sudo <cmd>` | Run as root |
 | `chmod <mode> <file>` | Change permissions |
 | `chown <user> <file>` | Change owner |
 | `chgrp <group> <file>` | Change group |
+
+#### Session Management
+
+The `login` command creates a proper Linux-like session:
+
+```bash
+$ login alice password
+Login successful: alice
+  PID: 5, SID: 5, PGID: 5
+  UID: 1001, GID: 1001
+  Home: /home/alice
+  Shell: /bin/sh
+  TTY: tty1
+```
+
+Use `logout` to end the session and return to the parent process.
 
 ### Service Management
 

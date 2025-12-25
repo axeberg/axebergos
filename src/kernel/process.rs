@@ -119,6 +119,23 @@ impl OpenFlags {
     };
 }
 
+/// Session identifier (for session management like Linux SID)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Sid(pub u32);
+
+impl Sid {
+    /// Create a SID from a PID (new session leader)
+    pub fn from_pid(pid: Pid) -> Self {
+        Sid(pid.0)
+    }
+}
+
+impl std::fmt::Display for Sid {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "sid:{}", self.0)
+    }
+}
+
 /// A process in the system
 pub struct Process {
     /// Unique process identifier
@@ -129,6 +146,9 @@ pub struct Process {
 
     /// Process group ID (for job control, like Linux PGID)
     pub pgid: Pgid,
+
+    /// Session ID (for session management, like Linux SID)
+    pub sid: Sid,
 
     /// Real user ID (who started the process)
     pub uid: Uid,
@@ -171,6 +191,12 @@ pub struct Process {
 
     /// Child processes (for waitpid)
     pub children: Vec<Pid>,
+
+    /// Controlling TTY (like Linux ctty)
+    pub ctty: Option<String>,
+
+    /// Is this process a session leader?
+    pub is_session_leader: bool,
 }
 
 impl Process {
@@ -178,6 +204,8 @@ impl Process {
     pub fn new(pid: Pid, name: String, parent: Option<Pid>) -> Self {
         // Process group defaults to own PID (new session leader)
         let pgid = Pgid::from_pid(pid);
+        // Session ID defaults to own PID (new session)
+        let sid = Sid::from_pid(pid);
 
         // Default to regular user (uid 1000)
         let uid = Uid(1000);
@@ -195,6 +223,7 @@ impl Process {
             pid,
             parent,
             pgid,
+            sid,
             uid,
             gid,
             euid: uid,
@@ -209,6 +238,8 @@ impl Process {
             task: None,
             name,
             children: Vec::new(),
+            ctty: None,
+            is_session_leader: true, // New processes are session leaders by default
         }
     }
 
@@ -218,6 +249,7 @@ impl Process {
         name: String,
         parent: Option<Pid>,
         pgid: Pgid,
+        sid: Sid,
         uid: Uid,
         gid: Gid,
         groups: Vec<Gid>,
@@ -228,6 +260,7 @@ impl Process {
             pid,
             parent,
             pgid,
+            sid,
             uid,
             gid,
             euid: uid,
@@ -242,12 +275,15 @@ impl Process {
             task: None,
             name,
             children: Vec::new(),
+            ctty: None,
+            is_session_leader: false,
         }
     }
 
     /// Create a process with a memory limit
     pub fn with_memory_limit(pid: Pid, name: String, parent: Option<Pid>, limit: usize) -> Self {
         let pgid = Pgid::from_pid(pid);
+        let sid = Sid::from_pid(pid);
         let uid = Uid(1000);
         let gid = Gid(1000);
 
@@ -262,6 +298,7 @@ impl Process {
             pid,
             parent,
             pgid,
+            sid,
             uid,
             gid,
             euid: uid,
@@ -276,7 +313,69 @@ impl Process {
             task: None,
             name,
             children: Vec::new(),
+            ctty: None,
+            is_session_leader: true,
         }
+    }
+
+    /// Create a login shell process for a user (like what login(1) does)
+    pub fn new_login_shell(
+        pid: Pid,
+        name: String,
+        parent: Option<Pid>,
+        uid: Uid,
+        gid: Gid,
+        groups: Vec<Gid>,
+        username: &str,
+        home: &str,
+        shell: &str,
+    ) -> Self {
+        // Login shells are session leaders with their own PGID and SID
+        let pgid = Pgid::from_pid(pid);
+        let sid = Sid::from_pid(pid);
+
+        // Set up proper login environment
+        let mut environ = HashMap::new();
+        environ.insert("HOME".to_string(), home.to_string());
+        environ.insert("USER".to_string(), username.to_string());
+        environ.insert("LOGNAME".to_string(), username.to_string());
+        environ.insert("SHELL".to_string(), shell.to_string());
+        environ.insert("PATH".to_string(), "/bin:/usr/bin:/usr/local/bin".to_string());
+        environ.insert("TERM".to_string(), "xterm-256color".to_string());
+        environ.insert("PWD".to_string(), home.to_string());
+
+        Self {
+            pid,
+            parent,
+            pgid,
+            sid,
+            uid,
+            gid,
+            euid: uid,
+            egid: gid,
+            groups,
+            state: ProcessState::Running,
+            files: FileTable::new(),
+            memory: ProcessMemory::new(),
+            signals: ProcessSignals::new(),
+            environ,
+            cwd: PathBuf::from(home),
+            task: None,
+            name,
+            children: Vec::new(),
+            ctty: Some("tty1".to_string()),
+            is_session_leader: true,
+        }
+    }
+
+    /// Check if this process is the session leader
+    pub fn is_session_leader(&self) -> bool {
+        self.is_session_leader && self.sid.0 == self.pid.0
+    }
+
+    /// Get session ID
+    pub fn getsid(&self) -> Sid {
+        self.sid
     }
 
     /// Get an environment variable

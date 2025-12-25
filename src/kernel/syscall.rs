@@ -21,7 +21,7 @@ use super::memory::{
 use super::object::{
     ConsoleObject, FileObject, KernelObject, ObjectTable, PipeObject, WindowId, WindowObject,
 };
-pub use super::process::{Fd, Handle, OpenFlags, Pgid, Pid, Process, ProcessState};
+pub use super::process::{Fd, Handle, OpenFlags, Pgid, Pid, Process, ProcessState, Sid};
 use super::devfs::DevFs;
 use super::fifo::FifoRegistry;
 use super::init::InitSystem;
@@ -35,7 +35,7 @@ use super::sysfs::SysFs;
 use super::task::TaskId;
 use super::timer::{TimerId, TimerQueue};
 use super::trace::{TraceCategory, TraceSummary, Tracer};
-use super::users::{Gid, Group, Uid, User, UserDb};
+use super::users::{check_permission, FileMode, Gid, Group, Uid, User, UserDb};
 use crate::vfs::{FileSystem, MemoryFs, OpenOptions as VfsOpenOptions};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -492,10 +492,12 @@ impl Kernel {
         // Create standard directories
         let _ = vfs.create_dir("/dev");
         let _ = vfs.create_dir("/home");
+        let _ = vfs.create_dir("/home/user");
         let _ = vfs.create_dir("/tmp");
         let _ = vfs.create_dir("/etc");
+        let _ = vfs.create_dir("/root");
 
-        Self {
+        let mut kernel = Self {
             processes: HashMap::new(),
             next_pid: 1, // PID 0 is reserved
             objects,
@@ -517,7 +519,12 @@ impl Kernel {
             semaphores: SemaphoreManager::new(),
             mounts: MountTable::with_defaults(0.0),
             ttys: TtyManager::new(),
-        }
+        };
+
+        // Write initial user database to /etc/passwd, /etc/shadow, /etc/group
+        kernel.save_user_db();
+
+        kernel
     }
 
     /// Get a reference to the VFS
@@ -629,6 +636,90 @@ impl Kernel {
 
         self.processes.insert(pid, process);
         pid
+    }
+
+    /// Create a new login shell process for a user (like Linux login(1))
+    /// This creates a proper session leader with its own session ID and process group,
+    /// sets up the user's environment, and allocates a controlling TTY.
+    pub fn spawn_login_shell(
+        &mut self,
+        username: &str,
+        uid: Uid,
+        gid: Gid,
+        home: &str,
+        shell: &str,
+        parent: Option<Pid>,
+    ) -> Pid {
+        let pid = Pid(self.next_pid);
+        self.next_pid += 1;
+
+        let shell_name = format!("-{}", shell.rsplit('/').next().unwrap_or("sh"));
+        let mut process = Process::new_login_shell(
+            pid,
+            shell_name,
+            parent,
+            uid,
+            gid,
+            vec![gid],
+            username,
+            home,
+            shell,
+        );
+
+        // Give the process stdin/stdout/stderr pointing to console
+        self.objects.retain(self.console_handle);
+        self.objects.retain(self.console_handle);
+        self.objects.retain(self.console_handle);
+
+        process.files.insert(Fd::STDIN, self.console_handle);
+        process.files.insert(Fd::STDOUT, self.console_handle);
+        process.files.insert(Fd::STDERR, self.console_handle);
+
+        // Associate TTY with this session
+        if let Some(tty) = self.ttys.get_tty_mut("tty1") {
+            tty.session = Some(pid.0);
+            tty.pgrp = Some(pid.0);
+        }
+
+        // Track parent-child relationship
+        if let Some(parent_pid) = parent {
+            if let Some(parent_proc) = self.processes.get_mut(&parent_pid) {
+                parent_proc.children.push(pid);
+            }
+        }
+
+        self.processes.insert(pid, process);
+        pid
+    }
+
+    /// setsid - Create a new session (like Linux setsid(2))
+    /// The calling process becomes the session leader and process group leader.
+    /// Returns the new session ID on success.
+    pub fn sys_setsid(&mut self) -> SyscallResult<u32> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get_mut(&current).unwrap();
+
+        // Cannot create new session if already a process group leader
+        if process.pgid.0 == process.pid.0 && process.is_session_leader {
+            return Err(SyscallError::PermissionDenied);
+        }
+
+        // Create new session
+        let new_sid = Sid::from_pid(current);
+        process.sid = new_sid;
+        process.pgid = Pgid::from_pid(current);
+        process.is_session_leader = true;
+        process.ctty = None; // Lose controlling terminal
+
+        Ok(new_sid.0)
+    }
+
+    /// getsid - Get session ID (like Linux getsid(2))
+    pub fn sys_getsid(&self, pid: Option<Pid>) -> SyscallResult<u32> {
+        let target_pid = pid.unwrap_or_else(|| self.current.unwrap());
+        let process = self.processes.get(&target_pid)
+            .ok_or(SyscallError::NoProcess)?;
+        Ok(process.sid.0)
     }
 
     /// Get a process by PID
@@ -959,6 +1050,9 @@ impl Kernel {
             return Err(SyscallError::NotADirectory);
         }
 
+        // Check execute permission on directory (required to cd into it)
+        self.check_file_permission(path_str, false, false, true)?;
+
         let process = self.processes.get_mut(&current).unwrap();
         process.cwd = resolved;
         Ok(())
@@ -1187,6 +1281,70 @@ impl Kernel {
         }
     }
 
+    /// Check if the current process has permission to access a file
+    /// Returns Ok(()) if allowed, Err(PermissionDenied) if not
+    fn check_file_permission(
+        &self,
+        path: &str,
+        want_read: bool,
+        want_write: bool,
+        want_exec: bool,
+    ) -> SyscallResult<()> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get(&current).unwrap();
+
+        // Get file metadata
+        let meta = self.vfs.metadata(path)?;
+
+        // Check permission
+        let allowed = check_permission(
+            Uid(meta.uid),
+            Gid(meta.gid),
+            FileMode::new(meta.mode),
+            process.euid,
+            process.egid,
+            &process.groups,
+            want_read,
+            want_write,
+            want_exec,
+        );
+
+        if allowed {
+            Ok(())
+        } else {
+            Err(SyscallError::PermissionDenied)
+        }
+    }
+
+    /// Check if the current process has write permission on the parent directory
+    /// (needed for creating/deleting files in the directory)
+    fn check_parent_write_permission(&self, path: &str) -> SyscallResult<()> {
+        // Get parent directory
+        let parent = Path::new(path)
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| "/".to_string());
+
+        let parent = if parent.is_empty() { "/" } else { &parent };
+
+        // Need write and execute on parent directory to create/delete files
+        self.check_file_permission(parent, false, true, true)
+    }
+
+    /// Get the current process's effective UID (for setting file ownership)
+    fn current_euid(&self) -> SyscallResult<Uid> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get(&current).unwrap();
+        Ok(process.euid)
+    }
+
+    /// Get the current process's effective GID
+    fn current_egid(&self) -> SyscallResult<Gid> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get(&current).unwrap();
+        Ok(process.egid)
+    }
+
     /// Open a device (paths starting with /dev/)
     fn open_device(&mut self, path: &Path, _flags: OpenFlags) -> SyscallResult<Handle> {
         let name = path
@@ -1223,6 +1381,19 @@ impl Kernel {
     fn open_file(&mut self, path: &Path, flags: OpenFlags) -> SyscallResult<Handle> {
         let path_str = path.to_str().ok_or(SyscallError::InvalidArgument)?;
 
+        // Check if file exists
+        let file_exists = self.vfs.exists(path_str);
+
+        if file_exists {
+            // Check permissions on existing file
+            self.check_file_permission(path_str, flags.read, flags.write, false)?;
+        } else if flags.create {
+            // For new files, check write permission on parent directory
+            self.check_parent_write_permission(path_str)?;
+        } else {
+            return Err(SyscallError::NotFound);
+        }
+
         // Convert our flags to VFS options
         // Note: We always need read access in VFS to read existing content into FileObject,
         // but the actual permissions are tracked separately in the FileObject
@@ -1235,6 +1406,13 @@ impl Kernel {
 
         // Open via VFS
         let vfs_handle = self.vfs.open(path_str, vfs_opts)?;
+
+        // If we just created a new file, set ownership to current user
+        if !file_exists && flags.create {
+            let euid = self.current_euid()?;
+            let egid = self.current_egid()?;
+            let _ = self.vfs.chown(path_str, Some(euid.0), Some(egid.0));
+        }
 
         // Read the file contents
         let meta = self.vfs.metadata(path_str)?;
@@ -1305,7 +1483,17 @@ impl Kernel {
         let current = self.current.ok_or(SyscallError::NoProcess)?;
         let resolved = self.resolve_path(current, path)?;
         let path_str = resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
+
+        // Check write/execute permission on parent directory
+        self.check_parent_write_permission(path_str)?;
+
         self.vfs.create_dir(path_str)?;
+
+        // Set ownership to current user
+        let euid = self.current_euid()?;
+        let egid = self.current_egid()?;
+        let _ = self.vfs.chown(path_str, Some(euid.0), Some(egid.0));
+
         Ok(())
     }
 
@@ -1315,7 +1503,7 @@ impl Kernel {
         let resolved = self.resolve_path(current, path)?;
         let path_str = resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
 
-        // Handle /proc directory listings
+        // Handle /proc directory listings (always readable)
         if ProcFs::is_proc_path(path_str) {
             let pids: Vec<u32> = self.processes.keys().map(|p| p.0).collect();
             if let Some(entries) = self.procfs.list_dir(path_str, &pids) {
@@ -1324,7 +1512,7 @@ impl Kernel {
             return Err(SyscallError::NotFound);
         }
 
-        // Handle /dev directory listings
+        // Handle /dev directory listings (always readable)
         if DevFs::is_dev_path(path_str) {
             if let Some(entries) = self.devfs.list_dir(path_str) {
                 return Ok(entries);
@@ -1332,13 +1520,16 @@ impl Kernel {
             return Err(SyscallError::NotFound);
         }
 
-        // Handle /sys directory listings
+        // Handle /sys directory listings (always readable)
         if SysFs::is_sys_path(path_str) {
             if let Some(entries) = self.sysfs.list_dir(path_str) {
                 return Ok(entries);
             }
             return Err(SyscallError::NotFound);
         }
+
+        // Check read and execute permission on directory
+        self.check_file_permission(path_str, true, false, true)?;
 
         let entries = self.vfs.read_dir(path_str)?;
         Ok(entries.into_iter().map(|e| e.name).collect())
@@ -1436,6 +1627,10 @@ impl Kernel {
         let current = self.current.ok_or(SyscallError::NoProcess)?;
         let resolved = self.resolve_path(current, path)?;
         let path_str = resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
+
+        // Check write/execute permission on parent directory
+        self.check_parent_write_permission(path_str)?;
+
         self.vfs.remove_file(path_str)?;
         Ok(())
     }
@@ -1445,6 +1640,10 @@ impl Kernel {
         let current = self.current.ok_or(SyscallError::NoProcess)?;
         let resolved = self.resolve_path(current, path)?;
         let path_str = resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
+
+        // Check write/execute permission on parent directory
+        self.check_parent_write_permission(path_str)?;
+
         self.vfs.remove_dir(path_str)?;
         Ok(())
     }
@@ -1456,6 +1655,11 @@ impl Kernel {
         let to_resolved = self.resolve_path(current, to)?;
         let from_str = from_resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
         let to_str = to_resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
+
+        // Check write/execute permission on both source and destination parent directories
+        self.check_parent_write_permission(from_str)?;
+        self.check_parent_write_permission(to_str)?;
+
         self.vfs.rename(from_str, to_str)?;
         Ok(())
     }
@@ -1467,7 +1671,19 @@ impl Kernel {
         let to_resolved = self.resolve_path(current, to)?;
         let from_str = from_resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
         let to_str = to_resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
+
+        // Check read permission on source file
+        self.check_file_permission(from_str, true, false, false)?;
+        // Check write permission on destination parent directory
+        self.check_parent_write_permission(to_str)?;
+
         let size = self.vfs.copy_file(from_str, to_str)?;
+
+        // Set ownership of new file to current user
+        let euid = self.current_euid()?;
+        let egid = self.current_egid()?;
+        let _ = self.vfs.chown(to_str, Some(euid.0), Some(egid.0));
+
         Ok(size)
     }
 
@@ -1476,8 +1692,18 @@ impl Kernel {
         let current = self.current.ok_or(SyscallError::NoProcess)?;
         let link_resolved = self.resolve_path(current, link_path)?;
         let link_str = link_resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
+
+        // Check write/execute permission on parent directory
+        self.check_parent_write_permission(link_str)?;
+
         // Target is stored as-is (can be relative or absolute)
         self.vfs.symlink(target, link_str)?;
+
+        // Set ownership of symlink to current user
+        let euid = self.current_euid()?;
+        let egid = self.current_egid()?;
+        let _ = self.vfs.chown(link_str, Some(euid.0), Some(egid.0));
+
         Ok(())
     }
 
@@ -1939,6 +2165,56 @@ impl Kernel {
         &mut self.users
     }
 
+    /// Save user database to /etc/passwd, /etc/shadow, /etc/group
+    pub fn save_user_db(&mut self) {
+        use crate::vfs::write_string;
+
+        // Generate file contents
+        let passwd_content = self.users.to_passwd();
+        let shadow_content = self.users.to_shadow();
+        let group_content = self.users.to_group();
+
+        // Write /etc/passwd (readable by all)
+        let _ = write_string(&mut self.vfs, "/etc/passwd", &passwd_content);
+
+        // Write /etc/shadow (readable only by root)
+        let _ = write_string(&mut self.vfs, "/etc/shadow", &shadow_content);
+
+        // Write /etc/group (readable by all)
+        let _ = write_string(&mut self.vfs, "/etc/group", &group_content);
+
+        // Note: File permissions would be set here if the VFS supported chmod.
+        // For now, the files are created with default permissions.
+    }
+
+    /// Load user database from /etc/passwd, /etc/shadow, /etc/group
+    /// Returns true if files existed and were loaded
+    pub fn load_user_db(&mut self) -> bool {
+        use crate::vfs::read_to_string;
+
+        let mut loaded = false;
+
+        // Try to read /etc/passwd
+        if let Ok(content) = read_to_string(&mut self.vfs, "/etc/passwd") {
+            // Clear existing users and parse from files
+            self.users = UserDb::empty();
+            self.users.parse_passwd(&content);
+            loaded = true;
+        }
+
+        // Try to read /etc/group
+        if let Ok(content) = read_to_string(&mut self.vfs, "/etc/group") {
+            self.users.parse_group(&content);
+        }
+
+        // Try to read /etc/shadow (must be after passwd)
+        if let Ok(content) = read_to_string(&mut self.vfs, "/etc/shadow") {
+            self.users.parse_shadow(&content);
+        }
+
+        loaded
+    }
+
     /// Lookup user by name
     pub fn get_user_by_name(&self, name: &str) -> Option<&User> {
         self.users.get_user_by_name(name)
@@ -2220,9 +2496,67 @@ pub fn spawn_process(name: &str) -> Pid {
     KERNEL.with(|k| k.borrow_mut().spawn_process(name, None))
 }
 
+/// Spawn a new login shell process for a user
+/// Creates a new session leader with proper credentials and environment
+pub fn spawn_login_shell(
+    username: &str,
+    uid: u32,
+    gid: u32,
+    home: &str,
+    shell: &str,
+) -> Pid {
+    KERNEL.with(|k| {
+        let current = k.borrow().current;
+        k.borrow_mut().spawn_login_shell(
+            username,
+            Uid(uid),
+            Gid(gid),
+            home,
+            shell,
+            current,
+        )
+    })
+}
+
 /// Set the current running process
 pub fn set_current_process(pid: Pid) {
     KERNEL.with(|k| k.borrow_mut().set_current(pid))
+}
+
+/// setsid - Create a new session
+pub fn setsid() -> SyscallResult<u32> {
+    KERNEL.with(|k| k.borrow_mut().sys_setsid())
+}
+
+/// getsid - Get session ID
+pub fn getsid(pid: Option<u32>) -> SyscallResult<u32> {
+    KERNEL.with(|k| k.borrow().sys_getsid(pid.map(Pid)))
+}
+
+/// Get information about the current session
+pub fn get_session_info() -> Option<(u32, u32, u32, String, String)> {
+    KERNEL.with(|k| {
+        let kernel = k.borrow();
+        kernel.current_process().map(|proc| {
+            (
+                proc.pid.0,
+                proc.sid.0,
+                proc.pgid.0,
+                proc.environ.get("USER").cloned().unwrap_or_default(),
+                proc.ctty.clone().unwrap_or_default(),
+            )
+        })
+    })
+}
+
+/// Save user database to /etc/passwd, /etc/shadow, /etc/group
+pub fn save_user_db() {
+    KERNEL.with(|k| k.borrow_mut().save_user_db())
+}
+
+/// Load user database from /etc/passwd, /etc/shadow, /etc/group
+pub fn load_user_db() -> bool {
+    KERNEL.with(|k| k.borrow_mut().load_user_db())
 }
 
 /// Push input to the console
@@ -2682,16 +3016,16 @@ mod tests {
     fn test_mkdir_readdir() {
         setup_test_kernel();
 
-        // Create a directory
-        mkdir("/home/user").unwrap();
+        // Create a directory (use a unique name to avoid conflicts)
+        mkdir("/home/testuser").unwrap();
 
         // Create a file in it
-        let fd = open("/home/user/file.txt", OpenFlags::WRITE).unwrap();
+        let fd = open("/home/testuser/file.txt", OpenFlags::WRITE).unwrap();
         write(fd, b"content").unwrap();
         close(fd).unwrap();
 
         // List directory
-        let entries = readdir("/home/user").unwrap();
+        let entries = readdir("/home/testuser").unwrap();
         assert!(entries.contains(&"file.txt".to_string()));
     }
 

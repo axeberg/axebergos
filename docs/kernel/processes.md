@@ -6,29 +6,81 @@ Processes are the fundamental unit of isolation in axeberg.
 
 ```rust
 pub struct Process {
-    /// Unique process identifier
-    pub pid: Pid,
+    // Identity
+    pub pid: Pid,              // Unique process identifier
+    pub parent: Option<Pid>,   // Parent process (None for init)
+    pub pgid: Pgid,            // Process group ID (job control)
+    pub sid: Sid,              // Session ID
 
-    /// Parent process (None for init)
-    pub parent: Option<Pid>,
+    // Credentials (Linux-like)
+    pub uid: Uid,              // Real user ID
+    pub gid: Gid,              // Real group ID
+    pub euid: Uid,             // Effective user ID
+    pub egid: Gid,             // Effective group ID
+    pub groups: Vec<Gid>,      // Supplementary groups
 
-    /// Current state
+    // State
     pub state: ProcessState,
+    pub files: FileTable,      // File descriptors
+    pub memory: ProcessMemory, // Memory tracking
+    pub environ: HashMap<String, String>, // Environment
+    pub cwd: PathBuf,          // Working directory
 
-    /// File descriptor table
-    pub files: FileTable,
+    // Session
+    pub ctty: Option<String>,  // Controlling TTY
+    pub is_session_leader: bool,
 
-    /// Memory tracking
-    pub memory: ProcessMemory,
-
-    /// Current working directory
-    pub cwd: PathBuf,
-
-    /// The executor task running this process's code
+    // Execution
     pub task: Option<TaskId>,
-
-    /// Process name (for debugging/display)
     pub name: String,
+    pub children: Vec<Pid>,
+}
+```
+
+## Sessions and Process Groups
+
+Like Linux, axeberg supports proper session management:
+
+```
+Session (sid=100)
+├── Process Group (pgid=100) - foreground
+│   ├── bash (pid=100, session leader)
+│   └── vim (pid=101)
+└── Process Group (pgid=102) - background
+    └── make (pid=102)
+```
+
+**Session Leader**: First process in a session (typically login shell)
+- Created by `login` command or `setsid()` syscall
+- Has controlling TTY
+- Death sends SIGHUP to all session processes
+
+**Process Groups**: Used for job control (fg/bg)
+
+## User Credentials
+
+Each process has Linux-like credentials:
+
+| Field | Purpose |
+|-------|---------|
+| `uid` | Real user ID (who started process) |
+| `gid` | Real group ID |
+| `euid` | Effective UID (for permission checks) |
+| `egid` | Effective GID |
+| `groups` | Supplementary groups |
+
+### Permission Checking
+
+```rust
+// Kernel checks effective credentials for file access
+if euid == 0 {
+    // Root can do anything
+} else if euid == file_uid {
+    // Owner permissions
+} else if egid == file_gid || groups.contains(&file_gid) {
+    // Group permissions
+} else {
+    // Other permissions
 }
 ```
 
@@ -36,32 +88,43 @@ pub struct Process {
 
 ```rust
 pub enum ProcessState {
-    /// Process is ready to run or currently running
-    Running,
-
-    /// Process is waiting for I/O or a timer
-    Sleeping,
-
-    /// Process is blocked waiting for another process
-    Blocked(Pid),
-
-    /// Process has exited with a status code
-    Zombie(i32),
+    Running,       // Ready to run or currently running
+    Sleeping,      // Waiting for I/O or timer
+    Blocked(Pid),  // Waiting for another process
+    Zombie(i32),   // Exited, waiting to be reaped
 }
 ```
 
-## Process Identification
+## Login Shells
 
-Each process has a unique `Pid`:
+The `login` command creates a proper session:
 
 ```rust
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Pid(pub u32);
+pub fn spawn_login_shell(
+    username: &str,
+    uid: Uid,
+    gid: Gid,
+    home: &str,
+    shell: &str,
+) -> Pid {
+    // Creates new process with:
+    // - New session ID (becomes session leader)
+    // - New process group
+    // - Proper credentials (uid/gid)
+    // - Environment (HOME, USER, SHELL, etc.)
+    // - Controlling TTY
+}
 ```
 
-Special PIDs:
-- `Pid(0)` - Reserved (unused)
-- `Pid(1)` - Init process
+Usage:
+```bash
+$ login alice password
+Login successful: alice
+  PID: 5, SID: 5, PGID: 5
+  UID: 1001, GID: 1001
+  Home: /home/alice
+  TTY: tty1
+```
 
 ## File Descriptor Table
 
@@ -74,8 +137,8 @@ pub struct FileTable {
 }
 ```
 
-- FDs 0, 1, 2 are reserved for stdin/stdout/stderr
-- New FDs are allocated starting from 3
+- FDs 0, 1, 2 are stdin/stdout/stderr
+- New FDs allocated from 3
 - Each FD maps to a kernel object Handle
 
 ## Process Lifecycle
@@ -83,25 +146,11 @@ pub struct FileTable {
 ### Creation
 
 ```rust
-// Internal kernel function
-pub fn spawn_process(&mut self, name: &str, parent: Option<Pid>) -> Pid {
-    let pid = Pid(self.next_pid);
-    self.next_pid += 1;
+// Regular process
+let pid = spawn_process("name", Some(parent_pid));
 
-    let mut process = Process::new(pid, name.to_string(), parent);
-
-    // Set up stdio (console for all three)
-    self.objects.retain(self.console_handle);  // stdin
-    self.objects.retain(self.console_handle);  // stdout
-    self.objects.retain(self.console_handle);  // stderr
-
-    process.files.insert(Fd::STDIN, self.console_handle);
-    process.files.insert(Fd::STDOUT, self.console_handle);
-    process.files.insert(Fd::STDERR, self.console_handle);
-
-    self.processes.insert(pid, process);
-    pid
-}
+// Login shell (with credentials)
+let pid = spawn_login_shell("user", uid, gid, "/home/user", "/bin/sh");
 ```
 
 ### Termination
@@ -112,119 +161,61 @@ pub fn exit(code: i32) -> SyscallResult<()>
 
 When a process exits:
 1. State changes to `Zombie(code)`
-2. File descriptors are closed (decrements refcounts)
-3. Memory regions are freed
-4. Parent can retrieve exit status
+2. File descriptors closed
+3. Memory regions freed
+4. Parent notified
+5. If session leader, SIGHUP sent to session
+
+### Logout
+
+```bash
+$ logout
+Session 5 ended for user 'alice' (PID 5)
+Returned to parent process.
+```
+
+Logout terminates the session and returns to parent.
+
+## Environment Variables
+
+Processes inherit environment on spawn:
+
+```rust
+environ.insert("HOME", "/home/user");
+environ.insert("USER", "user");
+environ.insert("SHELL", "/bin/sh");
+environ.insert("PATH", "/bin:/usr/bin");
+environ.insert("TERM", "xterm-256color");
+```
 
 ## Isolation Model
 
 ### What's Isolated
 
-- **File descriptors**: Each process has its own table
-- **Memory regions**: Per-process allocation tracking
-- **Working directory**: Separate cwd per process
+- **File descriptors**: Per-process table
+- **Memory regions**: Per-process tracking
+- **Working directory**: Separate per process
+- **Environment**: Inherited copy
+- **Credentials**: Per-process uid/gid
 
 ### What's Shared
 
 - **Kernel objects**: Via handle reference counting
-- **Shared memory**: Explicitly via shm* syscalls
-- **Console**: All processes write to same console
+- **Shared memory**: Explicit via shm* syscalls
+- **User database**: System-wide `/etc/passwd`
 
-### Note on Memory Isolation
+## Session Syscalls
 
-In WASM, we cannot achieve true memory isolation:
-- No hardware MMU
-- Single address space
-- All code shares the same heap
-
-Our "isolation" is logical:
-- Processes can only access memory they explicitly allocate
-- Kernel validates all access through syscalls
-- But a malicious process could still read/write arbitrary memory
-
-This is acceptable for a personal OS where you control all code.
-
-## Process Memory
-
-Each process tracks its memory usage:
-
-```rust
-pub struct ProcessMemory {
-    regions: HashMap<RegionId, MemoryRegion>,
-    allocated: usize,
-    limit: usize,
-    peak: usize,
-    attached_shm: HashMap<ShmId, RegionId>,
-}
-```
-
-Features:
-- **Allocation tracking**: Know exactly how much is allocated
-- **Memory limits**: Prevent runaway processes
-- **Peak tracking**: Understand memory high-water mark
-- **Shared memory**: Track attached segments
-
-## Context Switching
-
-axeberg uses cooperative multitasking:
-
-1. Tasks are async Rust futures
-2. Tasks yield at `await` points
-3. Executor selects next task by priority
-4. No preemption (no timer interrupts)
-
-```rust
-// Example process code
-kernel::spawn(async {
-    // This process runs until it awaits or completes
-    let fd = syscall::open("/file", OpenFlags::READ)?;
-
-    // If read blocks, we yield here
-    let n = syscall::read(fd, &mut buf).await?;
-
-    syscall::close(fd)?;
-});
-```
-
-## Init Process
-
-The first process (PID 1) is special:
-- Created during boot
-- Parent of all other processes
-- Sets up initial filesystem
-- Spawns system daemons
-
-```rust
-pub fn boot() {
-    let init_pid = syscall::spawn_process("init");
-    syscall::set_current_process(init_pid);
-
-    // init's work...
-    init_filesystem();
-    spawn_init_processes();
-
-    runtime::start();
-}
-```
-
-## Process Communication
-
-Processes can communicate via:
-
-1. **Pipes**: `pipe()` syscall
-2. **Shared Memory**: `shmget/shmat/shmdt`
-3. **Files**: Write to VFS, read from VFS
-4. **Channels**: Kernel IPC (higher-level abstraction)
-
-## Future Work
-
-- **Process hierarchy**: Proper parent-child relationships
-- **Signal handling**: Inter-process signaling
-- **Process groups**: Job control
-- **Fork/exec**: Traditional Unix semantics (maybe)
+| Syscall | Description |
+|---------|-------------|
+| `setsid()` | Create new session, become leader |
+| `getsid(pid)` | Get session ID |
+| `getpgid(pid)` | Get process group ID |
+| `setpgid(pid, pgid)` | Set process group |
 
 ## Related Documentation
 
-- [Memory Management](memory.md) - Process memory details
-- [Syscall Interface](syscalls.md) - Process syscalls
+- [Memory Management](memory.md) - Process memory
+- [Syscall Interface](syscalls.md) - All syscalls
+- [Signals](signals.md) - Signal handling
 - [IPC](ipc.md) - Inter-process communication

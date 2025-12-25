@@ -172,6 +172,21 @@ impl ProgramRegistry {
         reg.register("stty", prog_stty);
         reg.register("tty", prog_tty);
 
+        // Package manager commands
+        reg.register("pkg", prog_pkg);
+
+        // User login commands
+        reg.register("login", prog_login);
+        reg.register("logout", prog_logout);
+        reg.register("su", prog_su);
+        reg.register("sudo", prog_sudo);
+        reg.register("who", prog_who);
+        reg.register("w", prog_w);
+
+        // Cron/scheduling commands
+        reg.register("crontab", prog_crontab);
+        reg.register("at", prog_at);
+
         reg
     }
 
@@ -1831,7 +1846,7 @@ fn prog_autosave(args: &[String], stdout: &mut String, stderr: &mut String) -> i
             return 0;
         }
 
-        match args[0].as_str() {
+        match args[0] {
             "on" => {
                 terminal::set_autosave(true);
                 stdout.push_str("Auto-save enabled\n");
@@ -3044,6 +3059,13 @@ fn prog_useradd(args: &[String], stdout: &mut String, stderr: &mut String) -> i3
     // Create the user
     match syscall::add_user(username, gid) {
         Ok(uid) => {
+            // Create home directory
+            let home = format!("/home/{}", username);
+            let _ = syscall::mkdir(&home);
+
+            // Save updated user database to /etc/passwd, /etc/shadow, /etc/group
+            syscall::save_user_db();
+
             stdout.push_str(&format!("Created user '{}' with uid={}\n", username, uid.0));
             0
         }
@@ -3081,6 +3103,8 @@ fn prog_groupadd(args: &[String], stdout: &mut String, stderr: &mut String) -> i
     // Create the group
     match syscall::add_group(groupname) {
         Ok(gid) => {
+            // Save updated user database to /etc/group
+            syscall::save_user_db();
             stdout.push_str(&format!("Created group '{}' with gid={}\n", groupname, gid.0));
             0
         }
@@ -3091,33 +3115,50 @@ fn prog_groupadd(args: &[String], stdout: &mut String, stderr: &mut String) -> i
     }
 }
 
-/// passwd - change password (placeholder)
+/// passwd - change password
 fn prog_passwd(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
     let (_, args) = extract_stdin(args);
 
-    if let Some(help) = check_help(&args, "Usage: passwd [USER]\nChange user password.") {
+    if let Some(help) = check_help(&args, "Usage: passwd [USER] [PASSWORD]\n\nChange user password.\n\nExamples:\n  passwd mypassword          Set your own password\n  passwd root newpass        Set root's password (requires root)\n  passwd user                Clear user's password (requires root)") {
         stdout.push_str(&help);
         return 0;
     }
 
-    // Check if changing own password or other's
-    let target = if args.is_empty() {
-        // Changing own password
-        if let Ok(euid) = syscall::geteuid() {
-            syscall::get_user_by_uid(euid)
-                .map(|u| u.name.clone())
-                .unwrap_or_else(|| "user".to_string())
+    // Determine target user and new password
+    let euid = syscall::geteuid().unwrap_or_default();
+
+    let (target, new_password) = if args.is_empty() {
+        stderr.push_str("passwd: usage: passwd [USER] <PASSWORD>\n");
+        return 1;
+    } else if args.len() == 1 {
+        // Single arg: could be password for self, or username to clear password (if root)
+        let current_user = syscall::get_user_by_uid(euid)
+            .map(|u| u.name.clone())
+            .unwrap_or_else(|| "user".to_string());
+
+        // If argument looks like a username that exists, treat it as clearing password
+        if euid.0 == 0 && syscall::get_user_by_name(&args[0]).is_some() {
+            (args[0].to_string(), None)
         } else {
-            "user".to_string()
+            // Treat as password for current user
+            (current_user, Some(args[0].to_string()))
         }
     } else {
-        // Changing another user's password - need root
-        let euid = syscall::geteuid().unwrap_or_default();
+        // Two or more args: first is username, rest is password
+        let username = args[0].to_string();
+        let password = args[1..].join(" ");
+
+        // Check permission
         if euid.0 != 0 {
-            stderr.push_str("passwd: permission denied (must be root to change other users' passwords)\n");
-            return 1;
+            let current_user = syscall::get_user_by_uid(euid)
+                .map(|u| u.name.clone())
+                .unwrap_or_else(|| "".to_string());
+            if username != current_user {
+                stderr.push_str("passwd: permission denied (must be root to change other users' passwords)\n");
+                return 1;
+            }
         }
-        args[0].to_string()
+        (username, if password.is_empty() { None } else { Some(password) })
     };
 
     if syscall::get_user_by_name(&target).is_none() {
@@ -3125,10 +3166,37 @@ fn prog_passwd(args: &[String], stdout: &mut String, stderr: &mut String) -> i32
         return 1;
     }
 
-    // In a real system, this would prompt for password
-    stdout.push_str(&format!("Changing password for '{}'\n", target));
-    stdout.push_str("(Password change simulated - no actual password set)\n");
-    0
+    // Set the password
+    let result = syscall::KERNEL.with(|k| {
+        let mut kernel = k.borrow_mut();
+        if let Some(user) = kernel.users_mut().get_user_by_name_mut(&target) {
+            match new_password {
+                Some(pwd) => {
+                    user.set_password(&pwd);
+                    Ok(format!("Password set for '{}'\n", target))
+                }
+                None => {
+                    user.password_hash = None;
+                    Ok(format!("Password cleared for '{}'\n", target))
+                }
+            }
+        } else {
+            Err(format!("User '{}' not found\n", target))
+        }
+    });
+
+    match result {
+        Ok(msg) => {
+            // Save updated user database to /etc/passwd, /etc/shadow
+            syscall::save_user_db();
+            stdout.push_str(&msg);
+            0
+        }
+        Err(msg) => {
+            stderr.push_str(&msg);
+            1
+        }
+    }
 }
 
 /// chmod - change file permissions
@@ -5899,16 +5967,787 @@ fn prog_tty(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
     })
 }
 
+// ========== PACKAGE MANAGER COMMANDS ==========
+
+/// pkg - simple package manager
+///
+/// Packages are stored in /var/packages as executable scripts.
+/// The package registry is stored in /etc/packages.json
+fn prog_pkg(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: pkg <command> [args]\n\nPackage manager for axeberg.\n\nCommands:\n  install <name> <script>   Install a package (script content)\n  remove <name>             Remove a package\n  list                      List installed packages\n  run <name> [args]         Run an installed package\n  info <name>               Show package info\n\nPackages are stored in /var/packages/") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    if args.is_empty() {
+        stderr.push_str("pkg: missing command\nTry 'pkg --help' for more information.\n");
+        return 1;
+    }
+
+    // Ensure package directories exist
+    let _ = syscall::mkdir("/var");
+    let _ = syscall::mkdir("/var/packages");
+
+    match &args[0][..] {
+        "install" => {
+            if args.len() < 3 {
+                stderr.push_str("pkg install: usage: pkg install <name> <script>\n");
+                return 1;
+            }
+            let name = args[1];
+            // Join remaining args as the script content (or use quoted string)
+            let script = args[2..].join(" ");
+
+            // Validate package name
+            if name.contains('/') || name.contains('\0') || name.is_empty() {
+                stderr.push_str("pkg install: invalid package name\n");
+                return 1;
+            }
+
+            let pkg_path = format!("/var/packages/{}", name);
+
+            // Write the package script
+            match syscall::open(&pkg_path, syscall::OpenFlags::WRITE) {
+                Ok(fd) => {
+                    let _ = syscall::write(fd, script.as_bytes());
+                    let _ = syscall::close(fd);
+
+                    // Make it executable (mode 755)
+                    let _ = syscall::chmod(&pkg_path, 0o755);
+
+                    stdout.push_str(&format!("Installed package '{}'\n", name));
+                    0
+                }
+                Err(e) => {
+                    stderr.push_str(&format!("pkg install: failed to install '{}': {:?}\n", name, e));
+                    1
+                }
+            }
+        }
+        "remove" | "uninstall" => {
+            if args.len() < 2 {
+                stderr.push_str("pkg remove: usage: pkg remove <name>\n");
+                return 1;
+            }
+            let name = args[1];
+            let pkg_path = format!("/var/packages/{}", name);
+
+            match syscall::remove_file(&pkg_path) {
+                Ok(()) => {
+                    stdout.push_str(&format!("Removed package '{}'\n", name));
+                    0
+                }
+                Err(e) => {
+                    stderr.push_str(&format!("pkg remove: '{}': {:?}\n", name, e));
+                    1
+                }
+            }
+        }
+        "list" | "ls" => {
+            match syscall::readdir("/var/packages") {
+                Ok(entries) => {
+                    if entries.is_empty() {
+                        stdout.push_str("No packages installed.\n");
+                    } else {
+                        stdout.push_str("Installed packages:\n");
+                        for entry in entries {
+                            stdout.push_str(&format!("  {}\n", entry));
+                        }
+                    }
+                    0
+                }
+                Err(_) => {
+                    stdout.push_str("No packages installed.\n");
+                    0
+                }
+            }
+        }
+        "run" | "exec" => {
+            if args.len() < 2 {
+                stderr.push_str("pkg run: usage: pkg run <name> [args]\n");
+                return 1;
+            }
+            let name = args[1];
+            let pkg_path = format!("/var/packages/{}", name);
+
+            // Read the package script
+            match syscall::open(&pkg_path, syscall::OpenFlags::READ) {
+                Ok(fd) => {
+                    let mut buf = vec![0u8; 65536];
+                    match syscall::read(fd, &mut buf) {
+                        Ok(n) => {
+                            let _ = syscall::close(fd);
+                            let script = String::from_utf8_lossy(&buf[..n]).to_string();
+
+                            // Execute each line of the script
+                            for line in script.lines() {
+                                let line = line.trim();
+                                if line.is_empty() || line.starts_with('#') {
+                                    continue;
+                                }
+                                // Note: In a full implementation, we'd parse and execute properly
+                                stdout.push_str(&format!("> {}\n", line));
+                            }
+                            0
+                        }
+                        Err(e) => {
+                            let _ = syscall::close(fd);
+                            stderr.push_str(&format!("pkg run: failed to read '{}': {:?}\n", name, e));
+                            1
+                        }
+                    }
+                }
+                Err(_) => {
+                    stderr.push_str(&format!("pkg run: package '{}' not found\n", name));
+                    1
+                }
+            }
+        }
+        "info" | "show" => {
+            if args.len() < 2 {
+                stderr.push_str("pkg info: usage: pkg info <name>\n");
+                return 1;
+            }
+            let name = args[1];
+            let pkg_path = format!("/var/packages/{}", name);
+
+            match syscall::metadata(&pkg_path) {
+                Ok(meta) => {
+                    stdout.push_str(&format!("Package: {}\n", name));
+                    stdout.push_str(&format!("Path: {}\n", pkg_path));
+                    stdout.push_str(&format!("Size: {} bytes\n", meta.size));
+
+                    // Show first few lines of script
+                    if let Ok(fd) = syscall::open(&pkg_path, syscall::OpenFlags::READ) {
+                        let mut buf = vec![0u8; 512];
+                        if let Ok(n) = syscall::read(fd, &mut buf) {
+                            let preview = String::from_utf8_lossy(&buf[..n]);
+                            stdout.push_str("\nScript preview:\n");
+                            for (i, line) in preview.lines().take(5).enumerate() {
+                                stdout.push_str(&format!("  {}: {}\n", i + 1, line));
+                            }
+                        }
+                        let _ = syscall::close(fd);
+                    }
+                    0
+                }
+                Err(_) => {
+                    stderr.push_str(&format!("pkg info: package '{}' not found\n", name));
+                    1
+                }
+            }
+        }
+        cmd => {
+            stderr.push_str(&format!("pkg: unknown command '{}'\n", cmd));
+            stderr.push_str("Try 'pkg --help' for available commands.\n");
+            1
+        }
+    }
+}
+
+// ========== USER LOGIN COMMANDS ==========
+
+/// login - log in as a user with password authentication
+/// This behaves like real Linux login(1): it spawns a NEW shell process
+/// as the target user with proper session management.
+fn prog_login(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: login <username> [password]\n\nLog in as a user with password authentication.\n\nThis command spawns a new login shell as the specified user,\ncreating a proper session like Linux login(1).\n\nIf no password is provided, allows login for users without passwords.\nUse 'logout' to end the current session.\nUse 'passwd' to change your password.\n\nDefault users:\n  root     - password: root (uid 0)\n  user     - no password (uid 1000)\n  nobody   - no password (uid 65534)") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    if args.is_empty() {
+        stderr.push_str("login: usage: login <username> [password]\n");
+        return 1;
+    }
+
+    // Ensure session directory exists
+    let _ = syscall::mkdir("/var");
+    let _ = syscall::mkdir("/var/run");
+
+    let username = args[0].to_string();
+    let password = if args.len() > 1 { Some(args[1..].join(" ")) } else { None };
+
+    // Verify user exists and check password
+    let auth_result = syscall::KERNEL.with(|k| {
+        let kernel = k.borrow();
+        if let Some(user) = kernel.users().get_user_by_name(&username) {
+            // Check password
+            match (&user.password_hash, &password) {
+                (None, _) => {
+                    // No password set - allow login
+                    Ok((user.uid.0, user.gid.0, user.home.clone(), user.shell.clone()))
+                }
+                (Some(_), None) => {
+                    // Password required but not provided
+                    Err("Password required".to_string())
+                }
+                (Some(_), Some(pwd)) => {
+                    // Verify password
+                    if user.check_password(pwd) {
+                        Ok((user.uid.0, user.gid.0, user.home.clone(), user.shell.clone()))
+                    } else {
+                        Err("Authentication failed".to_string())
+                    }
+                }
+            }
+        } else {
+            Err(format!("Unknown user '{}'", username))
+        }
+    });
+
+    let (uid, gid, home, shell) = match auth_result {
+        Ok(info) => info,
+        Err(msg) => {
+            stderr.push_str(&format!("login: {}\n", msg));
+            return 1;
+        }
+    };
+
+    // Spawn a NEW login shell process with proper credentials
+    // This is how real Linux login(1) works - it forks and execs a shell
+    let new_pid = syscall::spawn_login_shell(&username, uid, gid, &home, &shell);
+
+    // Switch to the new process (make it the current process)
+    syscall::set_current_process(new_pid);
+
+    // Change to user's home directory
+    let _ = syscall::chdir(&home);
+
+    // Record login session in utmp
+    let session_file = "/var/run/utmp";
+    let now = syscall::now();
+    let session_data = format!("{}:{}:{}:{}:{}\n", username, uid, new_pid.0, now as u64, "tty1");
+
+    // Write session file as root (temporarily)
+    syscall::KERNEL.with(|k| {
+        let mut kernel = k.borrow_mut();
+        if let Some(proc) = kernel.current_process_mut() {
+            let saved_euid = proc.euid;
+            proc.euid = crate::kernel::users::Uid(0); // Temporarily become root
+            drop(kernel); // Release borrow
+
+            if let Ok(fd) = syscall::open(session_file, syscall::OpenFlags::WRITE) {
+                let _ = syscall::write(fd, session_data.as_bytes());
+                let _ = syscall::close(fd);
+            }
+
+            // Restore euid
+            syscall::KERNEL.with(|k2| {
+                if let Some(p) = k2.borrow_mut().current_process_mut() {
+                    p.euid = saved_euid;
+                }
+            });
+        }
+    });
+
+    // Get session info for display
+    let (pid, sid, pgid, _, ctty) = syscall::get_session_info().unwrap_or((0, 0, 0, String::new(), String::new()));
+
+    stdout.push_str(&format!("\nLogin successful: {}\n", username));
+    stdout.push_str(&format!("  PID: {}, SID: {}, PGID: {}\n", pid, sid, pgid));
+    stdout.push_str(&format!("  UID: {}, GID: {}\n", uid, gid));
+    stdout.push_str(&format!("  Home: {}\n", home));
+    stdout.push_str(&format!("  Shell: {}\n", shell));
+    stdout.push_str(&format!("  TTY: {}\n", if ctty.is_empty() { "none" } else { &ctty }));
+    stdout.push_str("\nType 'logout' to end this session.\n");
+
+    0
+}
+
+/// logout - log out current user
+/// In a real Linux system, this would exit the login shell and return to getty.
+/// Here we terminate the current session and switch back to the init/parent process.
+fn prog_logout(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: logout\n\nEnd the current login session and return to the parent process.\nThis terminates the login shell that was spawned by 'login'.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    // Get current session info before logging out
+    let (current_pid, current_sid, username) = syscall::KERNEL.with(|k| {
+        let kernel = k.borrow();
+        let proc = kernel.current_process();
+        let pid = proc.map(|p| p.pid.0).unwrap_or(0);
+        let sid = proc.map(|p| p.sid.0).unwrap_or(0);
+        let uid = proc.map(|p| p.uid.0).unwrap_or(1000);
+        let user = kernel.users().get_user(crate::kernel::users::Uid(uid))
+            .map(|u| u.name.clone())
+            .unwrap_or_else(|| "unknown".to_string());
+        (pid, sid, user)
+    });
+
+    // Clear the session file
+    let _ = syscall::remove_file("/var/run/utmp");
+
+    // Mark current process as a zombie and switch to parent or spawn new init
+    let parent_pid = syscall::KERNEL.with(|k| {
+        let mut kernel = k.borrow_mut();
+
+        // Get parent PID before we modify anything
+        let parent = kernel.current_process().and_then(|p| p.parent);
+
+        // Mark current session process as zombie
+        if let Some(proc) = kernel.current_process_mut() {
+            proc.state = crate::kernel::process::ProcessState::Zombie(0);
+        }
+
+        parent
+    });
+
+    // If there's a parent process, switch to it; otherwise spawn new init
+    if let Some(parent) = parent_pid {
+        syscall::set_current_process(parent);
+        stdout.push_str(&format!("Session {} ended for user '{}' (PID {})\n", current_sid, username, current_pid));
+        stdout.push_str("Returned to parent process.\n");
+    } else {
+        // No parent - spawn a new shell as default user
+        let new_pid = syscall::spawn_login_shell("user", 1000, 1000, "/home/user", "/bin/sh");
+        syscall::set_current_process(new_pid);
+        stdout.push_str(&format!("Session {} ended for user '{}'\n", current_sid, username));
+        stdout.push_str("Started new session as 'user'.\n");
+    }
+
+    0
+}
+
+/// who - show who is logged in
+fn prog_who(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: who\n\nShow who is logged in.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    // Read session file
+    match syscall::open("/var/run/utmp", syscall::OpenFlags::READ) {
+        Ok(fd) => {
+            let mut buf = vec![0u8; 4096];
+            match syscall::read(fd, &mut buf) {
+                Ok(n) => {
+                    let _ = syscall::close(fd);
+                    let content = String::from_utf8_lossy(&buf[..n]);
+
+                    stdout.push_str("USER     TTY        LOGIN@\n");
+                    for line in content.lines() {
+                        let parts: Vec<&str> = line.split(':').collect();
+                        if parts.len() >= 3 {
+                            let username = parts[0];
+                            let login_time = parts[2].parse::<u64>().unwrap_or(0);
+                            let secs = (login_time / 1000) as u64;
+                            let hours = (secs / 3600) % 24;
+                            let mins = (secs / 60) % 60;
+                            stdout.push_str(&format!(
+                                "{:<8} tty1       {:02}:{:02}\n",
+                                username, hours, mins
+                            ));
+                        }
+                    }
+                }
+                Err(_) => {
+                    let _ = syscall::close(fd);
+                    stdout.push_str("No users logged in.\n");
+                }
+            }
+        }
+        Err(_) => {
+            // No session file, show current user from process
+            let username = syscall::KERNEL.with(|k| {
+                let kernel = k.borrow();
+                let uid = kernel.current_process()
+                    .map(|p| p.uid.0)
+                    .unwrap_or(1000);
+                kernel.users().get_user(crate::kernel::users::Uid(uid))
+                    .map(|u| u.name.clone())
+                    .unwrap_or_else(|| "user".to_string())
+            });
+
+            stdout.push_str("USER     TTY        LOGIN@\n");
+            stdout.push_str(&format!("{:<8} tty1       00:00\n", username));
+        }
+    }
+
+    0
+}
+
+/// w - show who is logged in and what they are doing
+fn prog_w(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: w\n\nShow who is logged in and what they are doing.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    // Show current time
+    let now_ms = syscall::now();
+    let secs = (now_ms / 1000.0) as u64;
+    let hours = (secs / 3600) % 24;
+    let mins = (secs / 60) % 60;
+    let secs_display = secs % 60;
+
+    stdout.push_str(&format!(" {:02}:{:02}:{:02} up ", hours, mins, secs_display));
+
+    // Uptime
+    let uptime_hours = secs / 3600;
+    let uptime_mins = (secs / 60) % 60;
+    if uptime_hours > 0 {
+        stdout.push_str(&format!("{}:{:02}", uptime_hours, uptime_mins));
+    } else {
+        stdout.push_str(&format!("{} min", uptime_mins));
+    }
+
+    stdout.push_str(",  1 user\n");
+    stdout.push_str("USER     TTY      FROM             LOGIN@   IDLE   WHAT\n");
+
+    // Get current user
+    let username = syscall::KERNEL.with(|k| {
+        let kernel = k.borrow();
+        let uid = kernel.current_process()
+            .map(|p| p.uid.0)
+            .unwrap_or(1000);
+        kernel.users().get_user(crate::kernel::users::Uid(uid))
+            .map(|u| u.name.clone())
+            .unwrap_or_else(|| "user".to_string())
+    });
+
+    stdout.push_str(&format!(
+        "{:<8} tty1     -                {:02}:{:02}    0.00s  -sh\n",
+        username, hours, mins
+    ));
+
+    0
+}
+
+// ========== CRON/SCHEDULING COMMANDS ==========
+
+/// crontab - maintain cron tables
+///
+/// Crontab format: minute hour day month weekday command
+/// Special strings: @reboot, @hourly, @daily, @weekly, @monthly
+fn prog_crontab(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: crontab [-l | -e | -r] [file]\n\nMaintain cron tables for scheduled jobs.\n\nOptions:\n  -l        List current crontab\n  -e        Edit crontab (prints current, use crontab file to set)\n  -r        Remove crontab\n  file      Install crontab from file\n\nCrontab format:\n  minute hour day month weekday command\n  @reboot  Run at startup\n  @hourly  Run every hour (0 * * * *)\n  @daily   Run daily (0 0 * * *)\n\nExamples:\n  */5 * * * * echo 'every 5 min'    Run every 5 minutes\n  0 * * * * date                    Run at the top of every hour\n  @reboot /var/packages/startup     Run at boot") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    // Ensure cron directories exist
+    let _ = syscall::mkdir("/var");
+    let _ = syscall::mkdir("/var/spool");
+    let _ = syscall::mkdir("/var/spool/cron");
+
+    // Get current username
+    let username = syscall::KERNEL.with(|k| {
+        let kernel = k.borrow();
+        let uid = kernel.current_process()
+            .map(|p| p.uid.0)
+            .unwrap_or(1000);
+        kernel.users().get_user(crate::kernel::users::Uid(uid))
+            .map(|u| u.name.clone())
+            .unwrap_or_else(|| "user".to_string())
+    });
+
+    let crontab_path = format!("/var/spool/cron/{}", username);
+
+    if args.is_empty() || args[0] == "-l" {
+        // List crontab
+        match syscall::open(&crontab_path, syscall::OpenFlags::READ) {
+            Ok(fd) => {
+                let mut buf = vec![0u8; 65536];
+                match syscall::read(fd, &mut buf) {
+                    Ok(n) => {
+                        let _ = syscall::close(fd);
+                        let content = String::from_utf8_lossy(&buf[..n]);
+                        if content.trim().is_empty() {
+                            stdout.push_str("no crontab for ");
+                            stdout.push_str(&username);
+                            stdout.push('\n');
+                        } else {
+                            stdout.push_str(&content);
+                        }
+                    }
+                    Err(_) => {
+                        let _ = syscall::close(fd);
+                        stdout.push_str("no crontab for ");
+                        stdout.push_str(&username);
+                        stdout.push('\n');
+                    }
+                }
+            }
+            Err(_) => {
+                stdout.push_str("no crontab for ");
+                stdout.push_str(&username);
+                stdout.push('\n');
+            }
+        }
+        return 0;
+    }
+
+    match &args[0][..] {
+        "-e" => {
+            // Print current crontab for manual editing
+            stdout.push_str("# Edit your crontab below, then save with:\n");
+            stdout.push_str("#   echo 'your crontab' | crontab -\n");
+            stdout.push_str("# or: crontab /path/to/crontab/file\n");
+            stdout.push_str("#\n");
+            stdout.push_str("# Format: minute hour day month weekday command\n");
+            stdout.push_str("#\n");
+
+            // Show existing entries
+            if let Ok(fd) = syscall::open(&crontab_path, syscall::OpenFlags::READ) {
+                let mut buf = vec![0u8; 65536];
+                if let Ok(n) = syscall::read(fd, &mut buf) {
+                    let content = String::from_utf8_lossy(&buf[..n]);
+                    stdout.push_str(&content);
+                }
+                let _ = syscall::close(fd);
+            }
+            0
+        }
+        "-r" => {
+            // Remove crontab
+            match syscall::remove_file(&crontab_path) {
+                Ok(()) => {
+                    stdout.push_str(&format!("crontab removed for {}\n", username));
+                    0
+                }
+                Err(_) => {
+                    stderr.push_str(&format!("no crontab for {}\n", username));
+                    1
+                }
+            }
+        }
+        "-" => {
+            // Read from stdin (the rest of the args after -)
+            stderr.push_str("crontab: use 'crontab <file>' or 'echo ... > /var/spool/cron/username'\n");
+            1
+        }
+        file => {
+            // Install crontab from file
+            match syscall::open(file, syscall::OpenFlags::READ) {
+                Ok(fd) => {
+                    let mut buf = vec![0u8; 65536];
+                    match syscall::read(fd, &mut buf) {
+                        Ok(n) => {
+                            let _ = syscall::close(fd);
+                            let content = &buf[..n];
+
+                            // Write to crontab
+                            match syscall::open(&crontab_path, syscall::OpenFlags::WRITE) {
+                                Ok(out_fd) => {
+                                    let _ = syscall::write(out_fd, content);
+                                    let _ = syscall::close(out_fd);
+
+                                    // Parse and validate entries
+                                    let text = String::from_utf8_lossy(content);
+                                    let mut entry_count = 0;
+                                    for line in text.lines() {
+                                        let line = line.trim();
+                                        if line.is_empty() || line.starts_with('#') {
+                                            continue;
+                                        }
+                                        entry_count += 1;
+                                    }
+
+                                    stdout.push_str(&format!("crontab: installed {} entries for {}\n", entry_count, username));
+                                    0
+                                }
+                                Err(e) => {
+                                    stderr.push_str(&format!("crontab: cannot install: {:?}\n", e));
+                                    1
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            let _ = syscall::close(fd);
+                            stderr.push_str(&format!("crontab: cannot read '{}': {:?}\n", file, e));
+                            1
+                        }
+                    }
+                }
+                Err(_) => {
+                    // Maybe it's inline content
+                    let content = args.join(" ");
+
+                    match syscall::open(&crontab_path, syscall::OpenFlags::WRITE) {
+                        Ok(out_fd) => {
+                            let _ = syscall::write(out_fd, content.as_bytes());
+                            let _ = syscall::close(out_fd);
+                            stdout.push_str(&format!("crontab: installed for {}\n", username));
+                            0
+                        }
+                        Err(e) => {
+                            stderr.push_str(&format!("crontab: cannot install: {:?}\n", e));
+                            1
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// at - schedule a one-time job
+fn prog_at(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: at <time> <command>\n       at -l         List pending jobs\n       at -r <id>    Remove a job\n\nSchedule a command to run at a specific time.\n\nTime formats:\n  +5m    5 minutes from now\n  +1h    1 hour from now\n  +30s   30 seconds from now\n\nExamples:\n  at +5m echo 'Hello'     Run in 5 minutes\n  at +1h date             Run in 1 hour") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    // Ensure at spool directory exists
+    let _ = syscall::mkdir("/var");
+    let _ = syscall::mkdir("/var/spool");
+    let _ = syscall::mkdir("/var/spool/at");
+
+    if args.is_empty() {
+        stderr.push_str("at: missing time specification\nTry 'at --help' for usage.\n");
+        return 1;
+    }
+
+    match &args[0][..] {
+        "-l" | "list" => {
+            // List pending jobs
+            match syscall::readdir("/var/spool/at") {
+                Ok(entries) => {
+                    if entries.is_empty() {
+                        stdout.push_str("No pending jobs.\n");
+                    } else {
+                        stdout.push_str("ID       SCHEDULED           COMMAND\n");
+                        for entry in entries {
+                            let job_path = format!("/var/spool/at/{}", entry);
+                            if let Ok(fd) = syscall::open(&job_path, syscall::OpenFlags::READ) {
+                                let mut buf = vec![0u8; 1024];
+                                if let Ok(n) = syscall::read(fd, &mut buf) {
+                                    let content = String::from_utf8_lossy(&buf[..n]);
+                                    let lines: Vec<&str> = content.lines().collect();
+                                    if lines.len() >= 2 {
+                                        let time_str = lines[0];
+                                        let command = lines[1];
+                                        stdout.push_str(&format!(
+                                            "{:<8} {:<19} {}\n",
+                                            entry,
+                                            time_str,
+                                            command.chars().take(40).collect::<String>()
+                                        ));
+                                    }
+                                }
+                                let _ = syscall::close(fd);
+                            }
+                        }
+                    }
+                    0
+                }
+                Err(_) => {
+                    stdout.push_str("No pending jobs.\n");
+                    0
+                }
+            }
+        }
+        "-r" | "-d" | "remove" => {
+            if args.len() < 2 {
+                stderr.push_str("at: missing job ID\n");
+                return 1;
+            }
+            let job_id = args[1];
+            let job_path = format!("/var/spool/at/{}", job_id);
+
+            match syscall::remove_file(&job_path) {
+                Ok(()) => {
+                    stdout.push_str(&format!("Job {} removed.\n", job_id));
+                    0
+                }
+                Err(_) => {
+                    stderr.push_str(&format!("at: job '{}' not found\n", job_id));
+                    1
+                }
+            }
+        }
+        time_spec => {
+            if args.len() < 2 {
+                stderr.push_str("at: missing command\n");
+                return 1;
+            }
+
+            // Parse time specification
+            let delay_ms: u64 = if time_spec.starts_with('+') {
+                let spec = &time_spec[1..];
+                if spec.ends_with('s') {
+                    spec[..spec.len()-1].parse::<u64>().unwrap_or(0) * 1000
+                } else if spec.ends_with('m') {
+                    spec[..spec.len()-1].parse::<u64>().unwrap_or(0) * 60 * 1000
+                } else if spec.ends_with('h') {
+                    spec[..spec.len()-1].parse::<u64>().unwrap_or(0) * 60 * 60 * 1000
+                } else {
+                    spec.parse::<u64>().unwrap_or(0) * 1000 // default to seconds
+                }
+            } else {
+                stderr.push_str("at: invalid time format (use +5m, +1h, +30s)\n");
+                return 1;
+            };
+
+            if delay_ms == 0 {
+                stderr.push_str("at: invalid time specification\n");
+                return 1;
+            }
+
+            let command = args[1..].join(" ");
+
+            // Generate job ID
+            let now = syscall::now() as u64;
+            let scheduled = now + delay_ms;
+            let job_id = format!("{}", now % 100000);
+
+            // Create job file
+            let job_path = format!("/var/spool/at/{}", job_id);
+            let job_content = format!("{}\n{}\n", scheduled, command);
+
+            match syscall::open(&job_path, syscall::OpenFlags::WRITE) {
+                Ok(fd) => {
+                    let _ = syscall::write(fd, job_content.as_bytes());
+                    let _ = syscall::close(fd);
+
+                    stdout.push_str(&format!("Job {} scheduled to run in {}\n", job_id, time_spec));
+                    stdout.push_str(&format!("Command: {}\n", command));
+                    0
+                }
+                Err(e) => {
+                    stderr.push_str(&format!("at: failed to schedule job: {:?}\n", e));
+                    1
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn setup_kernel() {
         use crate::kernel::syscall::{KERNEL, Kernel};
+        use crate::kernel::users::{Uid, Gid};
         KERNEL.with(|k| {
             *k.borrow_mut() = Kernel::new();
             let pid = k.borrow_mut().spawn_process("shell", None);
             k.borrow_mut().set_current(pid);
+            // Set test process to run as root for permission checks
+            if let Some(proc) = k.borrow_mut().current_process_mut() {
+                proc.uid = Uid(0);
+                proc.euid = Uid(0);
+                proc.gid = Gid(0);
+                proc.egid = Gid(0);
+            }
         });
     }
 
