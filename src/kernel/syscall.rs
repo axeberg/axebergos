@@ -26,6 +26,7 @@ use super::devfs::DevFs;
 use super::fifo::{FifoError, FifoRegistry};
 use super::init::InitSystem;
 use super::mount::{FsType, MountEntry, MountError, MountOptions, MountTable};
+use super::tty::TtyManager;
 use super::msgqueue::{Message, MsgQueueError, MsgQueueId, MsgQueueManager, MsgQueueStats};
 use super::procfs::{generate_proc_content, ProcContext, ProcFs, SystemContext};
 use super::semaphore::{SemaphoreManager, SemError, SemId, SemOpResult, SemSetStats};
@@ -438,6 +439,8 @@ pub struct Kernel {
     semaphores: SemaphoreManager,
     /// Mount table
     mounts: MountTable,
+    /// TTY device manager
+    ttys: TtyManager,
 }
 
 /// Simple PRNG for /dev/random and /dev/urandom
@@ -513,6 +516,7 @@ impl Kernel {
             msgqueues: MsgQueueManager::new(),
             semaphores: SemaphoreManager::new(),
             mounts: MountTable::with_defaults(0.0),
+            ttys: TtyManager::new(),
         }
     }
 
@@ -579,6 +583,16 @@ impl Kernel {
     /// Get mutable reference to mount table
     pub fn mounts_mut(&mut self) -> &mut MountTable {
         &mut self.mounts
+    }
+
+    /// Get reference to TTY manager
+    pub fn ttys(&self) -> &TtyManager {
+        &self.ttys
+    }
+
+    /// Get mutable reference to TTY manager
+    pub fn ttys_mut(&mut self) -> &mut TtyManager {
+        &mut self.ttys
     }
 
     /// Get the currently running process

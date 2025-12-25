@@ -30,6 +30,7 @@ pub mod sysfs;
 pub mod task;
 pub mod timer;
 pub mod trace;
+pub mod tty;
 pub mod users;
 pub mod wasm;
 
@@ -50,6 +51,7 @@ pub use syscall::{SyscallError, SyscallResult};
 pub use task::{Task, TaskId, TaskState};
 pub use timer::TimerId;
 pub use trace::{TraceCategory, TraceEvent, TraceSummary, Tracer};
+pub use tty::{Termios, Tty, TtyManager};
 pub use users::{FileMode, Gid, Group, Uid, User, UserDb};
 
 use std::cell::RefCell;

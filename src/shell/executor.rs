@@ -163,6 +163,10 @@ impl ProgramRegistry {
         reg.register("umount", prog_umount);
         reg.register("findmnt", prog_findmnt);
 
+        // TTY commands
+        reg.register("stty", prog_stty);
+        reg.register("tty", prog_tty);
+
         reg
     }
 
@@ -5480,6 +5484,82 @@ fn prog_findmnt(args: &[String], stdout: &mut String, _stderr: &mut String) -> i
     });
 
     0
+}
+
+// ========== TTY COMMANDS ==========
+
+fn prog_stty(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: stty [SETTING]...\n       stty -a\n       stty sane\n       stty raw\n\nChange and print terminal line settings.\n\nSettings:\n  -echo/-icanon/-isig  Toggle flags\n  sane                 Reset to sane defaults\n  raw                  Set raw mode\n  -a                   Print all settings") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    use crate::kernel::tty::{format_stty_settings, parse_stty_setting, Termios};
+
+    syscall::KERNEL.with(|k| {
+        let mut kernel = k.borrow_mut();
+
+        // If no args or -a, print current settings
+        if args.is_empty() || args.iter().any(|a| *a == "-a") {
+            if let Some(tty) = kernel.ttys().current_tty() {
+                stdout.push_str(&format_stty_settings(&tty.termios));
+            } else {
+                stderr.push_str("stty: no controlling terminal\n");
+                return 1;
+            }
+            return 0;
+        }
+
+        // Get current termios
+        let mut termios = if let Some(tty) = kernel.ttys().current_tty() {
+            tty.termios.clone()
+        } else {
+            Termios::default()
+        };
+
+        // Apply settings
+        for setting in &args {
+            if let Err(e) = parse_stty_setting(&mut termios, setting) {
+                stderr.push_str(&format!("stty: {}\n", e));
+                return 1;
+            }
+        }
+
+        // Update the terminal
+        if let Some(tty) = kernel.ttys_mut().current_tty_mut() {
+            tty.termios = termios;
+        }
+
+        0
+    })
+}
+
+fn prog_tty(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+
+    if let Some(help) = check_help(&args, "Usage: tty\nPrint the file name of the terminal connected to standard input.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    let silent = args.iter().any(|a| *a == "-s");
+
+    syscall::KERNEL.with(|k| {
+        let kernel = k.borrow();
+        if let Some(tty) = kernel.ttys().current_tty() {
+            if !silent {
+                stdout.push_str(&format!("/dev/{}\n", tty.name));
+            }
+            0
+        } else {
+            if !silent {
+                stdout.push_str("not a tty\n");
+            }
+            1
+        }
+    })
 }
 
 #[cfg(test)]
