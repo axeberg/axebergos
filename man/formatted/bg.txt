@@ -1,0 +1,38 @@
+bg(1)                       General Commands Manual                      bg(1)
+
+NAME
+       bg - continue job in background
+
+SYNOPSIS
+       bg [JOB]
+
+DESCRIPTION
+       Resume  a stopped job and run it in the background. If no JOB is speci-
+       fied, the current job (marked with + in jobs output) is used.
+
+ARGUMENTS
+       JOB
+           Job specification. Can be:
+           o   %N - Job number N
+           o   %+ or %% - Current job
+           o   %- - Previous job
+           o   %string - Job whose command begins with string
+
+
+OPTIONS
+       -h, --help
+           Display usage information and exit.
+
+EXAMPLES
+       Continue current job in background:
+
+           bg
+
+       Continue job 2 in background:
+
+           bg %2
+
+SEE ALSO
+       fg(1), jobs(1), kill(1)
+
+                                  2025-12-24                             bg(1)

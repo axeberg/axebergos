@@ -1,0 +1,36 @@
+[4mbase64[24m(1)                   General Commands Manual                  [4mbase64[24m(1)
+
+[1mNAME[0m
+       base64 - encode/decode base64
+
+[1mSYNOPSIS[0m
+       [1mbase64 [22m[[1m-d[22m] [[4mFILE[24m]
+
+[1mDESCRIPTION[0m
+       Base64  encode  or  decode FILE, or standard input if no file is speci‐
+       fied.
+
+[1mOPTIONS[0m
+       [1m-d[22m, [1m--decode[0m
+           Decode base64 input.
+
+       [1m-h[22m, [1m--help[0m
+           Display usage information and exit.
+
+[1mEXAMPLES[0m
+       Encode a file:
+
+           base64 file.txt
+
+       Encode from stdin:
+
+           echo "hello" | base64
+
+       Decode:
+
+           echo "aGVsbG8K" | base64 -d
+
+[1mSEE ALSO[0m
+       [1mxxd[22m(1)
+
+                                  2025-12-24                         [4mbase64[24m(1)

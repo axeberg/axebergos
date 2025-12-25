@@ -1,0 +1,294 @@
+# Executor
+
+The executor is axeberg's async task scheduler, designed for browser integration.
+
+## Design Goals
+
+1. **Browser-native**: Works with requestAnimationFrame
+2. **Cooperative**: No preemption needed
+3. **Priority-aware**: Critical tasks run first
+4. **Tick-based**: Runs in discrete frames
+
+## Architecture
+
+```rust
+pub struct Executor {
+    /// All tasks in the system
+    tasks: Vec<Task>,
+
+    /// Queue of ready task IDs
+    ready: VecDeque<TaskId>,
+
+    /// Priority for each task
+    task_priorities: HashMap<TaskId, Priority>,
+
+    /// Next task ID to allocate
+    next_task_id: u64,
+}
+```
+
+## Tasks
+
+A task wraps an async future:
+
+```rust
+pub struct Task {
+    id: TaskId,
+    future: Pin<Box<dyn Future<Output = ()>>>,
+    state: TaskState,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum TaskState {
+    Ready,
+    Running,
+    Blocked,
+    Completed,
+}
+```
+
+## Priority Levels
+
+```rust
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Priority {
+    Background = 0,  // Low priority
+    Normal = 1,      // Default
+    Critical = 2,    // High priority (UI, input)
+}
+```
+
+Priority affects scheduling order:
+- All Critical tasks run before Normal
+- All Normal tasks run before Background
+- Within a priority, FIFO order
+
+## Spawning Tasks
+
+```rust
+// Normal priority (default)
+let task_id = kernel::spawn(async {
+    println!("Hello from task!");
+});
+
+// With explicit priority
+let task_id = kernel::spawn_with_priority(
+    async {
+        // Handle user input
+    },
+    Priority::Critical,
+);
+```
+
+## The Tick Loop
+
+The executor is driven by `requestAnimationFrame`:
+
+```rust
+// Called ~60 times per second
+pub fn tick() -> usize {
+    let mut polled = 0;
+
+    // Sort ready queue by priority (highest first)
+    self.ready.make_contiguous().sort_by(|a, b| {
+        let pa = self.task_priorities.get(a).unwrap_or(&Priority::Normal);
+        let pb = self.task_priorities.get(b).unwrap_or(&Priority::Normal);
+        pb.cmp(pa) // Descending
+    });
+
+    // Poll all ready tasks
+    while let Some(task_id) = self.ready.pop_front() {
+        if let Some(task) = self.tasks.get_mut(task_id.0) {
+            if task.state == TaskState::Ready {
+                task.state = TaskState::Running;
+                polled += 1;
+
+                // Create waker for this task
+                let waker = /* ... */;
+                let mut cx = Context::from_waker(&waker);
+
+                match task.future.as_mut().poll(&mut cx) {
+                    Poll::Ready(()) => {
+                        task.state = TaskState::Completed;
+                    }
+                    Poll::Pending => {
+                        task.state = TaskState::Blocked;
+                        // Will be re-queued when woken
+                    }
+                }
+            }
+        }
+    }
+
+    polled
+}
+```
+
+## Waker Semantics
+
+When a task blocks, it needs to be woken later:
+
+```rust
+impl ArcWake for TaskWaker {
+    fn wake_by_ref(arc_self: &Arc<Self>) {
+        EXECUTOR.with(|e| {
+            e.borrow_mut().wake(arc_self.task_id);
+        });
+    }
+}
+
+fn wake(&mut self, task_id: TaskId) {
+    if let Some(task) = self.tasks.get_mut(task_id.0) {
+        if task.state == TaskState::Blocked {
+            task.state = TaskState::Ready;
+            self.ready.push_back(task_id);
+        }
+    }
+}
+```
+
+## Run Mode
+
+For non-UI contexts (tests, CLI), run all tasks to completion:
+
+```rust
+pub fn run(&mut self) {
+    while self.has_tasks() {
+        self.tick();
+    }
+}
+```
+
+## Task Lifecycle
+
+```
+spawn() ──► Ready ──► Running ──► Completed
+               ▲         │
+               │         │ Poll::Pending
+               │         ▼
+               └─── Blocked
+                (wake re-queues)
+```
+
+## Browser Integration
+
+The runtime connects the executor to the browser:
+
+```rust
+// In runtime.rs
+fn tick_loop() {
+    let timestamp = /* from rAF */;
+
+    // Push frame event
+    events::push_system(events::SystemEvent::Frame { timestamp });
+
+    // Process input events
+    process_compositor_events();
+
+    // Tick the kernel (runs tasks)
+    kernel::tick();
+
+    // Render compositor
+    compositor::render();
+
+    // Schedule next frame
+    request_animation_frame();
+}
+```
+
+## Example: Yielding
+
+Tasks can yield to allow other tasks to run:
+
+```rust
+kernel::spawn(async {
+    for i in 0..100 {
+        do_work(i);
+
+        // Yield control, resume next tick
+        futures::pending!();
+    }
+});
+```
+
+## Example: Multiple Priorities
+
+```rust
+// Background indexing
+kernel::spawn_with_priority(
+    async {
+        index_files().await;
+    },
+    Priority::Background,
+);
+
+// User input handling
+kernel::spawn_with_priority(
+    async {
+        loop {
+            let event = get_next_event().await;
+            handle_event(event);
+        }
+    },
+    Priority::Critical,
+);
+
+// Normal application work
+kernel::spawn(async {
+    process_data().await;
+});
+```
+
+Input handling runs before normal work, which runs before indexing.
+
+## Testing the Executor
+
+```rust
+#[test]
+fn test_priority_order() {
+    let mut executor = Executor::new();
+
+    let order = Rc::new(RefCell::new(Vec::new()));
+
+    // Spawn in reverse priority order
+    let o = order.clone();
+    executor.spawn_with_priority(async move {
+        o.borrow_mut().push("background");
+    }, Priority::Background);
+
+    let o = order.clone();
+    executor.spawn_with_priority(async move {
+        o.borrow_mut().push("critical");
+    }, Priority::Critical);
+
+    let o = order.clone();
+    executor.spawn(async move {
+        o.borrow_mut().push("normal");
+    });
+
+    executor.run();
+
+    // Critical ran first, then Normal, then Background
+    assert_eq!(*order.borrow(), vec!["critical", "normal", "background"]);
+}
+```
+
+## Limitations
+
+1. **No preemption**: Long-running sync code blocks everything
+2. **Single-threaded**: No parallelism
+3. **No deadlock detection**: Circular waits hang forever
+4. **Trust required**: Tasks must yield cooperatively
+
+## Future Work
+
+- **Task cancellation**: Cancel running tasks
+- **Timeouts**: Automatic timeout for blocking operations
+- **Work stealing**: Multi-threaded executor
+- **Task groups**: Hierarchical task management
+
+## Related Documentation
+
+- [Kernel Overview](overview.md) - Executor's role in the kernel
+- [Process Model](processes.md) - Process-task relationship
+- [IPC](ipc.md) - Async communication primitives

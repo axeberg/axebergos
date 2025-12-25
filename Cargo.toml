@@ -1,0 +1,94 @@
+[package]
+name = "axeberg"
+version = "0.1.0"
+edition = "2024"
+description = "A personal mini-OS in Rust, compiled to WASM"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "serve"
+path = "src/bin/serve.rs"
+
+[features]
+default = ["console_error_panic_hook"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+console_error_panic_hook = { version = "0.1", optional = true }
+
+# Async runtime - we build our own executor but need futures
+futures = "0.3"
+pin-project-lite = "0.2"
+
+# For the VFS - efficient handle allocation
+slab = "0.4"
+
+# Serialization for persistence
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# getrandom needs js feature for WASM
+getrandom = { version = "0.2", features = ["js"] }
+
+[dependencies.web-sys]
+version = "0.3"
+features = [
+    "console",
+    "Window",
+    "Document",
+    "HtmlElement",
+    "Performance",
+    "MouseEvent",
+    "KeyboardEvent",
+    "Event",
+    "EventTarget",
+    # Canvas (wgpu will create surface from this)
+    "HtmlCanvasElement",
+    "CssStyleDeclaration",
+    # OPFS (Origin Private File System) for persistence
+    "Navigator",
+    "StorageManager",
+    "FileSystemDirectoryHandle",
+    "FileSystemFileHandle",
+    "FileSystemWritableFileStream",
+    "FileSystemGetFileOptions",
+    "FileSystemGetDirectoryOptions",
+    "FileSystemCreateWritableOptions",
+    "Blob",
+    "File",
+    "ReadableStream",
+    # For beforeunload
+    "BeforeUnloadEvent",
+    # Clipboard API for copy/paste
+    "Clipboard",
+    # Fetch API for HTTP requests
+    "Request",
+    "RequestInit",
+    "RequestMode",
+    "Response",
+    "Headers",
+    # WebSocket for bidirectional communication
+    "WebSocket",
+    "MessageEvent",
+    "CloseEvent",
+    "ErrorEvent",
+]
+
+# Dev server (native only, not compiled to WASM)
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tiny_http = "0.12"
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+[profile.release]
+opt-level = "s"
+lto = true
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false

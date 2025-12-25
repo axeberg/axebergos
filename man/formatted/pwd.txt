@@ -1,0 +1,15 @@
+pwd(1)                      General Commands Manual                     pwd(1)
+
+NAME
+       pwd - print working directory
+
+SYNOPSIS
+       pwd
+
+DESCRIPTION
+       Print the absolute pathname of the current working directory.
+
+SEE ALSO
+       cd(1)
+
+                                  2025-12-24                            pwd(1)

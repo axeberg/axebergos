@@ -1,0 +1,39 @@
+fg(1)                       General Commands Manual                      fg(1)
+
+NAME
+       fg - bring job to foreground
+
+SYNOPSIS
+       fg [JOB]
+
+DESCRIPTION
+       Move  a background or stopped job to the foreground, making it the cur-
+       rent job. If no JOB is specified, the current job  (marked  with  +  in
+       jobs output) is used.
+
+ARGUMENTS
+       JOB
+           Job specification. Can be:
+           o   %N - Job number N
+           o   %+ or %% - Current job
+           o   %- - Previous job
+           o   %string - Job whose command begins with string
+
+
+OPTIONS
+       -h, --help
+           Display usage information and exit.
+
+EXAMPLES
+       Bring current job to foreground:
+
+           fg
+
+       Bring job 1 to foreground:
+
+           fg %1
+
+SEE ALSO
+       bg(1), jobs(1), kill(1)
+
+                                  2025-12-24                             fg(1)

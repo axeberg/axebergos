@@ -1,0 +1,34 @@
+tail(1)                     General Commands Manual                    tail(1)
+
+NAME
+       tail - output the last part of files
+
+SYNOPSIS
+       tail [-n COUNT] [FILE...]
+
+DESCRIPTION
+       Print the last COUNT lines of each file. Default is 10 lines.
+
+       If no files are given, reads from standard input.
+
+OPTIONS
+       -n COUNT
+           Print last COUNT lines instead of 10.
+
+EXAMPLES
+       Show last 10 lines:
+
+           tail file.txt
+
+       Show last 5 lines:
+
+           tail -n 5 file.txt
+
+       Use in pipeline:
+
+           cat log.txt | tail -n 20
+
+SEE ALSO
+       head(1), cat(1)
+
+                                  2025-12-24                           tail(1)

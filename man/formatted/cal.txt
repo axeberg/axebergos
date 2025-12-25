@@ -1,0 +1,16 @@
+Error  at  16:0:  Expected * before starting new paragraph (began
+[4mcal[24m(1)                      General Commands Manual                     [4mcal[24m(1)
+
+with * at 14:33)
+
+[1mNAME[0m
+       cal - display a calendar
+
+[1mSYNOPSIS[0m
+       [1mcal [22m[[4mMONTH[24m] [[4mYEAR[24m]
+
+[1mDESCRIPTION[0m
+       Display a calendar for the current or specified month. The current  day
+       is marked with an asterisk ([1m).[0m
+
+                                  2025-12-24                            [4mcal[24m(1)

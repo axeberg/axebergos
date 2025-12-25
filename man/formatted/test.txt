@@ -1,0 +1,84 @@
+[4mtest[24m(1)                     General Commands Manual                    [4mtest[24m(1)
+
+Error at 91:2: Tables cannot be indented
+
+[1mNAME[0m
+       test - evaluate conditional expression
+
+[1mSYNOPSIS[0m
+       [1mtest [4m[22mEXPRESSION[24m [1m[ [4m[22mEXPRESSION[24m [1m][0m
+
+[1mDESCRIPTION[0m
+       Evaluate  conditional  expressions.  Returns  exit status 0 (true) or 1
+       (false) based on the evaluation. The [1m[ [22mcommand is an alias for [1mtest [22mbut
+       requires a closing [1m][22m.
+
+[1mSTRING OPERATORS[0m
+       [1m-n [4m[22mSTRING[0m
+           True if STRING is not empty.
+
+       [1m-z [4m[22mSTRING[0m
+           True if STRING is empty.
+
+       [4mSTRING1[24m [1m= [4m[22mSTRING2[0m
+           True if strings are equal.
+
+       [4mSTRING1[24m [1m!= [4m[22mSTRING2[0m
+           True if strings are not equal.
+
+[1mNUMERIC OPERATORS[0m
+       [4mNUM1[24m [1m-eq [4m[22mNUM2[0m
+           True if NUM1 equals NUM2.
+
+       [4mNUM1[24m [1m-ne [4m[22mNUM2[0m
+           True if NUM1 does not equal NUM2.
+
+       [4mNUM1[24m [1m-lt [4m[22mNUM2[0m
+           True if NUM1 is less than NUM2.
+
+       [4mNUM1[24m [1m-le [4m[22mNUM2[0m
+           True if NUM1 is less than or equal to NUM2.
+
+       [4mNUM1[24m [1m-gt [4m[22mNUM2[0m
+           True if NUM1 is greater than NUM2.
+
+       [4mNUM1[24m [1m-ge [4m[22mNUM2[0m
+           True if NUM1 is greater than or equal to NUM2.
+
+[1mFILE OPERATORS[0m
+       [1m-e [4m[22mFILE[0m
+           True if FILE exists.
+
+       [1m-f [4m[22mFILE[0m
+           True if FILE exists and is a regular file.
+
+       [1m-d [4m[22mFILE[0m
+           True if FILE exists and is a directory.
+
+       [1m-r [4m[22mFILE[0m
+           True if FILE exists and is readable.
+
+       [1m-w [4m[22mFILE[0m
+           True if FILE exists and is writable.
+
+       [1m-x [4m[22mFILE[0m
+           True if FILE exists and is executable.
+
+       [1m-s [4m[22mFILE[0m
+           True if FILE exists and has size > 0.
+
+       [1m-L [4m[22mFILE[24m, [1m-h [4m[22mFILE[0m
+           True if FILE is a symbolic link.
+
+[1mLOGICAL OPERATORS[0m
+       [1m! [4m[22mEXPRESSION[0m
+           Negate the expression.
+
+[1mEXAMPLES[0m
+       Check if file exists:
+
+           test -e /etc/passwd && echo "exists"
+
+       Compare numbers:
+
+                                  2025-12-24                           [4mtest[24m(1)

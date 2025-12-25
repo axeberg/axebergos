@@ -1,0 +1,53 @@
+[4mdiff[24m(1)                     General Commands Manual                    [4mdiff[24m(1)
+
+[1mNAME[0m
+       diff - compare files line by line
+
+[1mSYNOPSIS[0m
+       [1mdiff [4m[22mFILE1[24m [4mFILE2[0m
+
+[1mDESCRIPTION[0m
+       Compare  two  files line by line and output the differences in a simple
+       format. Shows which lines differ between the files.
+
+[1mOPTIONS[0m
+       [1m-h[22m, [1m--help[0m
+           Display usage information and exit.
+
+[1mOUTPUT FORMAT[0m
+       The output uses the following notation:
+
+       [1mNcN[0m
+           Line N in FILE1 differs from line N in FILE2.
+
+       [1mNdN[0m
+           Line N in FILE1 was deleted (not in FILE2).
+
+       [1mNaN[0m
+           Line N was added in FILE2 (not in FILE1).
+
+       [1m< line[0m
+           Line from FILE1.
+
+       [1m> line[0m
+           Line from FILE2.
+
+       [1m---[0m
+           Separator between FILE1 and FILE2 content.
+
+[1mEXAMPLES[0m
+       Compare two files:
+
+           diff file1.txt file2.txt
+
+[1mEXIT STATUS[0m
+       [1m0[0m
+           Files are identical.
+
+       [1m1[0m
+           Files differ.
+
+[1mSEE ALSO[0m
+       [1mcomm[22m(1)
+
+                                  2025-12-24                           [4mdiff[24m(1)

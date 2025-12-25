@@ -1,0 +1,24 @@
+mv(1)                       General Commands Manual                      mv(1)
+
+NAME
+       mv - move or rename files
+
+SYNOPSIS
+       mv SOURCE DEST
+
+DESCRIPTION
+       Move or rename SOURCE to DEST.
+
+EXAMPLES
+       Rename a file:
+
+           mv old.txt new.txt
+
+       Move to another directory:
+
+           mv file.txt /home/user/documents/
+
+SEE ALSO
+       cp(1), rm(1)
+
+                                  2025-12-24                             mv(1)

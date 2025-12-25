@@ -1,0 +1,27 @@
+man(1)                      General Commands Manual                     man(1)
+
+NAME
+       man - display manual pages
+
+SYNOPSIS
+       man COMMAND
+
+DESCRIPTION
+       Display the manual page for COMMAND.
+
+       Manual  pages  provide detailed documentation including usage, options,
+       and examples for each command.
+
+EXAMPLES
+       View manual for ls:
+
+           man ls
+
+       View manual for grep:
+
+           man grep
+
+SEE ALSO
+       help(1)
+
+                                  2025-12-24                            man(1)

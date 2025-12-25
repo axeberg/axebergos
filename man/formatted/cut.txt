@@ -1,0 +1,48 @@
+cut(1)                      General Commands Manual                     cut(1)
+
+NAME
+       cut - remove sections from each line
+
+SYNOPSIS
+       cut -d DELIM -f FIELDS [FILE]
+
+DESCRIPTION
+       Print selected fields from each line, using DELIM as field separator.
+
+OPTIONS
+       -d DELIM
+           Use DELIM as field delimiter (default: tab).
+
+       -f FIELDS
+           Select only these fields. Format:
+           o   N - field N
+           o   N,M - fields N and M
+           o   N-M - fields N through M
+
+
+       -h, --help
+           Display usage information and exit.
+
+EXAMPLES
+       Extract first field (colon-separated):
+
+           echo "a:b:c" | cut -d : -f 1
+
+       Result: a
+
+       Multiple fields:
+
+           echo "a:b:c:d" | cut -d : -f 1,3
+
+       Result: a:c
+
+       Field range:
+
+           echo "a:b:c:d" | cut -d : -f 2-4
+
+       Result: b:c:d
+
+SEE ALSO
+       tr(1), grep(1)
+
+                                  2025-12-24                            cut(1)

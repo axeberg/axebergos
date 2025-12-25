@@ -1,0 +1,66 @@
+edit(1)
+
+# NAME
+
+edit - text editor
+
+# SYNOPSIS
+
+*edit* [_FILE_]
+
+# DESCRIPTION
+
+Open the text editor. If _FILE_ is given, opens that file for editing.
+If the file does not exist, creates a new file.
+
+# KEYBINDINGS
+
+*Ctrl+S*
+	Save file.
+
+*Ctrl+Q*
+	Quit (press twice if unsaved changes).
+
+*Ctrl+F*
+	Find text.
+
+*Ctrl+G*
+	Go to line number.
+
+*Ctrl+K*
+	Delete current line.
+
+*Ctrl+D*
+	Duplicate current line.
+
+*Ctrl+C*
+	Copy current line.
+
+*Ctrl+V*
+	Paste copied line.
+
+*Arrow keys*
+	Move cursor.
+
+*Ctrl+Arrow*
+	Move by word.
+
+*Home/End*
+	Move to start/end of line.
+
+*Page Up/Down*
+	Scroll by page.
+
+# EXAMPLES
+
+Create or edit a file:
+
+	edit notes.txt
+
+Open new empty buffer:
+
+	edit
+
+# SEE ALSO
+
+*cat*(1)

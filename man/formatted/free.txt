@@ -1,0 +1,49 @@
+[4mfree[24m(1)                     General Commands Manual                    [4mfree[24m(1)
+
+[1mNAME[0m
+       free - display amount of free and used memory
+
+[1mSYNOPSIS[0m
+       [1mfree [22m[[1m-h[22m]
+
+[1mDESCRIPTION[0m
+       Display  the  total amount of free and used physical memory in the sys‐
+       tem, including shared memory usage.
+
+[1mOPTIONS[0m
+       [1m-h[22m, [1m--human[0m
+           Print sizes in human readable format (e.g., 1K, 234M, 2G).
+
+       [1m--help[0m
+           Display usage information and exit.
+
+[1mOUTPUT COLUMNS[0m
+       [1mtotal[0m
+           Total amount of memory (system limit).
+
+       [1mused[0m
+           Amount of memory currently allocated.
+
+       [1mfree[0m
+           Amount of memory available (total - used).
+
+       [1mshared[0m
+           Memory used for shared memory segments.
+
+[1mEXAMPLES[0m
+       Show memory usage:
+
+           free
+
+       Human readable output:
+
+           free -h
+
+[1mNOTES[0m
+       In axebergOS, memory statistics reflect the virtual  memory  management
+       of the WASM runtime.
+
+[1mSEE ALSO[0m
+       [1muptime[22m(1), [1mdf[22m(1), [1mps[22m(1)
+
+                                  2025-12-24                           [4mfree[24m(1)

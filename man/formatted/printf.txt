@@ -1,0 +1,74 @@
+[4mprintf[24m(1)                   General Commands Manual                  [4mprintf[24m(1)
+
+[1mNAME[0m
+       printf - format and print data
+
+[1mSYNOPSIS[0m
+       [1mprintf [4m[22mFORMAT[24m [[4mARG[24m...]
+
+[1mDESCRIPTION[0m
+       Format  and print data according to the FORMAT string. Similar to the C
+       printf function.
+
+[1mOPTIONS[0m
+       [1m-h[22m, [1m--help[0m
+           Display usage information and exit.
+
+[1mFORMAT SPECIFIERS[0m
+       [1m%s[0m
+           String.
+
+       [1m%d[22m, [1m%i[0m
+           Signed decimal integer.
+
+       [1m%x[0m
+           Unsigned hexadecimal (lowercase).
+
+       [1m%X[0m
+           Unsigned hexadecimal (uppercase).
+
+       [1m%o[0m
+           Unsigned octal.
+
+       [1m%c[0m
+           Single character.
+
+       [1m%%[0m
+           Literal percent sign.
+
+[1mESCAPE SEQUENCES[0m
+       [1m\n[0m
+           Newline.
+
+       [1m\t[0m
+           Tab.
+
+       [1m\r[0m
+           Carriage return.
+
+       [1m\\[0m
+           Backslash.
+
+       [1m\"[0m
+           Double quote.
+
+       [1m\0[0m
+           Null character.
+
+[1mEXAMPLES[0m
+       Print formatted string:
+
+           printf "Hello, %s!\n" "World"
+
+       Print number in hex:
+
+           printf "Value: 0x%X\n" 255
+
+       Print multiple values:
+
+           printf "%s = %d\n" "count" 42
+
+[1mSEE ALSO[0m
+       [1mecho[22m(1)
+
+                                  2025-12-24                         [4mprintf[24m(1)

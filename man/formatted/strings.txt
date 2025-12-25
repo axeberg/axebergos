@@ -1,0 +1,32 @@
+[4mstrings[24m(1)                  General Commands Manual                 [4mstrings[24m(1)
+
+[1mNAME[0m
+       strings - print the sequences of printable characters in files
+
+[1mSYNOPSIS[0m
+       [1mstrings [22m[[1m-n [4m[22mMIN[24m] [[4mFILE[24m]
+
+[1mDESCRIPTION[0m
+       Print  sequences  of  printable characters from FILE or standard input.
+       Useful for finding text in binary files.
+
+[1mOPTIONS[0m
+       [1m-n [4m[22mMIN[0m
+           Minimum string length (default 4).
+
+       [1m-h[22m, [1m--help[0m
+           Display usage information and exit.
+
+[1mEXAMPLES[0m
+       Find strings in a file:
+
+           strings binary.bin
+
+       Find strings with minimum length 8:
+
+           strings -n 8 binary.bin
+
+[1mSEE ALSO[0m
+       [1mxxd[22m(1), [1mgrep[22m(1)
+
+                                  2025-12-24                        [4mstrings[24m(1)
