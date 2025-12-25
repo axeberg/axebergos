@@ -136,7 +136,6 @@ import init from './pkg/axeberg.js';
 await init();  // Terminal auto-attaches to DOM
 ```
 
-> **Note**: These deployment methods follow standard wasm-pack conventions but have not been individually verified.
 
 ## Project Structure
 

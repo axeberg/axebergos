@@ -1846,7 +1846,7 @@ fn prog_autosave(args: &[String], stdout: &mut String, stderr: &mut String) -> i
             return 0;
         }
 
-        match args[0].as_str() {
+        match args[0] {
             "on" => {
                 terminal::set_autosave(true);
                 stdout.push_str("Auto-save enabled\n");
