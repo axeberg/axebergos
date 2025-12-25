@@ -35,7 +35,7 @@ use super::sysfs::SysFs;
 use super::task::TaskId;
 use super::timer::{TimerId, TimerQueue};
 use super::trace::{TraceCategory, TraceSummary, Tracer};
-use super::users::{Gid, Group, Uid, User, UserDb};
+use super::users::{check_permission, FileMode, Gid, Group, Uid, User, UserDb};
 use crate::vfs::{FileSystem, MemoryFs, OpenOptions as VfsOpenOptions};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -959,6 +959,9 @@ impl Kernel {
             return Err(SyscallError::NotADirectory);
         }
 
+        // Check execute permission on directory (required to cd into it)
+        self.check_file_permission(path_str, false, false, true)?;
+
         let process = self.processes.get_mut(&current).unwrap();
         process.cwd = resolved;
         Ok(())
@@ -1187,6 +1190,70 @@ impl Kernel {
         }
     }
 
+    /// Check if the current process has permission to access a file
+    /// Returns Ok(()) if allowed, Err(PermissionDenied) if not
+    fn check_file_permission(
+        &self,
+        path: &str,
+        want_read: bool,
+        want_write: bool,
+        want_exec: bool,
+    ) -> SyscallResult<()> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get(&current).unwrap();
+
+        // Get file metadata
+        let meta = self.vfs.metadata(path)?;
+
+        // Check permission
+        let allowed = check_permission(
+            Uid(meta.uid),
+            Gid(meta.gid),
+            FileMode::new(meta.mode),
+            process.euid,
+            process.egid,
+            &process.groups,
+            want_read,
+            want_write,
+            want_exec,
+        );
+
+        if allowed {
+            Ok(())
+        } else {
+            Err(SyscallError::PermissionDenied)
+        }
+    }
+
+    /// Check if the current process has write permission on the parent directory
+    /// (needed for creating/deleting files in the directory)
+    fn check_parent_write_permission(&self, path: &str) -> SyscallResult<()> {
+        // Get parent directory
+        let parent = Path::new(path)
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| "/".to_string());
+
+        let parent = if parent.is_empty() { "/" } else { &parent };
+
+        // Need write and execute on parent directory to create/delete files
+        self.check_file_permission(parent, false, true, true)
+    }
+
+    /// Get the current process's effective UID (for setting file ownership)
+    fn current_euid(&self) -> SyscallResult<Uid> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get(&current).unwrap();
+        Ok(process.euid)
+    }
+
+    /// Get the current process's effective GID
+    fn current_egid(&self) -> SyscallResult<Gid> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let process = self.processes.get(&current).unwrap();
+        Ok(process.egid)
+    }
+
     /// Open a device (paths starting with /dev/)
     fn open_device(&mut self, path: &Path, _flags: OpenFlags) -> SyscallResult<Handle> {
         let name = path
@@ -1223,6 +1290,19 @@ impl Kernel {
     fn open_file(&mut self, path: &Path, flags: OpenFlags) -> SyscallResult<Handle> {
         let path_str = path.to_str().ok_or(SyscallError::InvalidArgument)?;
 
+        // Check if file exists
+        let file_exists = self.vfs.exists(path_str);
+
+        if file_exists {
+            // Check permissions on existing file
+            self.check_file_permission(path_str, flags.read, flags.write, false)?;
+        } else if flags.create {
+            // For new files, check write permission on parent directory
+            self.check_parent_write_permission(path_str)?;
+        } else {
+            return Err(SyscallError::NotFound);
+        }
+
         // Convert our flags to VFS options
         // Note: We always need read access in VFS to read existing content into FileObject,
         // but the actual permissions are tracked separately in the FileObject
@@ -1235,6 +1315,13 @@ impl Kernel {
 
         // Open via VFS
         let vfs_handle = self.vfs.open(path_str, vfs_opts)?;
+
+        // If we just created a new file, set ownership to current user
+        if !file_exists && flags.create {
+            let euid = self.current_euid()?;
+            let egid = self.current_egid()?;
+            let _ = self.vfs.chown(path_str, Some(euid.0), Some(egid.0));
+        }
 
         // Read the file contents
         let meta = self.vfs.metadata(path_str)?;
@@ -1305,7 +1392,17 @@ impl Kernel {
         let current = self.current.ok_or(SyscallError::NoProcess)?;
         let resolved = self.resolve_path(current, path)?;
         let path_str = resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
+
+        // Check write/execute permission on parent directory
+        self.check_parent_write_permission(path_str)?;
+
         self.vfs.create_dir(path_str)?;
+
+        // Set ownership to current user
+        let euid = self.current_euid()?;
+        let egid = self.current_egid()?;
+        let _ = self.vfs.chown(path_str, Some(euid.0), Some(egid.0));
+
         Ok(())
     }
 
@@ -1315,7 +1412,7 @@ impl Kernel {
         let resolved = self.resolve_path(current, path)?;
         let path_str = resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
 
-        // Handle /proc directory listings
+        // Handle /proc directory listings (always readable)
         if ProcFs::is_proc_path(path_str) {
             let pids: Vec<u32> = self.processes.keys().map(|p| p.0).collect();
             if let Some(entries) = self.procfs.list_dir(path_str, &pids) {
@@ -1324,7 +1421,7 @@ impl Kernel {
             return Err(SyscallError::NotFound);
         }
 
-        // Handle /dev directory listings
+        // Handle /dev directory listings (always readable)
         if DevFs::is_dev_path(path_str) {
             if let Some(entries) = self.devfs.list_dir(path_str) {
                 return Ok(entries);
@@ -1332,13 +1429,16 @@ impl Kernel {
             return Err(SyscallError::NotFound);
         }
 
-        // Handle /sys directory listings
+        // Handle /sys directory listings (always readable)
         if SysFs::is_sys_path(path_str) {
             if let Some(entries) = self.sysfs.list_dir(path_str) {
                 return Ok(entries);
             }
             return Err(SyscallError::NotFound);
         }
+
+        // Check read and execute permission on directory
+        self.check_file_permission(path_str, true, false, true)?;
 
         let entries = self.vfs.read_dir(path_str)?;
         Ok(entries.into_iter().map(|e| e.name).collect())
@@ -1436,6 +1536,10 @@ impl Kernel {
         let current = self.current.ok_or(SyscallError::NoProcess)?;
         let resolved = self.resolve_path(current, path)?;
         let path_str = resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
+
+        // Check write/execute permission on parent directory
+        self.check_parent_write_permission(path_str)?;
+
         self.vfs.remove_file(path_str)?;
         Ok(())
     }
@@ -1445,6 +1549,10 @@ impl Kernel {
         let current = self.current.ok_or(SyscallError::NoProcess)?;
         let resolved = self.resolve_path(current, path)?;
         let path_str = resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
+
+        // Check write/execute permission on parent directory
+        self.check_parent_write_permission(path_str)?;
+
         self.vfs.remove_dir(path_str)?;
         Ok(())
     }
@@ -1456,6 +1564,11 @@ impl Kernel {
         let to_resolved = self.resolve_path(current, to)?;
         let from_str = from_resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
         let to_str = to_resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
+
+        // Check write/execute permission on both source and destination parent directories
+        self.check_parent_write_permission(from_str)?;
+        self.check_parent_write_permission(to_str)?;
+
         self.vfs.rename(from_str, to_str)?;
         Ok(())
     }
@@ -1467,7 +1580,19 @@ impl Kernel {
         let to_resolved = self.resolve_path(current, to)?;
         let from_str = from_resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
         let to_str = to_resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
+
+        // Check read permission on source file
+        self.check_file_permission(from_str, true, false, false)?;
+        // Check write permission on destination parent directory
+        self.check_parent_write_permission(to_str)?;
+
         let size = self.vfs.copy_file(from_str, to_str)?;
+
+        // Set ownership of new file to current user
+        let euid = self.current_euid()?;
+        let egid = self.current_egid()?;
+        let _ = self.vfs.chown(to_str, Some(euid.0), Some(egid.0));
+
         Ok(size)
     }
 
@@ -1476,8 +1601,18 @@ impl Kernel {
         let current = self.current.ok_or(SyscallError::NoProcess)?;
         let link_resolved = self.resolve_path(current, link_path)?;
         let link_str = link_resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
+
+        // Check write/execute permission on parent directory
+        self.check_parent_write_permission(link_str)?;
+
         // Target is stored as-is (can be relative or absolute)
         self.vfs.symlink(target, link_str)?;
+
+        // Set ownership of symlink to current user
+        let euid = self.current_euid()?;
+        let egid = self.current_egid()?;
+        let _ = self.vfs.chown(link_str, Some(euid.0), Some(egid.0));
+
         Ok(())
     }
 

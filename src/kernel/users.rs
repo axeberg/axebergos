@@ -280,6 +280,8 @@ impl UserDb {
         user.home = home.to_string();
         if name == "root" {
             user.shell = "/bin/sh".to_string();
+            // Set default root password to "root"
+            user.set_password("root");
         }
         self.users.insert(uid, user);
         self.users_by_name.insert(name.to_string(), uid);
@@ -345,6 +347,12 @@ impl UserDb {
 
     /// Look up user mutably by UID
     pub fn get_user_mut(&mut self, uid: Uid) -> Option<&mut User> {
+        self.users.get_mut(&uid)
+    }
+
+    /// Look up user mutably by name
+    pub fn get_user_by_name_mut(&mut self, name: &str) -> Option<&mut User> {
+        let uid = self.users_by_name.get(name).copied()?;
         self.users.get_mut(&uid)
     }
 

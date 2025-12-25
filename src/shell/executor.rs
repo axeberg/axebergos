@@ -3104,33 +3104,50 @@ fn prog_groupadd(args: &[String], stdout: &mut String, stderr: &mut String) -> i
     }
 }
 
-/// passwd - change password (placeholder)
+/// passwd - change password
 fn prog_passwd(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
     let (_, args) = extract_stdin(args);
 
-    if let Some(help) = check_help(&args, "Usage: passwd [USER]\nChange user password.") {
+    if let Some(help) = check_help(&args, "Usage: passwd [USER] [PASSWORD]\n\nChange user password.\n\nExamples:\n  passwd mypassword          Set your own password\n  passwd root newpass        Set root's password (requires root)\n  passwd user                Clear user's password (requires root)") {
         stdout.push_str(&help);
         return 0;
     }
 
-    // Check if changing own password or other's
-    let target = if args.is_empty() {
-        // Changing own password
-        if let Ok(euid) = syscall::geteuid() {
-            syscall::get_user_by_uid(euid)
-                .map(|u| u.name.clone())
-                .unwrap_or_else(|| "user".to_string())
+    // Determine target user and new password
+    let euid = syscall::geteuid().unwrap_or_default();
+
+    let (target, new_password) = if args.is_empty() {
+        stderr.push_str("passwd: usage: passwd [USER] <PASSWORD>\n");
+        return 1;
+    } else if args.len() == 1 {
+        // Single arg: could be password for self, or username to clear password (if root)
+        let current_user = syscall::get_user_by_uid(euid)
+            .map(|u| u.name.clone())
+            .unwrap_or_else(|| "user".to_string());
+
+        // If argument looks like a username that exists, treat it as clearing password
+        if euid.0 == 0 && syscall::get_user_by_name(&args[0]).is_some() {
+            (args[0].to_string(), None)
         } else {
-            "user".to_string()
+            // Treat as password for current user
+            (current_user, Some(args[0].to_string()))
         }
     } else {
-        // Changing another user's password - need root
-        let euid = syscall::geteuid().unwrap_or_default();
+        // Two or more args: first is username, rest is password
+        let username = args[0].to_string();
+        let password = args[1..].join(" ");
+
+        // Check permission
         if euid.0 != 0 {
-            stderr.push_str("passwd: permission denied (must be root to change other users' passwords)\n");
-            return 1;
+            let current_user = syscall::get_user_by_uid(euid)
+                .map(|u| u.name.clone())
+                .unwrap_or_else(|| "".to_string());
+            if username != current_user {
+                stderr.push_str("passwd: permission denied (must be root to change other users' passwords)\n");
+                return 1;
+            }
         }
-        args[0].to_string()
+        (username, if password.is_empty() { None } else { Some(password) })
     };
 
     if syscall::get_user_by_name(&target).is_none() {
@@ -3138,10 +3155,35 @@ fn prog_passwd(args: &[String], stdout: &mut String, stderr: &mut String) -> i32
         return 1;
     }
 
-    // In a real system, this would prompt for password
-    stdout.push_str(&format!("Changing password for '{}'\n", target));
-    stdout.push_str("(Password change simulated - no actual password set)\n");
-    0
+    // Set the password
+    let result = syscall::KERNEL.with(|k| {
+        let mut kernel = k.borrow_mut();
+        if let Some(user) = kernel.users_mut().get_user_by_name_mut(&target) {
+            match new_password {
+                Some(pwd) => {
+                    user.set_password(&pwd);
+                    Ok(format!("Password set for '{}'\n", target))
+                }
+                None => {
+                    user.password_hash = None;
+                    Ok(format!("Password cleared for '{}'\n", target))
+                }
+            }
+        } else {
+            Err(format!("User '{}' not found\n", target))
+        }
+    });
+
+    match result {
+        Ok(msg) => {
+            stdout.push_str(&msg);
+            0
+        }
+        Err(msg) => {
+            stderr.push_str(&msg);
+            1
+        }
+    }
 }
 
 /// chmod - change file permissions
@@ -6094,45 +6136,62 @@ fn prog_pkg(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 
 // ========== USER LOGIN COMMANDS ==========
 
-/// login - log in as a user
+/// login - log in as a user with password authentication
 fn prog_login(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
     let (_, args) = extract_stdin(args);
 
-    if let Some(help) = check_help(&args, "Usage: login [username]\n\nLog in as a user.\n\nIf no username is provided, prompts for one.\nUse 'logout' to end the current session.") {
+    if let Some(help) = check_help(&args, "Usage: login <username> [password]\n\nLog in as a user with password authentication.\n\nIf no password is provided, allows login for users without passwords.\nUse 'logout' to end the current session.\nUse 'passwd' to change your password.\n\nDefault users:\n  root     - password: root (uid 0)\n  user     - no password (uid 1000)\n  nobody   - no password (uid 65534)") {
         stdout.push_str(&help);
         return 0;
+    }
+
+    if args.is_empty() {
+        stderr.push_str("login: usage: login <username> [password]\n");
+        return 1;
     }
 
     // Ensure session directory exists
     let _ = syscall::mkdir("/var");
     let _ = syscall::mkdir("/var/run");
 
-    let username = if args.is_empty() {
-        // Default to user if no username specified
-        "user".to_string()
-    } else {
-        args[0].to_string()
-    };
+    let username = args[0].to_string();
+    let password = if args.len() > 1 { Some(args[1..].join(" ")) } else { None };
 
-    // Check if user exists
-    let user_exists = syscall::KERNEL.with(|k| {
-        k.borrow().users().get_user_by_name(&username).is_some()
-    });
-
-    if !user_exists {
-        stderr.push_str(&format!("login: unknown user '{}'\n", username));
-        return 1;
-    }
-
-    // Get user info
-    let (uid, gid, home) = syscall::KERNEL.with(|k| {
+    // Verify user exists and check password
+    let auth_result = syscall::KERNEL.with(|k| {
         let kernel = k.borrow();
         if let Some(user) = kernel.users().get_user_by_name(&username) {
-            (user.uid.0, user.gid.0, user.home.clone())
+            // Check password
+            match (&user.password_hash, &password) {
+                (None, _) => {
+                    // No password set - allow login
+                    Ok((user.uid.0, user.gid.0, user.home.clone()))
+                }
+                (Some(_), None) => {
+                    // Password required but not provided
+                    Err("Password required".to_string())
+                }
+                (Some(_), Some(pwd)) => {
+                    // Verify password
+                    if user.check_password(pwd) {
+                        Ok((user.uid.0, user.gid.0, user.home.clone()))
+                    } else {
+                        Err("Authentication failed".to_string())
+                    }
+                }
+            }
         } else {
-            (1000, 1000, "/home/user".to_string())
+            Err(format!("Unknown user '{}'", username))
         }
     });
+
+    let (uid, gid, home) = match auth_result {
+        Ok(info) => info,
+        Err(msg) => {
+            stderr.push_str(&format!("login: {}\n", msg));
+            return 1;
+        }
+    };
 
     // Set the current process's uid/gid
     syscall::KERNEL.with(|k| {
@@ -6608,10 +6667,18 @@ mod tests {
 
     fn setup_kernel() {
         use crate::kernel::syscall::{KERNEL, Kernel};
+        use crate::kernel::users::{Uid, Gid};
         KERNEL.with(|k| {
             *k.borrow_mut() = Kernel::new();
             let pid = k.borrow_mut().spawn_process("shell", None);
             k.borrow_mut().set_current(pid);
+            // Set test process to run as root for permission checks
+            if let Some(proc) = k.borrow_mut().current_process_mut() {
+                proc.uid = Uid(0);
+                proc.euid = Uid(0);
+                proc.gid = Gid(0);
+                proc.egid = Gid(0);
+            }
         });
     }
 
