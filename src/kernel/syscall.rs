@@ -23,13 +23,13 @@ use super::object::{
 };
 pub use super::process::{Fd, Handle, OpenFlags, Pgid, Pid, Process, ProcessState};
 use super::devfs::DevFs;
-use super::fifo::{FifoError, FifoRegistry};
+use super::fifo::FifoRegistry;
 use super::init::InitSystem;
-use super::mount::{FsType, MountEntry, MountError, MountOptions, MountTable};
+use super::mount::MountTable;
 use super::tty::TtyManager;
-use super::msgqueue::{Message, MsgQueueError, MsgQueueId, MsgQueueManager, MsgQueueStats};
+use super::msgqueue::MsgQueueManager;
 use super::procfs::{generate_proc_content, ProcContext, ProcFs, SystemContext};
-use super::semaphore::{SemaphoreManager, SemError, SemId, SemOpResult, SemSetStats};
+use super::semaphore::SemaphoreManager;
 use super::signal::{resolve_action, Signal, SignalAction, SignalError};
 use super::sysfs::SysFs;
 use super::task::TaskId;
@@ -2520,6 +2520,11 @@ pub fn get_group_by_name(name: &str) -> Option<Group> {
 /// Get group by gid
 pub fn get_group_by_gid(gid: Gid) -> Option<Group> {
     KERNEL.with(|k| k.borrow().get_group_by_gid(gid).cloned())
+}
+
+/// List all groups
+pub fn list_groups() -> Vec<Group> {
+    KERNEL.with(|k| k.borrow().users.list_groups().into_iter().cloned().collect())
 }
 
 /// Add a new user (requires root)

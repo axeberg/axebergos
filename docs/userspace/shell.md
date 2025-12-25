@@ -71,12 +71,16 @@ Programs run via the executor with full pipe/redirect support:
 | Command | Description |
 |---------|-------------|
 | `cat <files...>` | Concatenate and print files |
-| `ls [path]` | List directory contents |
-| `mkdir <path>` | Create directory |
+| `ls [-l] [-a] [path]` | List directory contents |
+| `mkdir [-p] <path>` | Create directory |
 | `touch <file>` | Create empty file or update timestamp |
-| `rm [-r] <paths...>` | Remove files/directories |
+| `rm [-r] [-f] <paths...>` | Remove files/directories |
 | `cp <src> <dst>` | Copy file |
 | `mv <src> <dst>` | Move/rename file |
+| `ln [-s] <target> <link>` | Create hard/symbolic link |
+| `readlink <link>` | Print symlink target |
+| `stat <path>` | Display file status |
+| `file <path>` | Determine file type |
 
 ### Text Processing
 
@@ -84,17 +88,99 @@ Programs run via the executor with full pipe/redirect support:
 |---------|-------------|
 | `head [-n N] [file]` | Show first N lines (default 10) |
 | `tail [-n N] [file]` | Show last N lines (default 10) |
-| `wc [file]` | Count lines, words, bytes |
-| `grep <pattern> [file]` | Search for pattern |
-| `sort [file]` | Sort lines |
-| `uniq [file]` | Remove duplicate adjacent lines |
+| `wc [-l] [-w] [-c] [file]` | Count lines, words, bytes |
+| `grep [-i] [-v] [-n] <pattern> [file]` | Search for pattern |
+| `sort [-r] [-n] [file]` | Sort lines |
+| `uniq [-c] [-d] [file]` | Remove duplicate adjacent lines |
+| `cut -d<delim> -f<fields> [file]` | Extract fields |
+| `tr <set1> <set2>` | Translate characters |
+| `sed <script> [file]` | Stream editor |
+| `awk <program> [file]` | Pattern scanning |
+| `diff <file1> <file2>` | Compare files |
+| `comm <file1> <file2>` | Compare sorted files |
 
 ### Utilities
 
 | Command | Description |
 |---------|-------------|
-| `tee <file>` | Copy stdin to file and stdout |
+| `tee [-a] <file>` | Copy stdin to file and stdout |
 | `clear` | Clear terminal screen |
+| `date` | Display current date/time |
+| `sleep <seconds>` | Sleep for specified time |
+| `basename <path>` | Extract filename |
+| `dirname <path>` | Extract directory |
+| `which <cmd>` | Locate command |
+| `xargs <cmd>` | Build command from stdin |
+| `seq <start> <end>` | Print number sequence |
+| `yes [string]` | Print string repeatedly |
+| `printf <format> [args]` | Formatted output |
+
+### Process Management
+
+| Command | Description |
+|---------|-------------|
+| `ps [-e] [-f]` | List processes |
+| `kill [-signal] <pid>` | Send signal to process |
+| `jobs` | List background jobs |
+| `fg [job]` | Bring job to foreground |
+| `bg [job]` | Continue job in background |
+
+### System Information
+
+| Command | Description |
+|---------|-------------|
+| `uname [-a]` | Print system information |
+| `uptime` | Show system uptime |
+| `free` | Display memory usage |
+| `df [-h]` | Show disk space usage |
+| `du [-s] [-h] [path]` | Estimate file space |
+
+### User & Permission Management
+
+| Command | Description |
+|---------|-------------|
+| `id [user]` | Print user/group IDs |
+| `whoami` | Print current username |
+| `groups [user]` | Print group memberships |
+| `useradd <name>` | Create new user |
+| `groupadd <name>` | Create new group |
+| `passwd [user]` | Change password |
+| `su [user]` | Switch user |
+| `sudo <cmd>` | Run as root |
+| `chmod <mode> <file>` | Change permissions |
+| `chown <user> <file>` | Change owner |
+| `chgrp <group> <file>` | Change group |
+
+### Service Management
+
+| Command | Description |
+|---------|-------------|
+| `systemctl <cmd> [service]` | Manage services |
+| `reboot` | Reboot system |
+| `poweroff` | Power off system |
+
+### IPC Commands
+
+| Command | Description |
+|---------|-------------|
+| `mkfifo <name>` | Create named pipe |
+| `ipcs [-q] [-s] [-m]` | Show IPC facilities |
+| `ipcrm -q\|-s\|-m <id>` | Remove IPC resource |
+
+### Mount Commands
+
+| Command | Description |
+|---------|-------------|
+| `mount [-t type] [-o opts] <src> <tgt>` | Mount filesystem |
+| `umount <target>` | Unmount filesystem |
+| `findmnt [target]` | Find mount point |
+
+### TTY Commands
+
+| Command | Description |
+|---------|-------------|
+| `tty` | Print terminal name |
+| `stty [-a] [setting]` | Get/set terminal settings |
 
 ## Syntax
 
@@ -255,11 +341,18 @@ $ help
 Built-in commands:
   cd <path>     - Change directory
   pwd           - Print working directory
+  exit [code]   - Exit shell
+  export VAR=val - Set environment variable
   ...
 
 Programs:
-  cat, ls, mkdir, touch, rm, cp, mv
-  head, tail, wc, grep, sort, uniq, tee, clear
+  File: cat, ls, mkdir, touch, rm, cp, mv, ln, stat
+  Text: head, tail, wc, grep, sort, uniq, cut, tr, sed, awk
+  System: ps, kill, mount, df, free, uname, uptime
+  User: id, whoami, groups, su, sudo, chmod, chown
+  Service: systemctl, reboot, poweroff
+  IPC: mkfifo, ipcs, ipcrm
+  TTY: tty, stty
 ```
 
 ## Related Documentation

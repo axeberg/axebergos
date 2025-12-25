@@ -2223,7 +2223,7 @@ fn prog_id(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// jobs - list background jobs
-fn prog_jobs(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+fn prog_jobs(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
     let (_, args) = extract_stdin(args);
 
     if let Some(help) = check_help(&args, "Usage: jobs [-l]\nList background jobs.") {
@@ -2505,7 +2505,13 @@ fn prog_groups(args: &[String], stdout: &mut String, stderr: &mut String) -> i32
                 .unwrap_or_else(|| user.gid.0.to_string());
             stdout.push_str(&primary);
 
-            // TODO: Get supplementary groups from user database
+            // Get supplementary groups (groups where user is a member)
+            for group in syscall::list_groups() {
+                if group.gid != user.gid && group.members.iter().any(|m| m == username) {
+                    stdout.push(' ');
+                    stdout.push_str(&group.name);
+                }
+            }
             stdout.push('\n');
             return 0;
         } else {
@@ -2967,7 +2973,7 @@ fn prog_hostname(args: &[String], stdout: &mut String, stderr: &mut String) -> i
 }
 
 /// uname - print system information
-fn prog_uname(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+fn prog_uname(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
     let (_, args) = extract_stdin(args);
 
     if let Some(help) = check_help(&args, "Usage: uname [-amnrsv]\nPrint system information.") {
@@ -3134,7 +3140,7 @@ fn prog_find(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// du - disk usage
-fn prog_du(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+fn prog_du(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
     let (_, args) = extract_stdin(args);
 
     if let Some(help) = check_help(&args, "Usage: du [-s] [-h] [PATH...]\nEstimate file space usage.") {
@@ -3227,9 +3233,6 @@ fn prog_df(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
     }
 
     let human_readable = args.iter().any(|a| *a == "-h");
-
-    // Get memory stats as a proxy for "disk" usage in our VFS
-    let mem_stats = syscall::system_memstats().unwrap_or_default();
 
     // Calculate total VFS size by walking the filesystem
     fn count_size(path: &str) -> u64 {
@@ -3735,7 +3738,7 @@ fn prog_tr(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// xargs - build and execute commands from stdin
-fn prog_xargs(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+fn prog_xargs(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
     let (stdin, args) = extract_stdin(args);
 
     if let Some(help) = check_help(&args, "Usage: xargs [COMMAND] [ARGS]\nBuild command lines from stdin.") {
@@ -4746,8 +4749,8 @@ fn prog_comm(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
         }
     };
 
-    let mut lines1: Vec<&str> = content1.lines().collect();
-    let mut lines2: Vec<&str> = content2.lines().collect();
+    let lines1: Vec<&str> = content1.lines().collect();
+    let lines2: Vec<&str> = content2.lines().collect();
 
     let mut i = 0;
     let mut j = 0;

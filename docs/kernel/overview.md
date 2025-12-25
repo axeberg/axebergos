@@ -122,6 +122,18 @@ pub struct Kernel {
     console_handle: Handle,    // Shared console
     vfs: MemoryFs,            // Filesystem
     memory: MemoryManager,     // Shared memory manager
+    timers: TimerQueue,        // Timer management
+    tracer: Tracer,            // System tracing
+    users: UserDb,             // Users and groups
+    procfs: ProcFs,            // /proc virtual filesystem
+    devfs: DevFs,              // /dev virtual filesystem
+    sysfs: SysFs,              // /sys virtual filesystem
+    init: InitSystem,          // Service manager
+    fifos: FifoRegistry,       // Named pipes
+    msgqueues: MsgQueueManager, // Message queues
+    semaphores: SemaphoreManager, // Semaphores
+    mounts: MountTable,        // Mount table
+    ttys: TtyManager,          // Terminal devices
 }
 ```
 
@@ -188,9 +200,100 @@ The kernel is designed for single-threaded WASM:
 
 If multi-threading is added later, we'd need to replace `RefCell` with proper synchronization.
 
+### 6. Users & Groups
+
+Multi-user support with Unix-like permissions:
+
+```rust
+pub struct UserDb {
+    users: HashMap<Uid, User>,
+    groups: HashMap<Gid, Group>,
+}
+
+pub struct User {
+    pub name: String,
+    pub uid: Uid,
+    pub gid: Gid,      // Primary group
+    pub home: String,
+    pub shell: String,
+}
+```
+
+Processes track effective/real UID/GID for permission checks.
+
+### 7. Init System
+
+Service management (PID 1):
+
+```rust
+pub struct InitSystem {
+    services: HashMap<String, Service>,
+    target: Target,  // Rescue, MultiUser, Graphical, etc.
+}
+
+pub struct Service {
+    pub config: ServiceConfig,
+    pub state: ServiceState,  // Stopped, Starting, Running, Failed
+    pub pid: Option<Pid>,
+}
+```
+
+Supports service dependencies, restart policies, and system targets.
+
+### 8. IPC Mechanisms
+
+Beyond basic pipes, the kernel provides:
+
+- **FIFOs**: Named pipes in the filesystem
+- **Message Queues**: System V-style typed message passing
+- **Semaphores**: Counting semaphores with P/V operations
+- **Shared Memory**: Memory segments shared between processes
+
+### 9. Mount System
+
+Filesystem mounting with mount table:
+
+```rust
+pub struct MountTable {
+    mounts: HashMap<String, MountEntry>,
+}
+
+pub struct MountEntry {
+    pub source: String,
+    pub target: String,
+    pub fstype: FsType,  // proc, sysfs, devfs, tmpfs, etc.
+    pub options: MountOptions,
+}
+```
+
+Default mounts: `/`, `/proc`, `/sys`, `/dev`, `/tmp`.
+
+### 10. TTY Subsystem
+
+Terminal device support with termios-like settings:
+
+```rust
+pub struct Termios {
+    pub iflag: InputModes,   // Input processing
+    pub oflag: OutputModes,  // Output processing
+    pub lflag: LocalModes,   // Line discipline (echo, canonical)
+    pub cc: ControlChars,    // Special characters (^C, ^D, etc.)
+}
+```
+
+### 11. Virtual Filesystems
+
+Dynamic content generation for system information:
+
+- **procfs** (`/proc`): Process and kernel info
+- **sysfs** (`/sys`): Kernel object hierarchy
+- **devfs** (`/dev`): Device nodes (console, null, random, etc.)
+
 ## Related Documentation
 
 - [Syscall Interface](syscalls.md) - Full syscall reference
 - [Process Model](processes.md) - Process details
 - [Memory Management](memory.md) - Memory operations
 - [Object Table](objects.md) - Object lifecycle
+- [Signals](signals.md) - Signal handling
+- [IPC](ipc.md) - Inter-process communication
