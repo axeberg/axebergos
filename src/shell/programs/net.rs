@@ -19,41 +19,11 @@ pub fn prog_curl(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut
         return 0;
     }
 
-    // Parse arguments
-    let mut url = String::new();
-    let mut include_headers = false;
-    let mut method = "GET";
-    let mut headers: Vec<(String, String)> = Vec::new();
-    let mut i = 0;
-
-    #[allow(unused_assignments)]
-    while i < args.len() {
-        match args[i] {
-            "-i" => include_headers = true,
-            "-s" => {} // silent mode
-            "-X" => {
-                i += 1;
-                if i < args.len() {
-                    method = args[i];
-                }
-            }
-            "-H" => {
-                i += 1;
-                if i < args.len() {
-                    if let Some(pos) = args[i].find(':') {
-                        let name = args[i][..pos].trim().to_string();
-                        let value = args[i][pos+1..].trim().to_string();
-                        headers.push((name, value));
-                    }
-                }
-            }
-            s if !s.starts_with('-') => {
-                url = s.to_string();
-            }
-            _ => {}
-        }
-        i += 1;
-    }
+    // Parse URL from arguments (needed for both wasm and non-wasm paths)
+    let url: String = args.iter()
+        .find(|s| !s.starts_with('-') && !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_default();
 
     if url.is_empty() {
         stderr.push_str("curl: no URL specified\n");
@@ -63,6 +33,37 @@ pub fn prog_curl(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut
     #[cfg(target_arch = "wasm32")]
     {
         use crate::kernel::network::{HttpMethod, HttpRequest};
+
+        // Parse WASM-specific options
+        let mut include_headers = false;
+        let mut method = "GET";
+        let mut headers: Vec<(String, String)> = Vec::new();
+        let mut i = 0;
+
+        while i < args.len() {
+            match args[i] {
+                "-i" => include_headers = true,
+                "-s" => {} // silent mode
+                "-X" => {
+                    i += 1;
+                    if i < args.len() {
+                        method = args[i];
+                    }
+                }
+                "-H" => {
+                    i += 1;
+                    if i < args.len() {
+                        if let Some(pos) = args[i].find(':') {
+                            let name = args[i][..pos].trim().to_string();
+                            let value = args[i][pos+1..].trim().to_string();
+                            headers.push((name, value));
+                        }
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
 
         let http_method = match method.to_uppercase().as_str() {
             "GET" => HttpMethod::Get,
