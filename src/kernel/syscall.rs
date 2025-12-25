@@ -2403,6 +2403,16 @@ pub fn remove_dir(path: &str) -> SyscallResult<()> {
     KERNEL.with(|k| k.borrow_mut().sys_remove_dir(path))
 }
 
+/// Remove a directory (POSIX-style alias for remove_dir)
+pub fn rmdir(path: &str) -> SyscallResult<()> {
+    remove_dir(path)
+}
+
+/// Remove a file (POSIX-style alias for remove_file)
+pub fn unlink(path: &str) -> SyscallResult<()> {
+    remove_file(path)
+}
+
 /// Rename/move a file or directory
 pub fn rename(from: &str, to: &str) -> SyscallResult<()> {
     KERNEL.with(|k| k.borrow_mut().sys_rename(from, to))

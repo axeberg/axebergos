@@ -6,7 +6,7 @@
 //! - DOM events for input
 //! - requestAnimationFrame for timing
 
-use super::{KeyEvent, Platform, PlatformError, PlatformResult, TermSize};
+use super::{KeyEvent, Platform, PlatformResult, TermSize};
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use wasm_bindgen::prelude::*;

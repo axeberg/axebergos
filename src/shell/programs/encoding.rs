@@ -1,7 +1,6 @@
 //! Encoding utility programs
 
 use super::{args_to_strs, check_help, read_file_content};
-use crate::kernel::syscall;
 
 /// Base64 encode or decode
 pub fn prog_base64(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {

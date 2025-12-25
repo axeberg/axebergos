@@ -8,6 +8,7 @@
 //! - `wget`: Download files from URLs to the filesystem
 
 use super::{args_to_strs, check_help};
+#[cfg(target_arch = "wasm32")]
 use crate::kernel::syscall;
 
 /// curl - transfer data from URL

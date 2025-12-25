@@ -1,6 +1,6 @@
 //! Permission management programs
 
-use super::{args_to_strs, check_help};
+use super::args_to_strs;
 use crate::kernel::syscall;
 
 /// chmod - change file permissions

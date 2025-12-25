@@ -3,15 +3,18 @@
 //! Executes WASM command modules using the browser's WebAssembly API.
 //! This is the core execution engine that bridges WASM modules to the kernel.
 
-use super::abi::{fd, ArgLayout, OpenFlags, StatBuf, SyscallError};
-use super::error::{CommandResult, WasmError, WasmResult};
+#[cfg(target_arch = "wasm32")]
+use super::abi::{ArgLayout, OpenFlags, SyscallError};
+use super::error::{CommandResult, WasmResult};
+#[cfg(target_arch = "wasm32")]
+use super::error::WasmError;
 use super::runtime::Runtime;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
 #[cfg(target_arch = "wasm32")]
-use js_sys::{Array, Function, Object, Reflect, Uint8Array, WebAssembly};
+use js_sys::{Function, Object, Reflect, Uint8Array, WebAssembly};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 #[cfg(target_arch = "wasm32")]
@@ -101,7 +104,8 @@ impl WasmMemoryRef {
     /// Get memory size in bytes
     pub fn size(&self) -> u32 {
         let buffer = self.memory.buffer();
-        buffer.byte_length() as u32
+        let array_buffer: js_sys::ArrayBuffer = buffer.unchecked_into();
+        array_buffer.byte_length() as u32
     }
 }
 
@@ -200,8 +204,6 @@ impl WasmExecutor {
         args: &[&str],
         stdin: &[u8],
     ) -> WasmResult<CommandResult> {
-        use crate::kernel::syscall as ksyscall;
-
         // Create runtime with stdin and environment
         let mut runtime = Runtime::new();
         runtime.stdin = stdin.to_vec();

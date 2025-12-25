@@ -9,7 +9,7 @@
 //! - `du`: Disk usage analyzer
 //! - `df`: Filesystem space usage
 
-use super::{args_to_strs, check_help, read_file_content};
+use super::{args_to_strs, check_help};
 use crate::kernel::syscall;
 
 /// save - save filesystem to OPFS

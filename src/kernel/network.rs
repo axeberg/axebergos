@@ -11,7 +11,6 @@
 
 #![cfg(target_arch = "wasm32")]
 
-use std::cell::RefCell;
 use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;

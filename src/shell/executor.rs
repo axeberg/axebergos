@@ -11,7 +11,7 @@ use super::builtins::{self, BuiltinResult, ShellState};
 use super::parser::{CommandList, LogicalOp, Pipeline, SimpleCommand};
 use super::programs;
 use crate::kernel::syscall;
-use crate::kernel::wasm::{WasmCommandRunner, CommandResult as WasmCommandResult};
+use crate::kernel::wasm::WasmCommandRunner;
 use std::collections::HashMap;
 use std::path::PathBuf;
 

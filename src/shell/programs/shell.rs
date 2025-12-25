@@ -1,6 +1,6 @@
 //! Shell utility programs
 
-use super::{args_to_strs, check_help, read_file_content};
+use super::{args_to_strs, check_help};
 use crate::kernel::syscall;
 use crate::shell::builtins;
 use crate::shell::executor::ProgramRegistry;
