@@ -182,6 +182,15 @@ Programs run via the executor with full pipe/redirect support:
 | `tty` | Print terminal name |
 | `stty [-a] [setting]` | Get/set terminal settings |
 
+### Persistence
+
+| Command | Description |
+|---------|-------------|
+| `save` | Save filesystem to OPFS |
+| `fsload` | Reload filesystem from OPFS |
+| `fsreset [-f]` | Clear OPFS and reset filesystem |
+| `autosave [on\|off\|status\|interval N]` | Configure auto-save |
+
 ## Syntax
 
 ### Pipes

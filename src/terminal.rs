@@ -83,6 +83,10 @@ thread_local! {
     // Command history
     static HISTORY: RefCell<Vec<String>> = RefCell::new(Vec::new());
     static HISTORY_POS: RefCell<usize> = RefCell::new(0);
+    // Auto-save counter - save filesystem every N commands
+    static COMMAND_COUNT: RefCell<usize> = RefCell::new(0);
+    static AUTOSAVE_ENABLED: RefCell<bool> = RefCell::new(true);
+    static AUTOSAVE_INTERVAL: RefCell<usize> = RefCell::new(10);
     // Buffer to restore when navigating past end of history
     static SAVED_BUFFER: RefCell<String> = RefCell::new(String::new());
     // Kill ring for Ctrl+K, Ctrl+W, Ctrl+Y
@@ -514,6 +518,77 @@ fn save_history() {
     });
 }
 
+/// Trigger auto-save of filesystem to OPFS
+fn trigger_autosave() {
+    AUTOSAVE_ENABLED.with(|enabled| {
+        if !*enabled.borrow() {
+            return;
+        }
+
+        COMMAND_COUNT.with(|count| {
+            let mut c = count.borrow_mut();
+            *c += 1;
+
+            AUTOSAVE_INTERVAL.with(|interval| {
+                let interval = *interval.borrow();
+                if interval > 0 && *c % interval == 0 {
+                    // Trigger async save
+                    do_autosave();
+                }
+            });
+        });
+    });
+}
+
+/// Perform the actual auto-save operation
+fn do_autosave() {
+    use crate::vfs::Persistence;
+    wasm_bindgen_futures::spawn_local(async {
+        let data = match syscall::vfs_snapshot() {
+            Ok(d) => d,
+            Err(e) => {
+                crate::console_log!("[autosave] Snapshot failed: {}", e);
+                return;
+            }
+        };
+
+        let fs = match crate::vfs::MemoryFs::from_json(&data) {
+            Ok(f) => f,
+            Err(e) => {
+                crate::console_log!("[autosave] Deserialize failed: {}", e);
+                return;
+            }
+        };
+
+        if let Err(e) = Persistence::save(&fs).await {
+            crate::console_log!("[autosave] Save failed: {}", e);
+        } else {
+            crate::console_log!("[autosave] Filesystem saved to OPFS");
+        }
+    });
+}
+
+/// Enable or disable auto-save
+pub fn set_autosave(enabled: bool) {
+    AUTOSAVE_ENABLED.with(|e| {
+        *e.borrow_mut() = enabled;
+    });
+}
+
+/// Set auto-save interval (number of commands between saves)
+pub fn set_autosave_interval(interval: usize) {
+    AUTOSAVE_INTERVAL.with(|i| {
+        *i.borrow_mut() = interval;
+    });
+}
+
+/// Get current auto-save settings
+pub fn get_autosave_settings() -> (bool, usize) {
+    let enabled = AUTOSAVE_ENABLED.with(|e| *e.borrow());
+    let interval = AUTOSAVE_INTERVAL.with(|i| *i.borrow());
+    (enabled, interval)
+}
+
 fn setup_keyboard_handler(term: Rc<XTerm>) {
     let term_for_closure = term.clone();
 
@@ -663,6 +738,9 @@ fn setup_keyboard_handler(term: Rc<XTerm>) {
                             for line in output.lines() {
                                 term_for_closure.writeln(line);
                             }
+
+                            // Auto-save filesystem periodically
+                            trigger_autosave();
                         }
                         write_prompt(&term_for_closure);
                     }

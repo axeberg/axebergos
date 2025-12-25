@@ -92,6 +92,9 @@ impl ProgramRegistry {
         reg.register("tee", prog_tee);
         reg.register("clear", prog_clear);
         reg.register("save", prog_save);
+        reg.register("fsload", prog_fsload);
+        reg.register("fsreset", prog_fsreset);
+        reg.register("autosave", prog_autosave);
         reg.register("tree", prog_tree);
         reg.register("sleep", prog_sleep);
         reg.register("history", prog_history);
@@ -1728,7 +1731,142 @@ fn prog_save(_args: &[String], stdout: &mut String, _stderr: &mut String) -> i32
             }
         });
     }
-    stdout.push_str("Saving filesystem...");
+    stdout.push_str("Saving filesystem to OPFS...\n");
+    stdout.push_str("(Check browser console for result)\n");
+    0
+}
+
+/// fsload - reload filesystem from OPFS
+fn prog_fsload(args: &[String], stdout: &mut String, _stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+    if let Some(help) = check_help(&args, "Usage: fsload\nReload filesystem from OPFS storage.\nSee 'man fsload' for details.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        use crate::vfs::Persistence;
+        wasm_bindgen_futures::spawn_local(async {
+            match Persistence::load().await {
+                Ok(Some(fs)) => {
+                    // Serialize and restore
+                    match fs.to_json() {
+                        Ok(data) => {
+                            if let Err(e) = syscall::vfs_restore(&data) {
+                                crate::console_log!("[fsload] Restore failed: {}", e);
+                            } else {
+                                crate::console_log!("[fsload] Filesystem restored from OPFS");
+                            }
+                        }
+                        Err(e) => {
+                            crate::console_log!("[fsload] Serialize failed: {}", e);
+                        }
+                    }
+                }
+                Ok(None) => {
+                    crate::console_log!("[fsload] No saved filesystem found in OPFS");
+                }
+                Err(e) => {
+                    crate::console_log!("[fsload] Load failed: {}", e);
+                }
+            }
+        });
+    }
+    stdout.push_str("Loading filesystem from OPFS...\n");
+    stdout.push_str("(Check browser console for result)\n");
+    0
+}
+
+/// fsreset - clear OPFS and reset to fresh filesystem
+fn prog_fsreset(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+    if let Some(help) = check_help(&args, "Usage: fsreset [-f]\nClear OPFS storage and reset filesystem.\n  -f  Force reset without confirmation\nSee 'man fsreset' for details.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    let force = args.iter().any(|a| *a == "-f" || *a == "--force");
+
+    if !force {
+        stderr.push_str("fsreset: This will clear all saved data!\n");
+        stderr.push_str("fsreset: Use 'fsreset -f' to confirm.\n");
+        return 1;
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        use crate::vfs::Persistence;
+        wasm_bindgen_futures::spawn_local(async {
+            if let Err(e) = Persistence::clear().await {
+                crate::console_log!("[fsreset] Clear failed: {}", e);
+            } else {
+                crate::console_log!("[fsreset] OPFS storage cleared");
+            }
+        });
+    }
+    stdout.push_str("Clearing OPFS storage...\n");
+    stdout.push_str("(Reload the page for a fresh filesystem)\n");
+    0
+}
+
+/// autosave - configure automatic filesystem saving
+fn prog_autosave(args: &[String], stdout: &mut String, stderr: &mut String) -> i32 {
+    let (_, args) = extract_stdin(args);
+    if let Some(help) = check_help(&args, "Usage: autosave [on|off|status|interval N]\nConfigure automatic filesystem saving.\n  on       Enable auto-save\n  off      Disable auto-save\n  status   Show current settings\n  interval Set commands between saves (default: 10)\nSee 'man autosave' for details.") {
+        stdout.push_str(&help);
+        return 0;
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        use crate::terminal;
+
+        if args.is_empty() || (args.len() == 1 && args[0] == "status") {
+            let (enabled, interval) = terminal::get_autosave_settings();
+            stdout.push_str(&format!("Auto-save: {}\n", if enabled { "enabled" } else { "disabled" }));
+            stdout.push_str(&format!("Interval: every {} commands\n", interval));
+            return 0;
+        }
+
+        match args[0].as_str() {
+            "on" => {
+                terminal::set_autosave(true);
+                stdout.push_str("Auto-save enabled\n");
+            }
+            "off" => {
+                terminal::set_autosave(false);
+                stdout.push_str("Auto-save disabled\n");
+            }
+            "interval" => {
+                if args.len() < 2 {
+                    stderr.push_str("autosave: interval requires a number\n");
+                    return 1;
+                }
+                match args[1].parse::<usize>() {
+                    Ok(n) => {
+                        terminal::set_autosave_interval(n);
+                        stdout.push_str(&format!("Auto-save interval set to {} commands\n", n));
+                    }
+                    Err(_) => {
+                        stderr.push_str("autosave: invalid interval\n");
+                        return 1;
+                    }
+                }
+            }
+            _ => {
+                stderr.push_str("autosave: unknown option. Use 'autosave --help' for usage.\n");
+                return 1;
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = stderr;
+        stdout.push_str("autosave: not available in this build\n");
+    }
+
     0
 }
 

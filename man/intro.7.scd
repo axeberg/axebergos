@@ -66,6 +66,10 @@ filesystem, process management, and many familiar commands.
 
 *edit*(1)
 
+## Persistence
+
+*save*(1), *fsload*(1), *fsreset*(1), *autosave*(1)
+
 ## Help
 
 *man*(1)
