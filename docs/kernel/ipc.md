@@ -6,8 +6,10 @@ axeberg provides multiple IPC mechanisms for processes to communicate.
 
 1. **Channels**: High-level typed message passing
 2. **Pipes**: Low-level byte streams
-3. **Shared Memory**: Zero-copy data sharing
-4. **Files**: Persistent shared state
+3. **FIFOs (Named Pipes)**: Filesystem-visible pipes for unrelated processes
+4. **Message Queues**: System V-style tagged message passing
+5. **Shared Memory**: Zero-copy data sharing
+6. **Files**: Persistent shared state
 
 ## Channels
 
@@ -47,16 +49,11 @@ match rx.try_recv() {
     Err(TryRecvError::Closed) => println!("Channel closed"),
 }
 
-// In async context, yield and retry
-loop {
-    match rx.try_recv() {
-        Ok(msg) => handle(msg),
-        Err(TryRecvError::Closed) => break,
-        Err(TryRecvError::Empty) => {
-            futures::pending!(); // Yield, try again next tick
-        }
-    }
+// Async receive - yields until message available
+while let Some(msg) = rx.recv().await {
+    handle(msg);
 }
+// Loop exits when channel closes
 ```
 
 ### Channel Semantics
@@ -96,6 +93,78 @@ syscall::close(read_fd)?;
 - **Buffered**: 4KB internal buffer
 - **Reference counted**: Shared via `dup()`
 - **Blocking**: Read blocks when empty (in async)
+
+## FIFOs (Named Pipes)
+
+FIFOs are filesystem-visible pipes that allow unrelated processes to communicate.
+
+### Creating FIFOs
+
+```rust
+// From shell
+$ mkfifo /tmp/myfifo
+
+// Via syscall
+syscall::mkfifo("/tmp/myfifo")?;
+```
+
+### Using FIFOs
+
+```rust
+// Writer process
+let fd = syscall::open("/tmp/myfifo", OpenFlags::WRITE)?;
+syscall::write(fd, b"Hello via FIFO!")?;
+syscall::close(fd)?;
+
+// Reader process
+let fd = syscall::open("/tmp/myfifo", OpenFlags::READ)?;
+let mut buf = [0u8; 100];
+let n = syscall::read(fd, &mut buf)?;
+syscall::close(fd)?;
+```
+
+### FIFO Characteristics
+
+- **Named**: Appears in filesystem, persists until deleted
+- **Bidirectional setup**: Can open for read or write
+- **Buffered**: 4KB internal buffer (same as pipes)
+- **Blocking**: Opens block until both reader and writer present
+
+## Message Queues
+
+System V-style message queues with typed messages for selective receiving.
+
+### Creating Message Queues
+
+```rust
+// Create or get queue with key
+let msqid = syscall::msgget(key, IPC_CREAT | 0o644)?;
+```
+
+### Sending Messages
+
+```rust
+// Messages have a type (> 0) and data
+syscall::msgsnd(msqid, mtype: 1, b"request data")?;
+syscall::msgsnd(msqid, mtype: 2, b"response data")?;
+```
+
+### Receiving Messages
+
+```rust
+// Receive any message (mtype = 0)
+let (mtype, data) = syscall::msgrcv(msqid, 0)?;
+
+// Receive specific type only
+let (mtype, data) = syscall::msgrcv(msqid, 2)?; // Only type 2
+```
+
+### Message Queue Characteristics
+
+- **Tagged**: Messages have types for selective receiving
+- **Persistent**: Queue persists until explicitly removed
+- **Bounded**: 16KB default capacity
+- **Priority**: Lower message types received first with negative mtype
 
 ## Shared Memory
 
@@ -162,7 +231,9 @@ This is simple but not efficient for high-frequency communication.
 | Mechanism | Best For | Overhead | Type Safety |
 |-----------|----------|----------|-------------|
 | Channels | Messages, commands | Medium | Yes |
-| Pipes | Byte streams, shell | Low | No |
+| Pipes | Byte streams, shell pipelines | Low | No |
+| FIFOs | Unrelated processes, shell | Low | No |
+| Message Queues | Tagged messages, priority | Medium | No |
 | Shared Memory | Large data, zero-copy | Very Low | No |
 | Files | Persistent state | High | No |
 
@@ -241,15 +312,9 @@ All IPC mechanisms are designed for single-threaded WASM:
 
 If multi-threading is added, these would need synchronization primitives.
 
-## Future Work
-
-- **Async receive**: `rx.recv().await` instead of polling
-- **Bounded channels**: Back-pressure for producers
-- **Named pipes**: Filesystem-visible pipes
-- **Message queues**: Persistent message storage
-
 ## Related Documentation
 
 - [Process Model](processes.md) - Process isolation
 - [Memory Management](memory.md) - Shared memory details
 - [Executor](executor.md) - Async task scheduling
+- [Future Work](../future-work.md) - Planned enhancements

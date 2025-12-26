@@ -238,19 +238,13 @@ INIT → LOADING → READY → RUNNING → TERMINATED
 
 ## Current Limitations
 
-1. **No actual WASM execution yet**: The loader validates and parses modules, but actual execution requires wasm-bindgen integration
-2. **Builtins still hardcoded**: Core commands like `cd`, `pwd`, `echo` remain builtins for bootstrapping
-3. **No dynamic linking**: Each command is fully standalone
-
-## Future Work
-
-- [ ] Integrate with browser's WebAssembly API for actual execution
-- [ ] Port existing commands to standalone WASM modules
-- [ ] Add package manager for installing commands
-- [ ] Support WASI preview2 for broader compatibility
+1. **Builtins still hardcoded**: Core commands like `cd`, `pwd`, `echo` remain builtins for bootstrapping
+2. **No dynamic linking**: Each command is fully standalone
+3. **No user-space WASM commands yet**: The infrastructure is ready, but no `.wasm` files exist in `/bin`
 
 ## Related Documentation
 
 - [Shell](../userspace/shell.md) - Shell command execution
 - [Syscall Interface](syscalls.md) - Full syscall reference
 - [VFS](../userspace/vfs.md) - Filesystem where commands are stored
+- [Future Work](../future-work.md) - Planned enhancements

@@ -18,8 +18,8 @@ The VFS provides a unified file interface over different storage backends.
      ┌───────────────┼───────────────┐
      ▼               ▼               ▼
 ┌─────────┐   ┌─────────────┐   ┌─────────┐
-│MemoryFs │   │   (OPFS)    │   │ (Other) │
-│(Current)│   │  (Future)   │   │         │
+│MemoryFs │   │ Persistence │   │ (Other) │
+│         │◄──│   (OPFS)    │   │         │
 └─────────┘   └─────────────┘   └─────────┘
 ```
 
@@ -90,9 +90,9 @@ struct NodeMeta {
 
 ### Characteristics
 
-- **Volatile**: Data lost on page refresh
-- **Fast**: No I/O latency
+- **Fast**: No I/O latency (in-memory operations)
 - **Simple**: Easy to understand and debug
+- **Persistent**: Serializes to OPFS via `Persistence` module (see `src/vfs/persist.rs`)
 - **Unlimited**: Only bound by browser memory
 
 ### Path Handling
@@ -271,39 +271,33 @@ pub fn sys_close(&mut self, fd: Fd) -> SyscallResult<()> {
 }
 ```
 
-## Future Work
+## Persistence
 
-### OPFS Backend
-
-Origin Private File System for persistence:
+The `Persistence` module (`src/vfs/persist.rs`) provides OPFS-backed storage:
 
 ```rust
-pub struct OpfsFs {
-    root: FileSystemDirectoryHandle,
-    // ...
+impl Persistence {
+    /// Save filesystem to OPFS
+    pub async fn save(fs: &MemoryFs) -> Result<(), String>;
+
+    /// Load filesystem from OPFS
+    pub async fn load() -> Result<Option<MemoryFs>, String>;
+
+    /// Check if OPFS is available
+    pub async fn is_available() -> bool;
+
+    /// Clear persisted data
+    pub async fn clear() -> Result<(), String>;
 }
 ```
 
 Benefits:
 - Persistent across sessions
-- Larger storage quota
-- Better performance for large files
-
-### Layered Filesystem
-
-Union mount for overlays:
-
-```rust
-pub struct LayeredFs {
-    layers: Vec<Box<dyn FileSystem>>,
-}
-```
-
-Use cases:
-- Read-only base + writable overlay
-- Merged views of multiple sources
+- Larger storage quota than localStorage
+- Async operations via wasm-bindgen-futures
 
 ## Related Documentation
 
 - [Syscall Interface](../kernel/syscalls.md) - File syscalls
 - [Kernel Objects](../kernel/objects.md) - FileObject details
+- [Future Work](../future-work.md) - Planned enhancements

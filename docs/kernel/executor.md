@@ -268,15 +268,9 @@ fn test_priority_order() {
 3. **No deadlock detection**: Circular waits hang forever
 4. **Trust required**: Tasks must yield cooperatively
 
-## Future Work
-
-- **Task cancellation**: Cancel running tasks
-- **Timeouts**: Automatic timeout for blocking operations
-- **Work stealing**: Multi-threaded executor
-- **Task groups**: Hierarchical task management
-
 ## Related Documentation
 
 - [Kernel Overview](overview.md) - Executor's role in the kernel
 - [Process Model](processes.md) - Process-task relationship
 - [IPC](ipc.md) - Async communication primitives
+- [Future Work](../future-work.md) - Planned enhancements

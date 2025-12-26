@@ -305,39 +305,8 @@ pub fn handle_click(x: f64, y: f64, button: i16) {
 }
 ```
 
-## Future Work
-
-### WebGPU Backend
-
-Higher performance rendering:
-
-```rust
-pub struct WebGpuSurface {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    surface: wgpu::Surface,
-}
-```
-
-### Window Decorations
-
-- Close/minimize/maximize buttons
-- Drag to move
-- Resize handles
-
-### Animations
-
-- Window open/close animations
-- Smooth layout transitions
-- Focus transitions
-
-### Themes
-
-- User-configurable colors
-- Light/dark mode
-- Custom window chrome
-
 ## Related Documentation
 
 - [Syscall Interface](../kernel/syscalls.md) - window_create
 - [Executor](../kernel/executor.md) - Render timing
+- [Future Work](../future-work.md) - Planned enhancements
