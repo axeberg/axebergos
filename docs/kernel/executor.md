@@ -83,37 +83,37 @@ let task_id = kernel::spawn_with_priority(
 The executor is driven by `requestAnimationFrame`:
 
 ```rust
-// Called ~60 times per second
+// Called ~60 times per second (from src/kernel/executor.rs)
 pub fn tick(&mut self) -> usize {
-    let mut polled = 0;
+    self.integrate_pending();
 
-    // Sort ready queue by priority (highest first)
-    self.ready.make_contiguous().sort_by(|a, b| {
-        let pa = self.task_priorities.get(a).unwrap_or(&Priority::Normal);
-        let pb = self.task_priorities.get(b).unwrap_or(&Priority::Normal);
-        pb.cmp(pa) // Descending
+    // Collect ready task IDs, sorted by priority
+    let mut ready_ids: Vec<TaskId> = self.ready.borrow().iter().copied().collect();
+    ready_ids.sort_by_key(|id| {
+        self.tasks.get(id).map(|t| t.priority).unwrap_or(Priority::Background)
     });
 
-    // Poll all ready tasks
-    while let Some(task_id) = self.ready.pop_front() {
-        if let Some(task) = self.tasks.get_mut(task_id.0) {
-            if task.state == TaskState::Ready {
-                task.state = TaskState::Running;
+    let mut polled = 0;
+
+    for task_id in ready_ids {
+        self.ready.borrow_mut().remove(&task_id);
+
+        let Some(mut task) = self.tasks.remove(&task_id) else {
+            continue;
+        };
+
+        let waker = self.create_waker(task_id);
+        let mut cx = Context::from_waker(&waker);
+
+        match task.future.as_mut().poll(&mut cx) {
+            Poll::Ready(()) => {
+                // Task completed, don't re-insert
                 polled += 1;
-
-                // Create waker for this task
-                let waker = /* ... */;
-                let mut cx = Context::from_waker(&waker);
-
-                match task.future.as_mut().poll(&mut cx) {
-                    Poll::Ready(()) => {
-                        task.state = TaskState::Completed;
-                    }
-                    Poll::Pending => {
-                        task.state = TaskState::Blocked;
-                        // Will be re-queued when woken
-                    }
-                }
+            }
+            Poll::Pending => {
+                // Task yielded, put it back
+                self.tasks.insert(task_id, task);
+                polled += 1;
             }
         }
     }

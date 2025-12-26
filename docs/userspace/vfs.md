@@ -66,24 +66,25 @@ pub trait FileSystem {
 
 ## MemoryFs
 
-The current in-memory implementation:
+The current in-memory implementation (from `src/vfs/memory.rs`):
 
 ```rust
 pub struct MemoryFs {
-    root: TreeNode,
-    handles: HashMap<FileHandle, OpenFile>,
-    next_handle: usize,
+    nodes: HashMap<String, Node>,
+    meta: HashMap<String, NodeMeta>,
+    handles: Slab<OpenFile>,
 }
 
-struct TreeNode {
-    name: String,
-    kind: NodeKind,
-    children: Vec<TreeNode>,
-}
-
-enum NodeKind {
-    File { data: Vec<u8> },
+enum Node {
+    File(Vec<u8>),
     Directory,
+    Symlink(String),
+}
+
+struct NodeMeta {
+    uid: u32,
+    gid: u32,
+    mode: u16,
 }
 ```
 

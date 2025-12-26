@@ -79,8 +79,6 @@ Programs run via the executor with full pipe/redirect support:
 | `mv <src> <dst>` | Move/rename file |
 | `ln [-s] <target> <link>` | Create hard/symbolic link |
 | `readlink <link>` | Print symlink target |
-| `stat <path>` | Display file status |
-| `file <path>` | Determine file type |
 
 ### Text Processing
 
@@ -94,8 +92,6 @@ Programs run via the executor with full pipe/redirect support:
 | `uniq [-c] [-d] [file]` | Remove duplicate adjacent lines |
 | `cut -d<delim> -f<fields> [file]` | Extract fields |
 | `tr <set1> <set2>` | Translate characters |
-| `sed <script> [file]` | Stream editor |
-| `awk <program> [file]` | Pattern scanning |
 | `diff <file1> <file2>` | Compare files |
 | `comm <file1> <file2>` | Compare sorted files |
 
