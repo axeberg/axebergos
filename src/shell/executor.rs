@@ -1663,7 +1663,7 @@ mod tests {
 
     #[test]
     fn test_pipeline_sort_uniq() {
-        let mut exec = Executor::new();
+        let _exec = Executor::new();
         // Create a multi-command pipeline by setting up stdin
         // For this test, we directly test the programs
         let mut stdout = String::new();

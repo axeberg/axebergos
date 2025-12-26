@@ -329,9 +329,9 @@ mod tests {
     fn test_multiple_timers() {
         let mut queue = TimerQueue::new();
 
-        let t1 = queue.schedule(100.0, 0.0, Some(TaskId(1)));
-        let t2 = queue.schedule(50.0, 0.0, Some(TaskId(2)));
-        let t3 = queue.schedule(150.0, 0.0, Some(TaskId(3)));
+        let _t1 = queue.schedule(100.0, 0.0, Some(TaskId(1)));
+        let _t2 = queue.schedule(50.0, 0.0, Some(TaskId(2)));
+        let _t3 = queue.schedule(150.0, 0.0, Some(TaskId(3)));
 
         // First tick - t2 fires
         let woken = queue.tick(50.0);

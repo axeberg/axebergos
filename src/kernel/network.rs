@@ -120,14 +120,14 @@ impl HttpRequest {
         let window = web_sys::window().ok_or("No window object")?;
 
         // Create request init
-        let mut opts = web_sys::RequestInit::new();
-        opts.method(self.method.as_str());
-        opts.mode(web_sys::RequestMode::Cors);
+        let opts = web_sys::RequestInit::new();
+        opts.set_method(self.method.as_str());
+        opts.set_mode(web_sys::RequestMode::Cors);
 
         // Set body if present
         if let Some(body) = &self.body {
             let uint8_array = js_sys::Uint8Array::from(body.as_slice());
-            opts.body(Some(&uint8_array));
+            opts.set_body(&uint8_array);
         }
 
         // Create request
@@ -231,7 +231,7 @@ impl WebSocketManager {
 
         // Set up message handler
         let messages = self.messages.entry(id).or_insert_with(Vec::new);
-        let messages_clone = messages.clone();
+        let _messages_clone = messages.clone();
         let onmessage_callback = Closure::wrap(Box::new(move |e: web_sys::MessageEvent| {
             if let Ok(text) = e.data().dyn_into::<js_sys::JsString>() {
                 // Note: Can't actually mutate here due to ownership, this is simplified

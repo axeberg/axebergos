@@ -108,7 +108,7 @@ pub fn set_screen_size(cols: usize, rows: usize) {
 }
 
 /// Parse a key from xterm.js key event
-pub fn parse_key(key: &str, key_code: u32, ctrl: bool, alt: bool, shift: bool) -> Option<Key> {
+pub fn parse_key(key: &str, key_code: u32, ctrl: bool, alt: bool, _shift: bool) -> Option<Key> {
     // Handle control characters
     if ctrl && !alt {
         return match key_code {
@@ -172,6 +172,7 @@ pub fn handle_paste(text: &str) {
 }
 
 // ANSI escape sequences
+#[allow(dead_code)]
 const CLEAR_SCREEN: &str = "\x1b[2J";
 const CURSOR_HOME: &str = "\x1b[H";
 const CLEAR_LINE: &str = "\x1b[K";
@@ -380,6 +381,7 @@ pub struct Editor {
     /// Copied row for paste
     copied_row: Option<String>,
     /// Search direction (true = forward)
+    #[allow(dead_code)]
     search_forward: bool,
     /// Last search match position
     last_match: Option<(usize, usize)>,

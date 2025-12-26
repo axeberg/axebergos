@@ -6,7 +6,6 @@
 #[cfg(test)]
 mod process_invariants {
     use crate::kernel::process::{Pid, Process, ProcessState};
-    use crate::kernel::signal::{ProcessSignals, Signal};
 
     /// P1: Process State Machine - Valid transitions only
     #[test]
@@ -400,7 +399,7 @@ mod timer_invariants {
 #[cfg(test)]
 mod fd_invariants {
     use crate::kernel::object::{FileObject, KernelObject, ObjectTable};
-    use crate::kernel::process::{Fd, FileTable, Handle};
+    use crate::kernel::process::{FileTable, Handle};
     use std::path::PathBuf;
 
     fn make_file() -> KernelObject {
@@ -487,7 +486,6 @@ mod fd_invariants {
 #[cfg(test)]
 mod executor_invariants {
     use crate::kernel::executor::{Executor, Priority};
-    use crate::kernel::task::TaskId;
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
