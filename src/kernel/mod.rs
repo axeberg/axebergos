@@ -33,6 +33,7 @@ pub mod trace;
 pub mod tty;
 pub mod users;
 pub mod wasm;
+pub mod work_stealing;
 
 #[cfg(target_arch = "wasm32")]
 pub mod network;
@@ -62,6 +63,10 @@ pub use timer::TimerId;
 pub use trace::{TraceCategory, TraceEvent, TraceSummary, Tracer};
 pub use tty::{Termios, Tty, TtyManager};
 pub use users::{FileMode, Gid, Group, Uid, User, UserDb};
+pub use work_stealing::{
+    Config as WorkStealingConfig, Injector, StealResult, Stealer, TaskHandle, WorkStealingExecutor,
+    Worker,
+};
 
 use std::cell::RefCell;
 
