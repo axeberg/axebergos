@@ -79,6 +79,18 @@ children = [
 ]
 
 [[navigation]]
+title = "Decisions"
+children = [
+    { title = "Overview", path = "decisions/README.md" },
+    { title = "ADR-001: WASM Target", path = "decisions/001-wasm-target.md" },
+    { title = "ADR-002: Async Executor", path = "decisions/002-async-executor.md" },
+    { title = "ADR-003: Memory Filesystem", path = "decisions/003-memory-filesystem.md" },
+    { title = "ADR-004: Unix-like Interface", path = "decisions/004-unix-like-interface.md" },
+    { title = "ADR-005: Single Binary", path = "decisions/005-single-binary.md" },
+    { title = "ADR-006: Cooperative Multitasking", path = "decisions/006-cooperative-multitasking.md" },
+]
+
+[[navigation]]
 title = "Roadmap"
 children = [
     { title = "Bare Metal Boot Plan", path = "plans/bare-metal-boot.md" },
