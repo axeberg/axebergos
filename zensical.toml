@@ -2,110 +2,41 @@
 # https://zensical.org/docs/
 
 [project]
-name = "axeberg"
-description = "A personal mini-OS written in Rust, compiled to WebAssembly"
+site_name = "axeberg"
+site_description = "A personal mini-OS written in Rust, compiled to WebAssembly"
+repo_url = "https://github.com/axeberg/axebergos"
 copyright = "MIT License"
-
-[project.urls]
-repository = "https://github.com/axeberg/axebergos"
-
-[build]
 docs_dir = "docs"
 site_dir = "site"
 
-[theme]
-variant = "modern"
-palette = "slate"
-accent = "amber"
-font = { text = "Inter", code = "JetBrains Mono" }
-
-[theme.logo]
-icon = "simple/rust"
-
-[theme.features]
-navigation_tabs = true
-navigation_sections = true
-navigation_expand = true
-toc_integrate = true
-search_suggest = true
-search_highlight = true
-content_tabs_link = true
-content_code_copy = true
-content_code_annotate = true
-
-[[navigation]]
-title = "Home"
-path = "index.md"
-
-[[navigation]]
-title = "Kernel"
-children = [
-    { title = "Overview", path = "kernel/overview.md" },
-    { title = "Syscall Interface", path = "kernel/syscalls.md" },
-    { title = "WASM Modules", path = "kernel/wasm-modules.md" },
-    { title = "Process Model", path = "kernel/processes.md" },
-    { title = "Users & Groups", path = "kernel/users.md" },
-    { title = "Memory Management", path = "kernel/memory.md" },
-    { title = "Object Table", path = "kernel/objects.md" },
-    { title = "Executor", path = "kernel/executor.md" },
-    { title = "IPC", path = "kernel/ipc.md" },
-    { title = "Timers", path = "kernel/timers.md" },
-    { title = "Signals", path = "kernel/signals.md" },
-    { title = "Tracing", path = "kernel/tracing.md" },
+[project.theme]
+features = [
+    "navigation.tabs",
+    "navigation.sections",
+    "navigation.expand",
+    "toc.integrate",
+    "search.suggest",
+    "search.highlight",
+    "content.tabs.link",
+    "content.code.copy",
+    "content.code.annotate",
 ]
 
-[[navigation]]
-title = "Userspace"
-children = [
-    { title = "Shell", path = "userspace/shell.md" },
-    { title = "Virtual Filesystem", path = "userspace/vfs.md" },
-    { title = "Standard I/O", path = "userspace/stdio.md" },
-    { title = "Compositor", path = "userspace/compositor.md" },
-]
+[[project.theme.palette]]
+scheme = "slate"
 
-[[navigation]]
-title = "Development"
-children = [
-    { title = "Building", path = "development/building.md" },
-    { title = "Testing", path = "development/testing.md" },
-    { title = "Contributing", path = "development/contributing.md" },
-    { title = "System Invariants", path = "development/invariants.md" },
-]
+[project.theme.font]
+text = "Inter"
+code = "JetBrains Mono"
 
-[[navigation]]
-title = "Architecture"
-children = [
-    { title = "Bare Metal Boot", path = "architecture/bare-metal.md" },
-]
+[project.theme.icon]
+logo = "simple/rust"
 
-[[navigation]]
-title = "Decisions"
-children = [
-    { title = "Overview", path = "decisions/README.md" },
-    { title = "ADR-001: WASM Target", path = "decisions/001-wasm-target.md" },
-    { title = "ADR-002: Async Executor", path = "decisions/002-async-executor.md" },
-    { title = "ADR-003: Memory Filesystem", path = "decisions/003-memory-filesystem.md" },
-    { title = "ADR-004: Unix-like Interface", path = "decisions/004-unix-like-interface.md" },
-    { title = "ADR-005: Single Binary", path = "decisions/005-single-binary.md" },
-    { title = "ADR-006: Cooperative Multitasking", path = "decisions/006-cooperative-multitasking.md" },
-]
-
-[[navigation]]
-title = "Roadmap"
-children = [
-    { title = "Bare Metal Boot Plan", path = "plans/bare-metal-boot.md" },
-    { title = "Compositor Plan", path = "plans/compositor.md" },
-]
-
-[extensions]
-admonition = true
-codehilite = { guess_lang = false, linenums = true }
-toc = { permalink = true, toc_depth = 3 }
-tables = true
-footnotes = true
-tasklist = true
-mermaid = true
-
-[search]
-lang = "en"
-separator = "[\\s\\-,:!=\\[\\]()\"'/]+"
+# Navigation is auto-derived from docs directory structure
+# Explicit nav can be defined as:
+# nav = [
+#   { "Home" = "index.md" },
+#   { "Kernel" = [
+#     { "Overview" = "kernel/overview.md" },
+#   ]},
+# ]
