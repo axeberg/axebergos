@@ -87,8 +87,15 @@ impl SemaphoreSet {
     }
 
     /// Set a semaphore's value
-    pub fn setval(&mut self, sem_num: usize, value: i32, pid: u32, now: f64) -> Result<(), SemError> {
-        let sem = self.semaphores
+    pub fn setval(
+        &mut self,
+        sem_num: usize,
+        value: i32,
+        pid: u32,
+        now: f64,
+    ) -> Result<(), SemError> {
+        let sem = self
+            .semaphores
             .get_mut(sem_num)
             .ok_or(SemError::InvalidSemNum)?;
         sem.value = value;
@@ -122,8 +129,15 @@ impl SemaphoreSet {
     /// - sem_op > 0: add to value (V operation / signal)
     /// - sem_op < 0: subtract from value (P operation / wait), blocks if would go negative
     /// - sem_op == 0: wait for value to become zero
-    pub fn semop(&mut self, sem_num: usize, sem_op: i32, pid: u32, now: f64) -> Result<SemOpResult, SemError> {
-        let sem = self.semaphores
+    pub fn semop(
+        &mut self,
+        sem_num: usize,
+        sem_op: i32,
+        pid: u32,
+        now: f64,
+    ) -> Result<SemOpResult, SemError> {
+        let sem = self
+            .semaphores
             .get_mut(sem_num)
             .ok_or(SemError::InvalidSemNum)?;
 

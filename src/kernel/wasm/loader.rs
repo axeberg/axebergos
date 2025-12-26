@@ -2,7 +2,7 @@
 //!
 //! Handles loading, validating, and instantiating WASM command modules.
 
-use super::abi::{exports, OpenFlags};
+use super::abi::{OpenFlags, exports};
 use super::error::{CommandResult, WasmError, WasmResult};
 use super::runtime::Runtime;
 
@@ -94,7 +94,9 @@ impl ModuleValidator {
         }
 
         if !has_main_export {
-            return Err(WasmError::MissingExport { name: exports::MAIN });
+            return Err(WasmError::MissingExport {
+                name: exports::MAIN,
+            });
         }
 
         Ok(())
@@ -122,6 +124,7 @@ fn read_leb128(bytes: &[u8]) -> WasmResult<(u32, usize)> {
 }
 
 /// Parse export section, returns Vec<(name, kind, index)>
+#[allow(clippy::type_complexity)]
 fn parse_export_section(data: &[u8]) -> WasmResult<(Vec<(String, u8, u32)>, usize)> {
     let mut exports = Vec::new();
     let mut offset = 0;

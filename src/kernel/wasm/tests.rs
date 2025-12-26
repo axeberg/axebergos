@@ -228,20 +228,25 @@ mod validation_tests {
             0x0A, 0x06, 0x01, 0x04, 0x00, 0x41, 0x00, 0x0B, // code
         ];
         let result = ModuleValidator::validate(&no_memory);
-        assert!(matches!(result, Err(WasmError::MissingExport { name: "memory" })));
+        assert!(matches!(
+            result,
+            Err(WasmError::MissingExport { name: "memory" })
+        ));
     }
 
     #[test]
     fn test_validate_missing_main_export() {
         // A module with memory but no main should fail
         let no_main = vec![
-            0x00, 0x61, 0x73, 0x6D,
-            0x01, 0x00, 0x00, 0x00,
-            0x05, 0x03, 0x01, 0x00, 0x01, // memory section
+            0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00, 0x05, 0x03, 0x01, 0x00,
+            0x01, // memory section
             0x07, 0x0A, 0x01, 0x06, 0x6D, 0x65, 0x6D, 0x6F, 0x72, 0x79, 0x02, 0x00,
         ];
         let result = ModuleValidator::validate(&no_main);
-        assert!(matches!(result, Err(WasmError::MissingExport { name: "main" })));
+        assert!(matches!(
+            result,
+            Err(WasmError::MissingExport { name: "main" })
+        ));
     }
 }
 
@@ -752,7 +757,11 @@ mod command_runner_tests {
     #[test]
     fn test_runner_find_command_nonexistent() {
         let runner = WasmCommandRunner::new();
-        assert!(runner.find_command("this_command_definitely_does_not_exist").is_none());
+        assert!(
+            runner
+                .find_command("this_command_definitely_does_not_exist")
+                .is_none()
+        );
     }
 }
 
@@ -911,7 +920,10 @@ mod syscall_error_tests {
     fn test_error_from_code() {
         assert_eq!(SyscallError::from_code(-1), Some(SyscallError::Generic));
         assert_eq!(SyscallError::from_code(-2), Some(SyscallError::NotFound));
-        assert_eq!(SyscallError::from_code(-3), Some(SyscallError::PermissionDenied));
+        assert_eq!(
+            SyscallError::from_code(-3),
+            Some(SyscallError::PermissionDenied)
+        );
         assert_eq!(SyscallError::from_code(-100), None);
         assert_eq!(SyscallError::from_code(0), None);
     }

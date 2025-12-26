@@ -24,7 +24,7 @@ pub enum FsType {
 }
 
 impl FsType {
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "proc" => FsType::Proc,
             "sysfs" => FsType::Sysfs,
@@ -91,9 +91,10 @@ impl MountOptions {
         }
         opts
     }
+}
 
-    /// Convert to string representation
-    pub fn to_string(&self) -> String {
+impl std::fmt::Display for MountOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut parts = Vec::new();
         if self.read_only {
             parts.push("ro");
@@ -113,9 +114,9 @@ impl MountOptions {
             parts.push("nodev");
         }
         if self.size_limit > 0 {
-            return format!("{},size={}", parts.join(","), self.size_limit);
+            return write!(f, "{},size={}", parts.join(","), self.size_limit);
         }
-        parts.join(",")
+        write!(f, "{}", parts.join(","))
     }
 }
 
@@ -142,7 +143,10 @@ fn parse_size(s: &str) -> Result<usize, ()> {
         (s, 1)
     };
 
-    num_str.parse::<usize>().map(|n| n * multiplier).map_err(|_| ())
+    num_str
+        .parse::<usize>()
+        .map(|n| n * multiplier)
+        .map_err(|_| ())
 }
 
 /// A mounted filesystem entry
@@ -161,7 +165,13 @@ pub struct MountEntry {
 }
 
 impl MountEntry {
-    pub fn new(source: &str, target: &str, fstype: FsType, options: MountOptions, now: f64) -> Self {
+    pub fn new(
+        source: &str,
+        target: &str,
+        fstype: FsType,
+        options: MountOptions,
+        now: f64,
+    ) -> Self {
         Self {
             source: source.to_string(),
             target: target.to_string(),
@@ -205,7 +215,7 @@ impl FstabEntry {
         Some(FstabEntry {
             source: parts[0].to_string(),
             target: parts[1].to_string(),
-            fstype: FsType::from_str(parts[2]),
+            fstype: FsType::parse(parts[2]),
             options: parts[3].to_string(),
             dump: parts.get(4).and_then(|s| s.parse().ok()).unwrap_or(0),
             pass: parts.get(5).and_then(|s| s.parse().ok()).unwrap_or(0),
@@ -250,20 +260,17 @@ impl MountTable {
         let mut table = Self::new();
 
         // Root filesystem
-        let _ = table.mount(
-            "rootfs",
-            "/",
-            FsType::MemoryFs,
-            MountOptions::new(),
-            now,
-        );
+        let _ = table.mount("rootfs", "/", FsType::MemoryFs, MountOptions::new(), now);
 
         // Virtual filesystems
         let _ = table.mount(
             "proc",
             "/proc",
             FsType::Proc,
-            MountOptions { read_only: true, ..Default::default() },
+            MountOptions {
+                read_only: true,
+                ..Default::default()
+            },
             now,
         );
 
@@ -271,25 +278,16 @@ impl MountTable {
             "sysfs",
             "/sys",
             FsType::Sysfs,
-            MountOptions { read_only: true, ..Default::default() },
+            MountOptions {
+                read_only: true,
+                ..Default::default()
+            },
             now,
         );
 
-        let _ = table.mount(
-            "devfs",
-            "/dev",
-            FsType::Devfs,
-            MountOptions::new(),
-            now,
-        );
+        let _ = table.mount("devfs", "/dev", FsType::Devfs, MountOptions::new(), now);
 
-        let _ = table.mount(
-            "tmpfs",
-            "/tmp",
-            FsType::Tmpfs,
-            MountOptions::new(),
-            now,
-        );
+        let _ = table.mount("tmpfs", "/tmp", FsType::Tmpfs, MountOptions::new(), now);
 
         table
     }
@@ -384,7 +382,7 @@ impl MountTable {
                 entry.source,
                 entry.target,
                 entry.fstype.as_str(),
-                entry.options.to_string()
+                entry.options
             ));
         }
         lines.join("\n")
@@ -438,11 +436,25 @@ mod tests {
         let mut table = MountTable::new();
 
         // Mount
-        table.mount("tmpfs", "/mnt/test", FsType::Tmpfs, MountOptions::new(), 1.0).unwrap();
+        table
+            .mount(
+                "tmpfs",
+                "/mnt/test",
+                FsType::Tmpfs,
+                MountOptions::new(),
+                1.0,
+            )
+            .unwrap();
         assert!(table.is_mount_point("/mnt/test"));
 
         // Can't mount again
-        let err = table.mount("tmpfs", "/mnt/test", FsType::Tmpfs, MountOptions::new(), 2.0);
+        let err = table.mount(
+            "tmpfs",
+            "/mnt/test",
+            FsType::Tmpfs,
+            MountOptions::new(),
+            2.0,
+        );
         assert_eq!(err, Err(MountError::AlreadyMounted));
 
         // Unmount
@@ -476,10 +488,10 @@ mod tests {
 
     #[test]
     fn test_fstype_parse() {
-        assert_eq!(FsType::from_str("proc"), FsType::Proc);
-        assert_eq!(FsType::from_str("SYSFS"), FsType::Sysfs);
-        assert_eq!(FsType::from_str("tmpfs"), FsType::Tmpfs);
-        assert_eq!(FsType::from_str("ext4"), FsType::Other("ext4".to_string()));
+        assert_eq!(FsType::parse("proc"), FsType::Proc);
+        assert_eq!(FsType::parse("SYSFS"), FsType::Sysfs);
+        assert_eq!(FsType::parse("tmpfs"), FsType::Tmpfs);
+        assert_eq!(FsType::parse("ext4"), FsType::Other("ext4".to_string()));
     }
 
     #[test]
@@ -499,7 +511,9 @@ mod tests {
     #[test]
     fn test_proc_mounts_format() {
         let mut table = MountTable::new();
-        table.mount("tmpfs", "/tmp", FsType::Tmpfs, MountOptions::new(), 1.0).unwrap();
+        table
+            .mount("tmpfs", "/tmp", FsType::Tmpfs, MountOptions::new(), 1.0)
+            .unwrap();
 
         let output = table.to_proc_mounts();
         assert!(output.contains("tmpfs /tmp tmpfs"));

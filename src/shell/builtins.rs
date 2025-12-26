@@ -92,8 +92,17 @@ impl Default for ShellState {
 pub fn is_builtin(name: &str) -> bool {
     matches!(
         name,
-        "cd" | "pwd" | "exit" | "echo" | "export" | "unset" | "env" | "true" | "false" | "help"
-            | "alias" | "unalias"
+        "cd" | "pwd"
+            | "exit"
+            | "echo"
+            | "export"
+            | "unset"
+            | "env"
+            | "true"
+            | "false"
+            | "help"
+            | "alias"
+            | "unalias"
     )
 }
 
@@ -120,7 +129,10 @@ pub fn execute(name: &str, args: &[String], state: &ShellState) -> BuiltinResult
 fn builtin_cd(args: &[String], state: &ShellState) -> BuiltinResult {
     let target = if args.is_empty() {
         // cd with no args goes to $HOME or /home
-        state.get_env("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/home"))
+        state
+            .get_env("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/home"))
     } else if args.len() == 1 {
         let arg = &args[0];
         if arg == "-" {
@@ -188,7 +200,12 @@ fn builtin_exit(args: &[String]) -> BuiltinResult {
     } else {
         match args[0].parse::<i32>() {
             Ok(n) => n,
-            Err(_) => return BuiltinResult::Error(format!("exit: {}: numeric argument required", args[0])),
+            Err(_) => {
+                return BuiltinResult::Error(format!(
+                    "exit: {}: numeric argument required",
+                    args[0]
+                ));
+            }
         }
     };
     BuiltinResult::Exit(code)
@@ -492,7 +509,10 @@ mod tests {
     fn test_cd_relative_path() {
         let state = make_state();
         let result = execute("cd", &["documents".into()], &state);
-        assert_eq!(result, BuiltinResult::Cd(PathBuf::from("/home/user/documents")));
+        assert_eq!(
+            result,
+            BuiltinResult::Cd(PathBuf::from("/home/user/documents"))
+        );
     }
 
     #[test]
@@ -513,7 +533,10 @@ mod tests {
     fn test_cd_tilde_path() {
         let state = make_state();
         let result = execute("cd", &["~/documents".into()], &state);
-        assert_eq!(result, BuiltinResult::Cd(PathBuf::from("/home/user/documents")));
+        assert_eq!(
+            result,
+            BuiltinResult::Cd(PathBuf::from("/home/user/documents"))
+        );
     }
 
     #[test]
@@ -769,7 +792,10 @@ mod tests {
 
     #[test]
     fn test_normalize_path_dots() {
-        assert_eq!(normalize_path(Path::new("/a/./b/../c")), PathBuf::from("/a/c"));
+        assert_eq!(
+            normalize_path(Path::new("/a/./b/../c")),
+            PathBuf::from("/a/c")
+        );
     }
 
     #[test]

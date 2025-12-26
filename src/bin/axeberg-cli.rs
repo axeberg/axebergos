@@ -49,12 +49,10 @@ fn main() {
                         println!("Note: This is a minimal WASI CLI.");
                         println!("Full kernel integration coming soon.");
                     }
-                    "pwd" => {
-                        match std::env::current_dir() {
-                            Ok(path) => println!("{}", path.display()),
-                            Err(e) => eprintln!("pwd: {}", e),
-                        }
-                    }
+                    "pwd" => match std::env::current_dir() {
+                        Ok(path) => println!("{}", path.display()),
+                        Err(e) => eprintln!("pwd: {}", e),
+                    },
                     cmd if cmd.starts_with("ls") => {
                         let path = cmd.strip_prefix("ls").unwrap().trim();
                         let path = if path.is_empty() { "." } else { path };
@@ -86,7 +84,10 @@ fn main() {
                         println!("{}", cmd.strip_prefix("echo ").unwrap());
                     }
                     _ => {
-                        eprintln!("{}: command not found", line.split_whitespace().next().unwrap_or(line));
+                        eprintln!(
+                            "{}: command not found",
+                            line.split_whitespace().next().unwrap_or(line)
+                        );
                     }
                 }
             }

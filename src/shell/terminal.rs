@@ -123,16 +123,22 @@ const MAX_HISTORY: usize = 100;
 #[derive(Debug, Clone)]
 pub struct TerminalLine {
     pub text: String,
-    pub is_input: bool,  // Was this a user input line?
+    pub is_input: bool, // Was this a user input line?
 }
 
 impl TerminalLine {
     pub fn output(text: impl Into<String>) -> Self {
-        Self { text: text.into(), is_input: false }
+        Self {
+            text: text.into(),
+            is_input: false,
+        }
     }
 
     pub fn input(text: impl Into<String>) -> Self {
-        Self { text: text.into(), is_input: true }
+        Self {
+            text: text.into(),
+            is_input: true,
+        }
     }
 }
 
@@ -196,7 +202,10 @@ impl Terminal {
         };
 
         #[cfg(all(target_arch = "wasm32", not(test)))]
-        crate::console_log!("[terminal] Terminal created, cwd: {}", term.executor.state.cwd.display());
+        crate::console_log!(
+            "[terminal] Terminal created, cwd: {}",
+            term.executor.state.cwd.display()
+        );
 
         // Welcome message
         term.print("Welcome to axeberg!");
@@ -236,7 +245,7 @@ impl Terminal {
     pub fn handle_key(&mut self, key: &str, code: &str, ctrl: bool, _alt: bool) -> bool {
         // Handle Ctrl combinations
         if ctrl {
-            match key.as_ref() {
+            match key {
                 "c" => {
                     // Ctrl+C - cancel current input
                     self.print(&format!("{}{}^C", self.prompt, self.input));
@@ -281,7 +290,7 @@ impl Terminal {
         }
 
         // Handle special keys by code
-        match code.as_ref() {
+        match code {
             "Enter" | "NumpadEnter" => {
                 self.submit();
                 return true;
@@ -363,7 +372,8 @@ impl Terminal {
         self.history_pos = None;
 
         // Echo the input
-        self.lines.push_back(TerminalLine::input(format!("{}{}", self.prompt, input)));
+        self.lines
+            .push_back(TerminalLine::input(format!("{}{}", self.prompt, input)));
 
         // Add to history if non-empty
         if !input.trim().is_empty() {
@@ -403,8 +413,8 @@ impl Terminal {
         let cwd = self.executor.state.cwd.display().to_string();
         // Shorten home directory
         let home = self.executor.state.get_env("HOME").unwrap_or("/home");
-        let display = if cwd.starts_with(home) {
-            format!("~{}", &cwd[home.len()..])
+        let display = if let Some(rest) = cwd.strip_prefix(home) {
+            format!("~{}", rest)
         } else {
             cwd
         };
@@ -528,10 +538,10 @@ impl Terminal {
         // Calculate absolute line first to avoid borrow issues
         let abs_line = self.visible_line_to_absolute(line);
 
-        if let Some(ref mut sel) = self.selection {
-            if sel.active {
-                sel.end = TermPos::new(abs_line, col);
-            }
+        if let Some(ref mut sel) = self.selection
+            && sel.active
+        {
+            sel.end = TermPos::new(abs_line, col);
         }
     }
 
@@ -629,7 +639,10 @@ impl Terminal {
         let total = self.lines.len();
         let start = total.saturating_sub(self.visible_rows + self.scroll_offset);
         let end = total.saturating_sub(self.scroll_offset);
-        self.lines.range(start..end).enumerate().map(move |(i, line)| (start + i, line))
+        self.lines
+            .range(start..end)
+            .enumerate()
+            .map(move |(i, line)| (start + i, line))
     }
 
     /// Tab completion for commands and files
@@ -707,8 +720,8 @@ impl Terminal {
 
         // Built-in commands
         let builtins = [
-            "cd", "pwd", "exit", "echo", "export", "unset", "env", "true", "false",
-            "help", "alias", "unalias",
+            "cd", "pwd", "exit", "echo", "export", "unset", "env", "true", "false", "help",
+            "alias", "unalias",
         ];
         for cmd in builtins {
             if cmd.starts_with(prefix) {
@@ -733,7 +746,11 @@ impl Terminal {
 
         let (dir, file_prefix) = if prefix.contains('/') {
             let last_slash = prefix.rfind('/').unwrap();
-            let dir = if last_slash == 0 { "/" } else { &prefix[..last_slash] };
+            let dir = if last_slash == 0 {
+                "/"
+            } else {
+                &prefix[..last_slash]
+            };
             (dir.to_string(), &prefix[last_slash + 1..])
         } else {
             (".".to_string(), prefix)
@@ -1010,7 +1027,10 @@ mod tests {
         assert_eq!(term.history.len(), MAX_HISTORY);
 
         // Most recent command should be at the front
-        assert_eq!(term.history.front().unwrap(), &format!("echo cmd{}", MAX_HISTORY + 49));
+        assert_eq!(
+            term.history.front().unwrap(),
+            &format!("echo cmd{}", MAX_HISTORY + 49)
+        );
 
         // Oldest commands should be gone - the back should NOT be cmd0
         // It should be cmd50 (we kept the last 100 of 150 commands)

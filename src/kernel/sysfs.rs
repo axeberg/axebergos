@@ -43,42 +43,24 @@ impl SysFs {
                 "osrelease".to_string(),
                 "version".to_string(),
             ]),
-            "/sys/class" => Some(vec![
-                "tty".to_string(),
-                "mem".to_string(),
-            ]),
-            "/sys/class/tty" => Some(vec![
-                "console".to_string(),
-                "tty0".to_string(),
-            ]),
+            "/sys/class" => Some(vec!["tty".to_string(), "mem".to_string()]),
+            "/sys/class/tty" => Some(vec!["console".to_string(), "tty0".to_string()]),
             "/sys/class/mem" => Some(vec![
                 "null".to_string(),
                 "zero".to_string(),
                 "random".to_string(),
                 "urandom".to_string(),
             ]),
-            "/sys/devices" => Some(vec![
-                "system".to_string(),
-                "virtual".to_string(),
-            ]),
-            "/sys/devices/system" => Some(vec![
-                "cpu".to_string(),
-                "memory".to_string(),
-            ]),
+            "/sys/devices" => Some(vec!["system".to_string(), "virtual".to_string()]),
+            "/sys/devices/system" => Some(vec!["cpu".to_string(), "memory".to_string()]),
             "/sys/devices/system/cpu" => Some(vec![
                 "cpu0".to_string(),
                 "online".to_string(),
                 "present".to_string(),
             ]),
-            "/sys/devices/system/cpu/cpu0" => Some(vec![
-                "cpufreq".to_string(),
-            ]),
-            "/sys/fs" => Some(vec![
-                "cgroup".to_string(),
-            ]),
-            "/sys/power" => Some(vec![
-                "state".to_string(),
-            ]),
+            "/sys/devices/system/cpu/cpu0" => Some(vec!["cpufreq".to_string()]),
+            "/sys/fs" => Some(vec!["cgroup".to_string()]),
+            "/sys/power" => Some(vec!["state".to_string()]),
             "/sys/block" | "/sys/bus" | "/sys/firmware" | "/sys/module" => {
                 Some(Vec::new()) // Empty directories
             }

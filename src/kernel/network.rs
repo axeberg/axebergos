@@ -11,10 +11,9 @@
 
 #![cfg(target_arch = "wasm32")]
 
-use std::cell::RefCell;
 use std::collections::HashMap;
-use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
+use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
 /// HTTP method
@@ -110,7 +109,8 @@ impl HttpRequest {
 
     /// Set JSON body
     pub fn json(mut self, json: &str) -> Self {
-        self.headers.insert("Content-Type".to_string(), "application/json".to_string());
+        self.headers
+            .insert("Content-Type".to_string(), "application/json".to_string());
         self.body = Some(json.as_bytes().to_vec());
         self
     }
@@ -120,14 +120,14 @@ impl HttpRequest {
         let window = web_sys::window().ok_or("No window object")?;
 
         // Create request init
-        let mut opts = web_sys::RequestInit::new();
-        opts.method(self.method.as_str());
-        opts.mode(web_sys::RequestMode::Cors);
+        let opts = web_sys::RequestInit::new();
+        opts.set_method(self.method.as_str());
+        opts.set_mode(web_sys::RequestMode::Cors);
 
         // Set body if present
         if let Some(body) = &self.body {
             let uint8_array = js_sys::Uint8Array::from(body.as_slice());
-            opts.body(Some(&uint8_array));
+            opts.set_body(&uint8_array);
         }
 
         // Create request
@@ -159,7 +159,15 @@ impl HttpRequest {
         let mut response_headers = HashMap::new();
         let header_entries = resp.headers();
         // Note: Headers iteration is limited in web-sys, we get common ones
-        for name in ["content-type", "content-length", "cache-control", "date", "server"].iter() {
+        for name in [
+            "content-type",
+            "content-length",
+            "cache-control",
+            "date",
+            "server",
+        ]
+        .iter()
+        {
             if let Ok(Some(value)) = header_entries.get(*name) {
                 response_headers.insert(name.to_string(), value);
             }
@@ -223,7 +231,7 @@ impl WebSocketManager {
 
         // Set up message handler
         let messages = self.messages.entry(id).or_insert_with(Vec::new);
-        let messages_clone = messages.clone();
+        let _messages_clone = messages.clone();
         let onmessage_callback = Closure::wrap(Box::new(move |e: web_sys::MessageEvent| {
             if let Ok(text) = e.data().dyn_into::<js_sys::JsString>() {
                 // Note: Can't actually mutate here due to ownership, this is simplified
@@ -329,6 +337,9 @@ mod tests {
 
         assert_eq!(req.url, "https://example.com");
         assert_eq!(req.method, HttpMethod::Get);
-        assert_eq!(req.headers.get("Accept"), Some(&"application/json".to_string()));
+        assert_eq!(
+            req.headers.get("Accept"),
+            Some(&"application/json".to_string())
+        );
     }
 }

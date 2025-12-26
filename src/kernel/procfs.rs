@@ -42,26 +42,26 @@ impl ProcFs {
             Some(entries)
         } else if let Some(pid_str) = path.strip_prefix("/proc/") {
             // Check if it's a PID directory
-            if let Ok(pid) = pid_str.parse::<u32>() {
-                if pids.contains(&pid) {
-                    return Some(vec![
-                        "cmdline".to_string(),
-                        "cwd".to_string(),
-                        "environ".to_string(),
-                        "exe".to_string(),
-                        "fd".to_string(),
-                        "status".to_string(),
-                        "stat".to_string(),
-                        "maps".to_string(),
-                    ]);
-                }
+            if let Ok(pid) = pid_str.parse::<u32>()
+                && pids.contains(&pid)
+            {
+                return Some(vec![
+                    "cmdline".to_string(),
+                    "cwd".to_string(),
+                    "environ".to_string(),
+                    "exe".to_string(),
+                    "fd".to_string(),
+                    "status".to_string(),
+                    "stat".to_string(),
+                    "maps".to_string(),
+                ]);
             }
             // Check for /proc/[pid]/fd
-            if let Some(rest) = pid_str.strip_suffix("/fd") {
-                if let Ok(_pid) = rest.parse::<u32>() {
-                    // Would list file descriptors here
-                    return Some(vec!["0".to_string(), "1".to_string(), "2".to_string()]);
-                }
+            if let Some(rest) = pid_str.strip_suffix("/fd")
+                && let Ok(_pid) = rest.parse::<u32>()
+            {
+                // Would list file descriptors here
+                return Some(vec!["0".to_string(), "1".to_string(), "2".to_string()]);
             }
             None
         } else {
@@ -205,7 +205,11 @@ pub fn generate_proc_content(
     // System-wide files
     match rest {
         "uptime" => {
-            let content = format!("{:.2} {:.2}\n", sys_ctx.uptime_secs, sys_ctx.uptime_secs * 0.9);
+            let content = format!(
+                "{:.2} {:.2}\n",
+                sys_ctx.uptime_secs,
+                sys_ctx.uptime_secs * 0.9
+            );
             return Some(content.into_bytes());
         }
         "meminfo" => {
@@ -329,9 +333,17 @@ pub fn generate_proc_content(
                 ctx.name,
                 ctx.state,
                 ctx.pid,
-                ctx.ppid.map(|p| p.to_string()).unwrap_or_else(|| "0".to_string()),
-                ctx.uid, ctx.uid, ctx.uid, ctx.uid,
-                ctx.gid, ctx.gid, ctx.gid, ctx.gid,
+                ctx.ppid
+                    .map(|p| p.to_string())
+                    .unwrap_or_else(|| "0".to_string()),
+                ctx.uid,
+                ctx.uid,
+                ctx.uid,
+                ctx.uid,
+                ctx.gid,
+                ctx.gid,
+                ctx.gid,
+                ctx.gid,
                 ctx.memory_limit / 1024,
                 ctx.memory_used / 1024,
             );

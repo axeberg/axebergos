@@ -1,0 +1,99 @@
+# Zensical configuration for axeberg OS documentation
+# https://zensical.org/docs/
+
+[project]
+name = "axeberg"
+description = "A personal mini-OS written in Rust, compiled to WebAssembly"
+copyright = "MIT License"
+
+[project.urls]
+repository = "https://github.com/axeberg/axebergos"
+
+[build]
+docs_dir = "docs"
+site_dir = "site"
+
+[theme]
+variant = "modern"
+palette = "slate"
+accent = "amber"
+font = { text = "Inter", code = "JetBrains Mono" }
+
+[theme.logo]
+icon = "simple/rust"
+
+[theme.features]
+navigation_tabs = true
+navigation_sections = true
+navigation_expand = true
+toc_integrate = true
+search_suggest = true
+search_highlight = true
+content_tabs_link = true
+content_code_copy = true
+content_code_annotate = true
+
+[[navigation]]
+title = "Home"
+path = "index.md"
+
+[[navigation]]
+title = "Kernel"
+children = [
+    { title = "Overview", path = "kernel/overview.md" },
+    { title = "Syscall Interface", path = "kernel/syscalls.md" },
+    { title = "WASM Modules", path = "kernel/wasm-modules.md" },
+    { title = "Process Model", path = "kernel/processes.md" },
+    { title = "Users & Groups", path = "kernel/users.md" },
+    { title = "Memory Management", path = "kernel/memory.md" },
+    { title = "Object Table", path = "kernel/objects.md" },
+    { title = "Executor", path = "kernel/executor.md" },
+    { title = "IPC", path = "kernel/ipc.md" },
+    { title = "Timers", path = "kernel/timers.md" },
+    { title = "Signals", path = "kernel/signals.md" },
+    { title = "Tracing", path = "kernel/tracing.md" },
+]
+
+[[navigation]]
+title = "Userspace"
+children = [
+    { title = "Shell", path = "userspace/shell.md" },
+    { title = "Virtual Filesystem", path = "userspace/vfs.md" },
+    { title = "Standard I/O", path = "userspace/stdio.md" },
+    { title = "Compositor", path = "userspace/compositor.md" },
+]
+
+[[navigation]]
+title = "Development"
+children = [
+    { title = "Building", path = "development/building.md" },
+    { title = "Testing", path = "development/testing.md" },
+    { title = "Contributing", path = "development/contributing.md" },
+    { title = "System Invariants", path = "development/invariants.md" },
+]
+
+[[navigation]]
+title = "Architecture"
+children = [
+    { title = "Bare Metal Boot", path = "architecture/bare-metal.md" },
+]
+
+[[navigation]]
+title = "Roadmap"
+children = [
+    { title = "Bare Metal Boot Plan", path = "plans/bare-metal-boot.md" },
+    { title = "Compositor Plan", path = "plans/compositor.md" },
+]
+
+[extensions]
+admonition = true
+codehilite = { guess_lang = false, linenums = true }
+toc = { permalink = true, toc_depth = 3 }
+tables = true
+footnotes = true
+tasklist = true
+mermaid = true
+
+[search]
+lang = "en"
+separator = "[\\s\\-,:!=\\[\\]()\"'/]+"

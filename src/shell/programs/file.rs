@@ -9,7 +9,10 @@ use crate::kernel::syscall;
 pub fn prog_cat(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let files = args_to_strs(args);
 
-    if let Some(help) = check_help(&files, "Usage: cat [FILE]...\nConcatenate files and print to stdout. See 'man cat' for details.") {
+    if let Some(help) = check_help(
+        &files,
+        "Usage: cat [FILE]...\nConcatenate files and print to stdout. See 'man cat' for details.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -57,21 +60,23 @@ pub fn prog_cat(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut 
 pub fn prog_ls(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let paths = args_to_strs(args);
 
-    if let Some(help) = check_help(&paths, "Usage: ls [-la] [PATH]...\nList directory contents. See 'man ls' for details.") {
+    if let Some(help) = check_help(
+        &paths,
+        "Usage: ls [-la] [PATH]...\nList directory contents. See 'man ls' for details.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
 
-    let paths: Vec<&str> = paths.into_iter().filter(|p| !p.starts_with('-') || *p == "-" ).collect();
-    let paths = if paths.is_empty() {
-        vec!["."]
-    } else {
-        paths
-    };
+    let paths: Vec<&str> = paths
+        .into_iter()
+        .filter(|p| !p.starts_with('-') || *p == "-")
+        .collect();
+    let paths = if paths.is_empty() { vec!["."] } else { paths };
 
     // ANSI color codes
-    const BLUE: &str = "\x1b[34m";   // directories
-    const CYAN: &str = "\x1b[36m";   // symlinks
+    const BLUE: &str = "\x1b[34m"; // directories
+    const CYAN: &str = "\x1b[36m"; // symlinks
     const RESET: &str = "\x1b[0m";
 
     let mut code = 0;
@@ -130,7 +135,10 @@ pub fn prog_ls(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mut 
 pub fn prog_mkdir(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let paths = args_to_strs(args);
 
-    if let Some(help) = check_help(&paths, "Usage: mkdir DIRECTORY...\nCreate directories. See 'man mkdir' for details.") {
+    if let Some(help) = check_help(
+        &paths,
+        "Usage: mkdir DIRECTORY...\nCreate directories. See 'man mkdir' for details.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -154,7 +162,10 @@ pub fn prog_mkdir(args: &[String], _stdin: &str, stdout: &mut String, stderr: &m
 pub fn prog_touch(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let paths = args_to_strs(args);
 
-    if let Some(help) = check_help(&paths, "Usage: touch FILE...\nCreate empty files or update timestamps. See 'man touch' for details.") {
+    if let Some(help) = check_help(
+        &paths,
+        "Usage: touch FILE...\nCreate empty files or update timestamps. See 'man touch' for details.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -184,7 +195,10 @@ pub fn prog_touch(args: &[String], _stdin: &str, stdout: &mut String, stderr: &m
 pub fn prog_rm(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: rm [-r] FILE...\nRemove files or directories. See 'man rm' for details.") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: rm [-r] FILE...\nRemove files or directories. See 'man rm' for details.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -195,7 +209,8 @@ pub fn prog_rm(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mut 
     }
 
     let recursive = args.iter().any(|&a| a == "-r" || a == "-rf" || a == "-fr");
-    let paths: Vec<&str> = args.iter()
+    let paths: Vec<&str> = args
+        .iter()
         .copied()
         .filter(|a| !a.starts_with('-'))
         .collect();
@@ -240,7 +255,10 @@ pub fn prog_rm(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mut 
 pub fn prog_cp(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: cp SOURCE DEST\nCopy files. See 'man cp' for details.") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: cp SOURCE DEST\nCopy files. See 'man cp' for details.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -266,7 +284,10 @@ pub fn prog_cp(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mut 
 pub fn prog_mv(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: mv SOURCE DEST\nMove or rename files. See 'man mv' for details.") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: mv SOURCE DEST\nMove or rename files. See 'man mv' for details.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -292,7 +313,10 @@ pub fn prog_mv(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mut 
 pub fn prog_ln(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: ln -s TARGET LINK_NAME\nCreate symbolic links. See 'man ln' for details.") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: ln -s TARGET LINK_NAME\nCreate symbolic links. See 'man ln' for details.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -307,9 +331,9 @@ pub fn prog_ln(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mut 
             symbolic = true;
         } else if *arg == "-f" || *arg == "--force" {
             force = true;
-        } else if arg.starts_with('-') {
+        } else if let Some(flags) = arg.strip_prefix('-') {
             // Handle combined flags like -sf
-            for c in arg[1..].chars() {
+            for c in flags.chars() {
                 match c {
                     's' => symbolic = true,
                     'f' => force = true,
@@ -353,7 +377,12 @@ pub fn prog_ln(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mut 
 }
 
 /// readlink - print value of a symbolic link
-pub fn prog_readlink(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_readlink(
+    args: &[String],
+    _stdin: &str,
+    stdout: &mut String,
+    stderr: &mut String,
+) -> i32 {
     let args = args_to_strs(args);
 
     if args.is_empty() {
@@ -379,7 +408,10 @@ pub fn prog_readlink(args: &[String], _stdin: &str, stdout: &mut String, stderr:
 pub fn prog_tree(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let paths = args_to_strs(args);
 
-    if let Some(help) = check_help(&paths, "Usage: tree [DIRECTORY]\nDisplay directory tree. See 'man tree' for details.") {
+    if let Some(help) = check_help(
+        &paths,
+        "Usage: tree [DIRECTORY]\nDisplay directory tree. See 'man tree' for details.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -404,7 +436,11 @@ pub fn prog_tree(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mu
 
         for (i, entry) in entries.iter().enumerate() {
             let is_last_entry = i == entries.len() - 1;
-            let connector = if is_last_entry { "└── " } else { "├── " };
+            let connector = if is_last_entry {
+                "└── "
+            } else {
+                "├── "
+            };
             let child_prefix = if is_last_entry { "    " } else { "│   " };
 
             let full_path = if path == "/" {
@@ -422,13 +458,28 @@ pub fn prog_tree(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mu
 
             if is_symlink {
                 *file_count += 1;
-                let target_str = symlink_target.map(|t| format!(" -> {}", t)).unwrap_or_default();
-                stdout.push_str(&format!("{}{}\x1b[36m{}\x1b[0m{}\n", prefix, connector, entry, target_str));
+                let target_str = symlink_target
+                    .map(|t| format!(" -> {}", t))
+                    .unwrap_or_default();
+                stdout.push_str(&format!(
+                    "{}{}\x1b[36m{}\x1b[0m{}\n",
+                    prefix, connector, entry, target_str
+                ));
             } else if is_dir {
                 *dir_count += 1;
-                stdout.push_str(&format!("{}{}{}{}{}\n", prefix, connector, BLUE, entry, RESET));
+                stdout.push_str(&format!(
+                    "{}{}{}{}{}\n",
+                    prefix, connector, BLUE, entry, RESET
+                ));
                 let new_prefix = format!("{}{}", prefix, child_prefix);
-                let _ = print_tree(&full_path, &new_prefix, stdout, is_last_entry, dir_count, file_count);
+                let _ = print_tree(
+                    &full_path,
+                    &new_prefix,
+                    stdout,
+                    is_last_entry,
+                    dir_count,
+                    file_count,
+                );
             } else {
                 *file_count += 1;
                 stdout.push_str(&format!("{}{}{}\n", prefix, connector, entry));
@@ -454,7 +505,10 @@ pub fn prog_tree(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mu
         return 1;
     }
 
-    stdout.push_str(&format!("\n{} directories, {} files", dir_count, file_count));
+    stdout.push_str(&format!(
+        "\n{} directories, {} files",
+        dir_count, file_count
+    ));
     0
 }
 

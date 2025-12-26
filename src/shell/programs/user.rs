@@ -4,10 +4,13 @@ use super::{args_to_strs, check_help};
 use crate::kernel::syscall;
 
 /// su - switch user (simulated)
-pub fn prog_su(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_su(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: su [-] [USER]\nSwitch user. Defaults to root.") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: su [-] [USER]\nSwitch user. Defaults to root.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -70,7 +73,7 @@ pub fn prog_su(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut S
 }
 
 /// sudo - run command as root (simulated)
-pub fn prog_sudo(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_sudo(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if args.is_empty() || args.first().map(|s| s.as_ref()) == Some("--help") {
@@ -116,7 +119,12 @@ pub fn prog_sudo(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut
 }
 
 /// useradd - create a new user
-pub fn prog_useradd(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_useradd(
+    args: &[String],
+    __stdin: &str,
+    stdout: &mut String,
+    stderr: &mut String,
+) -> i32 {
     let args = args_to_strs(args);
 
     if args.is_empty() || args.first().map(|s| s.as_ref()) == Some("--help") {
@@ -188,7 +196,12 @@ pub fn prog_useradd(args: &[String], stdin: &str, stdout: &mut String, stderr: &
 }
 
 /// groupadd - create a new group
-pub fn prog_groupadd(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_groupadd(
+    args: &[String],
+    __stdin: &str,
+    stdout: &mut String,
+    stderr: &mut String,
+) -> i32 {
     let args = args_to_strs(args);
 
     if args.is_empty() || args.first().map(|s| s.as_ref()) == Some("--help") {
@@ -216,7 +229,10 @@ pub fn prog_groupadd(args: &[String], stdin: &str, stdout: &mut String, stderr: 
         Ok(gid) => {
             // Save updated user database to /etc/group
             syscall::save_user_db();
-            stdout.push_str(&format!("Created group '{}' with gid={}\n", groupname, gid.0));
+            stdout.push_str(&format!(
+                "Created group '{}' with gid={}\n",
+                groupname, gid.0
+            ));
             0
         }
         Err(e) => {
@@ -227,10 +243,18 @@ pub fn prog_groupadd(args: &[String], stdin: &str, stdout: &mut String, stderr: 
 }
 
 /// passwd - change password
-pub fn prog_passwd(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_passwd(
+    args: &[String],
+    __stdin: &str,
+    stdout: &mut String,
+    stderr: &mut String,
+) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: passwd [USER] [PASSWORD]\n\nChange user password.\n\nExamples:\n  passwd mypassword          Set your own password\n  passwd root newpass        Set root's password (requires root)\n  passwd user                Clear user's password (requires root)") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: passwd [USER] [PASSWORD]\n\nChange user password.\n\nExamples:\n  passwd mypassword          Set your own password\n  passwd root newpass        Set root's password (requires root)\n  passwd user                Clear user's password (requires root)",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -248,7 +272,7 @@ pub fn prog_passwd(args: &[String], stdin: &str, stdout: &mut String, stderr: &m
             .unwrap_or_else(|| "user".to_string());
 
         // If argument looks like a username that exists, treat it as clearing password
-        if euid.0 == 0 && syscall::get_user_by_name(&args[0]).is_some() {
+        if euid.0 == 0 && syscall::get_user_by_name(args[0]).is_some() {
             (args[0].to_string(), None)
         } else {
             // Treat as password for current user
@@ -263,13 +287,22 @@ pub fn prog_passwd(args: &[String], stdin: &str, stdout: &mut String, stderr: &m
         if euid.0 != 0 {
             let current_user = syscall::get_user_by_uid(euid)
                 .map(|u| u.name.clone())
-                .unwrap_or_else(|| "".to_string());
+                .unwrap_or_default();
             if username != current_user {
-                stderr.push_str("passwd: permission denied (must be root to change other users' passwords)\n");
+                stderr.push_str(
+                    "passwd: permission denied (must be root to change other users' passwords)\n",
+                );
                 return 1;
             }
         }
-        (username, if password.is_empty() { None } else { Some(password) })
+        (
+            username,
+            if password.is_empty() {
+                None
+            } else {
+                Some(password)
+            },
+        )
     };
 
     if syscall::get_user_by_name(&target).is_none() {
@@ -313,10 +346,13 @@ pub fn prog_passwd(args: &[String], stdin: &str, stdout: &mut String, stderr: &m
 /// login - log in as a user with password authentication
 /// This behaves like real Linux login(1): it spawns a NEW shell process
 /// as the target user with proper session management.
-pub fn prog_login(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_login(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: login <username> [password]\n\nLog in as a user with password authentication.\n\nThis command spawns a new login shell as the specified user,\ncreating a proper session like Linux login(1).\n\nIf no password is provided, allows login for users without passwords.\nUse 'logout' to end the current session.\nUse 'passwd' to change your password.\n\nDefault users:\n  root     - password: root (uid 0)\n  user     - no password (uid 1000)\n  nobody   - no password (uid 65534)") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: login <username> [password]\n\nLog in as a user with password authentication.\n\nThis command spawns a new login shell as the specified user,\ncreating a proper session like Linux login(1).\n\nIf no password is provided, allows login for users without passwords.\nUse 'logout' to end the current session.\nUse 'passwd' to change your password.\n\nDefault users:\n  root     - password: root (uid 0)\n  user     - no password (uid 1000)\n  nobody   - no password (uid 65534)",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -331,7 +367,11 @@ pub fn prog_login(args: &[String], stdin: &str, stdout: &mut String, stderr: &mu
     let _ = syscall::mkdir("/var/run");
 
     let username = args[0].to_string();
-    let password = if args.len() > 1 { Some(args[1..].join(" ")) } else { None };
+    let password = if args.len() > 1 {
+        Some(args[1..].join(" "))
+    } else {
+        None
+    };
 
     // Verify user exists and check password
     let auth_result = syscall::KERNEL.with(|k| {
@@ -341,7 +381,12 @@ pub fn prog_login(args: &[String], stdin: &str, stdout: &mut String, stderr: &mu
             match (&user.password_hash, &password) {
                 (None, _) => {
                     // No password set - allow login
-                    Ok((user.uid.0, user.gid.0, user.home.clone(), user.shell.clone()))
+                    Ok((
+                        user.uid.0,
+                        user.gid.0,
+                        user.home.clone(),
+                        user.shell.clone(),
+                    ))
                 }
                 (Some(_), None) => {
                     // Password required but not provided
@@ -350,7 +395,12 @@ pub fn prog_login(args: &[String], stdin: &str, stdout: &mut String, stderr: &mu
                 (Some(_), Some(pwd)) => {
                     // Verify password
                     if user.check_password(pwd) {
-                        Ok((user.uid.0, user.gid.0, user.home.clone(), user.shell.clone()))
+                        Ok((
+                            user.uid.0,
+                            user.gid.0,
+                            user.home.clone(),
+                            user.shell.clone(),
+                        ))
                     } else {
                         Err("Authentication failed".to_string())
                     }
@@ -382,7 +432,10 @@ pub fn prog_login(args: &[String], stdin: &str, stdout: &mut String, stderr: &mu
     // Record login session in utmp
     let session_file = "/var/run/utmp";
     let now = syscall::now();
-    let session_data = format!("{}:{}:{}:{}:{}\n", username, uid, new_pid.0, now as u64, "tty1");
+    let session_data = format!(
+        "{}:{}:{}:{}:{}\n",
+        username, uid, new_pid.0, now as u64, "tty1"
+    );
 
     // Write session file as root (temporarily)
     syscall::KERNEL.with(|k| {
@@ -407,14 +460,18 @@ pub fn prog_login(args: &[String], stdin: &str, stdout: &mut String, stderr: &mu
     });
 
     // Get session info for display
-    let (pid, sid, pgid, _, ctty) = syscall::get_session_info().unwrap_or((0, 0, 0, String::new(), String::new()));
+    let (pid, sid, pgid, _, ctty) =
+        syscall::get_session_info().unwrap_or((0, 0, 0, String::new(), String::new()));
 
     stdout.push_str(&format!("\nLogin successful: {}\n", username));
     stdout.push_str(&format!("  PID: {}, SID: {}, PGID: {}\n", pid, sid, pgid));
     stdout.push_str(&format!("  UID: {}, GID: {}\n", uid, gid));
     stdout.push_str(&format!("  Home: {}\n", home));
     stdout.push_str(&format!("  Shell: {}\n", shell));
-    stdout.push_str(&format!("  TTY: {}\n", if ctty.is_empty() { "none" } else { &ctty }));
+    stdout.push_str(&format!(
+        "  TTY: {}\n",
+        if ctty.is_empty() { "none" } else { &ctty }
+    ));
     stdout.push_str("\nType 'logout' to end this session.\n");
 
     0
@@ -423,10 +480,18 @@ pub fn prog_login(args: &[String], stdin: &str, stdout: &mut String, stderr: &mu
 /// logout - log out current user
 /// In a real Linux system, this would exit the login shell and return to getty.
 /// Here we terminate the current session and switch back to the init/parent process.
-pub fn prog_logout(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+pub fn prog_logout(
+    args: &[String],
+    __stdin: &str,
+    stdout: &mut String,
+    _stderr: &mut String,
+) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: logout\n\nEnd the current login session and return to the parent process.\nThis terminates the login shell that was spawned by 'login'.") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: logout\n\nEnd the current login session and return to the parent process.\nThis terminates the login shell that was spawned by 'login'.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -438,7 +503,9 @@ pub fn prog_logout(args: &[String], stdin: &str, stdout: &mut String, _stderr: &
         let pid = proc.map(|p| p.pid.0).unwrap_or(0);
         let sid = proc.map(|p| p.sid.0).unwrap_or(0);
         let uid = proc.map(|p| p.uid.0).unwrap_or(1000);
-        let user = kernel.users().get_user(crate::kernel::users::Uid(uid))
+        let user = kernel
+            .users()
+            .get_user(crate::kernel::users::Uid(uid))
             .map(|u| u.name.clone())
             .unwrap_or_else(|| "unknown".to_string());
         (pid, sid, user)
@@ -465,13 +532,19 @@ pub fn prog_logout(args: &[String], stdin: &str, stdout: &mut String, _stderr: &
     // If there's a parent process, switch to it; otherwise spawn new init
     if let Some(parent) = parent_pid {
         syscall::set_current_process(parent);
-        stdout.push_str(&format!("Session {} ended for user '{}' (PID {})\n", current_sid, username, current_pid));
+        stdout.push_str(&format!(
+            "Session {} ended for user '{}' (PID {})\n",
+            current_sid, username, current_pid
+        ));
         stdout.push_str("Returned to parent process.\n");
     } else {
         // No parent - spawn a new shell as default user
         let new_pid = syscall::spawn_login_shell("user", 1000, 1000, "/home/user", "/bin/sh");
         syscall::set_current_process(new_pid);
-        stdout.push_str(&format!("Session {} ended for user '{}'\n", current_sid, username));
+        stdout.push_str(&format!(
+            "Session {} ended for user '{}'\n",
+            current_sid, username
+        ));
         stdout.push_str("Started new session as 'user'.\n");
     }
 
@@ -479,7 +552,7 @@ pub fn prog_logout(args: &[String], stdin: &str, stdout: &mut String, _stderr: &
 }
 
 /// who - show who is logged in
-pub fn prog_who(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+pub fn prog_who(args: &[String], __stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: who\n\nShow who is logged in.") {
@@ -502,7 +575,7 @@ pub fn prog_who(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut
                         if parts.len() >= 3 {
                             let username = parts[0];
                             let login_time = parts[2].parse::<u64>().unwrap_or(0);
-                            let secs = (login_time / 1000) as u64;
+                            let secs = login_time / 1000;
                             let hours = (secs / 3600) % 24;
                             let mins = (secs / 60) % 60;
                             stdout.push_str(&format!(
@@ -522,10 +595,10 @@ pub fn prog_who(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut
             // No session file, show current user from process
             let username = syscall::KERNEL.with(|k| {
                 let kernel = k.borrow();
-                let uid = kernel.current_process()
-                    .map(|p| p.uid.0)
-                    .unwrap_or(1000);
-                kernel.users().get_user(crate::kernel::users::Uid(uid))
+                let uid = kernel.current_process().map(|p| p.uid.0).unwrap_or(1000);
+                kernel
+                    .users()
+                    .get_user(crate::kernel::users::Uid(uid))
                     .map(|u| u.name.clone())
                     .unwrap_or_else(|| "user".to_string())
             });
@@ -539,10 +612,13 @@ pub fn prog_who(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut
 }
 
 /// w - show who is logged in and what they are doing
-pub fn prog_w(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+pub fn prog_w(args: &[String], __stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: w\n\nShow who is logged in and what they are doing.") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: w\n\nShow who is logged in and what they are doing.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -554,7 +630,10 @@ pub fn prog_w(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut S
     let mins = (secs / 60) % 60;
     let secs_display = secs % 60;
 
-    stdout.push_str(&format!(" {:02}:{:02}:{:02} up ", hours, mins, secs_display));
+    stdout.push_str(&format!(
+        " {:02}:{:02}:{:02} up ",
+        hours, mins, secs_display
+    ));
 
     // Uptime
     let uptime_hours = secs / 3600;
@@ -571,10 +650,10 @@ pub fn prog_w(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut S
     // Get current user
     let username = syscall::KERNEL.with(|k| {
         let kernel = k.borrow();
-        let uid = kernel.current_process()
-            .map(|p| p.uid.0)
-            .unwrap_or(1000);
-        kernel.users().get_user(crate::kernel::users::Uid(uid))
+        let uid = kernel.current_process().map(|p| p.uid.0).unwrap_or(1000);
+        kernel
+            .users()
+            .get_user(crate::kernel::users::Uid(uid))
             .map(|u| u.name.clone())
             .unwrap_or_else(|| "user".to_string())
     });

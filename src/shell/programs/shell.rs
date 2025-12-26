@@ -1,18 +1,28 @@
 //! Shell utility programs
 
-use super::{args_to_strs, check_help, read_file_content};
+use super::{args_to_strs, check_help};
 use crate::kernel::syscall;
 use crate::shell::builtins;
 use crate::shell::executor::ProgramRegistry;
 
 /// clear - clear the terminal screen
-pub fn prog_clear(_args: &[String], _stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+pub fn prog_clear(
+    _args: &[String],
+    _stdin: &str,
+    stdout: &mut String,
+    _stderr: &mut String,
+) -> i32 {
     stdout.push_str("\x1b[2J\x1b[H");
     0
 }
 
 /// history - display command history
-pub fn prog_history(args: &[String], _stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+pub fn prog_history(
+    args: &[String],
+    _stdin: &str,
+    stdout: &mut String,
+    _stderr: &mut String,
+) -> i32 {
     let args = args_to_strs(args);
 
     // Get history from terminal module
@@ -23,7 +33,7 @@ pub fn prog_history(args: &[String], _stdin: &str, stdout: &mut String, _stderr:
     let history: Vec<String> = Vec::new();
 
     // Check for -c (clear) flag
-    if args.iter().any(|a| *a == "-c") {
+    if args.contains(&"-c") {
         // Can't clear history from here - would need terminal module support
         stdout.push_str("history: clearing not supported\n");
         return 0;
@@ -50,10 +60,13 @@ pub fn prog_history(args: &[String], _stdin: &str, stdout: &mut String, _stderr:
 
 /// Text editor - opens a file for editing
 #[allow(unused_variables)]
-pub fn prog_edit(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_edit(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: edit [FILE]\nOpen text editor. Ctrl+Q to quit, Ctrl+S to save. See 'man edit' for details.") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: edit [FILE]\nOpen text editor. Ctrl+Q to quit, Ctrl+S to save. See 'man edit' for details.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -86,7 +99,10 @@ pub fn prog_edit(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut
 pub fn prog_man(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: man COMMAND\nDisplay manual page for a command. See 'man man' for details.") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: man COMMAND\nDisplay manual page for a command. See 'man man' for details.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -173,10 +189,18 @@ pub fn prog_man(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mut
 }
 
 /// printenv - print environment variables (uses kernel syscalls)
-pub fn prog_printenv(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_printenv(
+    args: &[String],
+    _stdin: &str,
+    stdout: &mut String,
+    stderr: &mut String,
+) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: printenv [NAME...]\nPrint environment variables from the kernel process.") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: printenv [NAME...]\nPrint environment variables from the kernel process.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -195,7 +219,7 @@ pub fn prog_printenv(args: &[String], _stdin: &str, stdout: &mut String, stderr:
                 // Print specific variables
                 let env_map: std::collections::HashMap<String, String> = env.into_iter().collect();
                 for name in args {
-                    if let Some(value) = env_map.get(&name.to_string()) {
+                    if let Some(value) = env_map.get(name) {
                         stdout.push_str(&format!("{}\n", value));
                     }
                 }
@@ -213,7 +237,10 @@ pub fn prog_printenv(args: &[String], _stdin: &str, stdout: &mut String, stderr:
 pub fn prog_seq(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: seq [FIRST] [INCREMENT] LAST\nPrint sequence of numbers.") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: seq [FIRST] [INCREMENT] LAST\nPrint sequence of numbers.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -226,7 +253,11 @@ pub fn prog_seq(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mut
     // Parse arguments
     let (first, increment, last) = match args.len() {
         1 => (1i64, 1i64, args[0].parse::<i64>().unwrap_or(1)),
-        2 => (args[0].parse::<i64>().unwrap_or(1), 1i64, args[1].parse::<i64>().unwrap_or(1)),
+        2 => (
+            args[0].parse::<i64>().unwrap_or(1),
+            1i64,
+            args[1].parse::<i64>().unwrap_or(1),
+        ),
         _ => (
             args[0].parse::<i64>().unwrap_or(1),
             args[1].parse::<i64>().unwrap_or(1),
@@ -259,7 +290,10 @@ pub fn prog_seq(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mut
 pub fn prog_yes(args: &[String], _stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: yes [STRING]\nRepeatedly output STRING (limited to 100 lines).") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: yes [STRING]\nRepeatedly output STRING (limited to 100 lines).",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -276,10 +310,18 @@ pub fn prog_yes(args: &[String], _stdin: &str, stdout: &mut String, _stderr: &mu
 }
 
 /// basename - strip directory and suffix from filename
-pub fn prog_basename(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_basename(
+    args: &[String],
+    _stdin: &str,
+    stdout: &mut String,
+    stderr: &mut String,
+) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: basename PATH [SUFFIX]\nStrip directory and suffix from PATH.") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: basename PATH [SUFFIX]\nStrip directory and suffix from PATH.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -290,7 +332,7 @@ pub fn prog_basename(args: &[String], _stdin: &str, stdout: &mut String, stderr:
     }
 
     let path = args[0];
-    let suffix = args.get(1).map(|s| *s);
+    let suffix = args.get(1).copied();
 
     // Get the last component
     let base = path.rsplit('/').next().unwrap_or(path);
@@ -308,10 +350,18 @@ pub fn prog_basename(args: &[String], _stdin: &str, stdout: &mut String, stderr:
 }
 
 /// dirname - strip last component from filename
-pub fn prog_dirname(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_dirname(
+    args: &[String],
+    _stdin: &str,
+    stdout: &mut String,
+    stderr: &mut String,
+) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: dirname PATH\nStrip last component from PATH.") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: dirname PATH\nStrip last component from PATH.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -343,14 +393,21 @@ pub fn prog_dirname(args: &[String], _stdin: &str, stdout: &mut String, stderr: 
 pub fn prog_xargs(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: xargs [COMMAND] [ARGS]\nBuild command lines from stdin.") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: xargs [COMMAND] [ARGS]\nBuild command lines from stdin.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
 
     // Get the command to run (default: echo)
     let cmd = if args.is_empty() { "echo" } else { args[0] };
-    let cmd_args: Vec<&str> = if args.len() > 1 { args[1..].to_vec() } else { vec![] };
+    let cmd_args: Vec<&str> = if args.len() > 1 {
+        args[1..].to_vec()
+    } else {
+        vec![]
+    };
 
     // Read items from stdin
     let items: Vec<&str> = stdin.split_whitespace().collect();
@@ -414,7 +471,10 @@ pub fn prog_cal(args: &[String], _stdin: &str, stdout: &mut String, _stderr: &mu
 
     // Parse arguments
     let (show_month, show_year) = if args.len() >= 2 {
-        (args[0].parse().unwrap_or(month), args[1].parse().unwrap_or(year))
+        (
+            args[0].parse().unwrap_or(month),
+            args[1].parse().unwrap_or(year),
+        )
     } else if args.len() == 1 {
         (month, args[0].parse().unwrap_or(year))
     } else {
@@ -422,8 +482,18 @@ pub fn prog_cal(args: &[String], _stdin: &str, stdout: &mut String, _stderr: &mu
     };
 
     let month_names = [
-        "January", "February", "March", "April", "May", "June",
-        "July", "August", "September", "October", "November", "December"
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
     ];
 
     let month_name = month_names.get((show_month - 1) as usize).unwrap_or(&"???");
@@ -476,7 +546,13 @@ fn days_in_month(month: u32, year: i32) -> u32 {
     match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
-        2 => if is_leap_year(year) { 29 } else { 28 },
+        2 => {
+            if is_leap_year(year) {
+                29
+            } else {
+                28
+            }
+        }
         _ => 30,
     }
 }
@@ -509,7 +585,10 @@ pub fn prog_printf(args: &[String], _stdin: &str, stdout: &mut String, stderr: &
         return 1;
     }
 
-    if let Some(help) = check_help(&args, "Usage: printf FORMAT [ARG]...\nFormat and print data.") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: printf FORMAT [ARG]...\nFormat and print data.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -539,7 +618,7 @@ pub fn prog_printf(args: &[String], _stdin: &str, stdout: &mut String, stderr: &
             match chars.next() {
                 Some('s') => {
                     if arg_idx < args.len() {
-                        stdout.push_str(&args[arg_idx]);
+                        stdout.push_str(args[arg_idx]);
                         arg_idx += 1;
                     }
                 }
@@ -629,9 +708,27 @@ pub fn prog_test(args: &[String], _stdin: &str, _stdout: &mut String, stderr: &m
         let arg = args[1];
 
         return match op {
-            "-n" => if arg.is_empty() { 1 } else { 0 },
-            "-z" => if arg.is_empty() { 0 } else { 1 },
-            "-e" | "-a" => if syscall::exists(arg).unwrap_or(false) { 0 } else { 1 },
+            "-n" => {
+                if arg.is_empty() {
+                    1
+                } else {
+                    0
+                }
+            }
+            "-z" => {
+                if arg.is_empty() {
+                    0
+                } else {
+                    1
+                }
+            }
+            "-e" | "-a" => {
+                if syscall::exists(arg).unwrap_or(false) {
+                    0
+                } else {
+                    1
+                }
+            }
             "-f" => {
                 if syscall::exists(arg).unwrap_or(false) {
                     if let Ok(meta) = syscall::stat(arg) {
@@ -656,7 +753,11 @@ pub fn prog_test(args: &[String], _stdin: &str, _stdout: &mut String, stderr: &m
             }
             "-r" | "-w" | "-x" => {
                 // Assume readable/writable/executable if exists
-                if syscall::exists(arg).unwrap_or(false) { 0 } else { 1 }
+                if syscall::exists(arg).unwrap_or(false) {
+                    0
+                } else {
+                    1
+                }
             }
             "-s" => {
                 // True if file exists and has size > 0
@@ -668,7 +769,11 @@ pub fn prog_test(args: &[String], _stdin: &str, _stdout: &mut String, stderr: &m
             }
             "-L" | "-h" => {
                 // True if symbolic link (check via read_link)
-                if syscall::read_link(arg).is_ok() { 0 } else { 1 }
+                if syscall::read_link(arg).is_ok() {
+                    0
+                } else {
+                    1
+                }
             }
             _ => 1, // Unknown unary operator
         };
@@ -725,7 +830,11 @@ pub fn prog_expr(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mu
     if args.len() == 1 {
         stdout.push_str(&args[0]);
         stdout.push('\n');
-        return if args[0] == "0" || args[0].is_empty() { 1 } else { 0 };
+        return if args[0] == "0" || args[0].is_empty() {
+            1
+        } else {
+            0
+        };
     }
 
     if args.len() == 3 {
@@ -872,7 +981,10 @@ pub fn prog_type(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mu
         return 1;
     }
 
-    if let Some(help) = check_help(&args, "Usage: type COMMAND\nDescribe how a command would be interpreted.") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: type COMMAND\nDescribe how a command would be interpreted.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }

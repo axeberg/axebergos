@@ -1,19 +1,25 @@
 //! Encoding utility programs
 
 use super::{args_to_strs, check_help, read_file_content};
-use crate::kernel::syscall;
 
 /// Base64 encode or decode
 pub fn prog_base64(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: base64 [-d] [FILE]\nBase64 encode or decode.\n  -d  Decode") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: base64 [-d] [FILE]\nBase64 encode or decode.\n  -d  Decode",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
 
     let decode = args.iter().any(|a| *a == "-d" || *a == "--decode");
-    let file_args: Vec<&str> = args.iter().filter(|a| !a.starts_with('-')).map(|s| s.as_ref()).collect();
+    let file_args: Vec<&str> = args
+        .iter()
+        .filter(|a| !a.starts_with('-'))
+        .map(|s| s.as_ref())
+        .collect();
 
     let input = if let Some(file) = file_args.first() {
         match read_file_content(file) {
@@ -34,13 +40,26 @@ pub fn prog_base64(args: &[String], stdin: &str, stdout: &mut String, stderr: &m
         let mut i = 0;
 
         while i < chars.len() {
-            let chunk: Vec<u8> = chars[i..].iter().take(4).map(|c| base64_decode_char(*c)).collect();
-            if chunk.len() < 4 { break; }
+            let chunk: Vec<u8> = chars[i..]
+                .iter()
+                .take(4)
+                .map(|c| base64_decode_char(*c))
+                .collect();
+            if chunk.len() < 4 {
+                break;
+            }
 
-            let val = ((chunk[0] as u32) << 18) | ((chunk[1] as u32) << 12) | ((chunk[2] as u32) << 6) | (chunk[3] as u32);
+            let val = ((chunk[0] as u32) << 18)
+                | ((chunk[1] as u32) << 12)
+                | ((chunk[2] as u32) << 6)
+                | (chunk[3] as u32);
             result.push((val >> 16) as u8);
-            if chunk[2] < 64 { result.push((val >> 8) as u8); }
-            if chunk[3] < 64 { result.push(val as u8); }
+            if chunk[2] < 64 {
+                result.push((val >> 8) as u8);
+            }
+            if chunk[3] < 64 {
+                result.push(val as u8);
+            }
             i += 4;
         }
 
@@ -65,8 +84,16 @@ pub fn prog_base64(args: &[String], stdin: &str, stdout: &mut String, stderr: &m
 
             result.push(base64_encode_val((val >> 18) & 0x3F));
             result.push(base64_encode_val((val >> 12) & 0x3F));
-            result.push(if chunk.len() > 1 { base64_encode_val((val >> 6) & 0x3F) } else { '=' });
-            result.push(if chunk.len() > 2 { base64_encode_val(val & 0x3F) } else { '=' });
+            result.push(if chunk.len() > 1 {
+                base64_encode_val((val >> 6) & 0x3F)
+            } else {
+                '='
+            });
+            result.push(if chunk.len() > 2 {
+                base64_encode_val(val & 0x3F)
+            } else {
+                '='
+            });
         }
 
         stdout.push_str(&result);
@@ -123,13 +150,17 @@ pub fn prog_xxd(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut 
         // Hex bytes
         for (i, byte) in chunk.iter().enumerate() {
             stdout.push_str(&format!("{:02x}", byte));
-            if i % 2 == 1 { stdout.push(' '); }
+            if i % 2 == 1 {
+                stdout.push(' ');
+            }
         }
 
         // Padding for incomplete lines
         for i in chunk.len()..16 {
             stdout.push_str("  ");
-            if i % 2 == 1 { stdout.push(' '); }
+            if i % 2 == 1 {
+                stdout.push(' ');
+            }
         }
 
         // ASCII representation
@@ -228,9 +259,9 @@ mod tests {
 
         assert_eq!(result, 0);
         // xxd outputs hex pairs with spaces: "4865 6c6c 6f"
-        assert!(stdout.contains("48"));  // 'H' = 0x48
-        assert!(stdout.contains("65"));  // 'e' = 0x65
-        assert!(stdout.contains("Hello"));  // ASCII representation
+        assert!(stdout.contains("48")); // 'H' = 0x48
+        assert!(stdout.contains("65")); // 'e' = 0x65
+        assert!(stdout.contains("Hello")); // ASCII representation
         assert_eq!(stderr, "");
     }
 

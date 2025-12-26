@@ -461,10 +461,7 @@ impl Tracer {
 
     /// Get events for a specific process
     pub fn events_by_pid(&self, pid: u32) -> Vec<&TraceEvent> {
-        self.events
-            .iter()
-            .filter(|e| e.pid == Some(pid))
-            .collect()
+        self.events.iter().filter(|e| e.pid == Some(pid)).collect()
     }
 
     /// Clear the event buffer
@@ -535,11 +532,7 @@ impl std::fmt::Display for TraceSummary {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "=== Kernel Statistics ===")?;
         writeln!(f, "Uptime: {:.2}s", self.uptime / 1000.0)?;
-        writeln!(
-            f,
-            "Tracing: {}",
-            if self.enabled { "ON" } else { "OFF" }
-        )?;
+        writeln!(f, "Tracing: {}", if self.enabled { "ON" } else { "OFF" })?;
         writeln!(f, "Events buffered: {}", self.event_count)?;
         writeln!(f)?;
         writeln!(f, "--- Syscalls ---")?;

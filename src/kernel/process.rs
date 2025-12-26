@@ -10,10 +10,10 @@
 //! - Parent/child relationships
 //! - Wait/reap semantics for zombie processes
 
+use super::TaskId;
 use super::memory::ProcessMemory;
 use super::signal::ProcessSignals;
 use super::users::{Gid, Uid};
-use super::TaskId;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -244,6 +244,7 @@ impl Process {
     }
 
     /// Create a process with inherited environment and credentials
+    #[allow(clippy::too_many_arguments)]
     pub fn with_environ(
         pid: Pid,
         name: String,
@@ -319,6 +320,7 @@ impl Process {
     }
 
     /// Create a login shell process for a user (like what login(1) does)
+    #[allow(clippy::too_many_arguments)]
     pub fn new_login_shell(
         pid: Pid,
         name: String,
@@ -340,7 +342,10 @@ impl Process {
         environ.insert("USER".to_string(), username.to_string());
         environ.insert("LOGNAME".to_string(), username.to_string());
         environ.insert("SHELL".to_string(), shell.to_string());
-        environ.insert("PATH".to_string(), "/bin:/usr/bin:/usr/local/bin".to_string());
+        environ.insert(
+            "PATH".to_string(),
+            "/bin:/usr/bin:/usr/local/bin".to_string(),
+        );
         environ.insert("TERM".to_string(), "xterm-256color".to_string());
         environ.insert("PWD".to_string(), home.to_string());
 

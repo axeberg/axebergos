@@ -118,7 +118,11 @@ impl MemoryFs {
         if path.len() > Self::MAX_PATH_LEN {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("path too long: {} bytes (max {})", path.len(), Self::MAX_PATH_LEN),
+                format!(
+                    "path too long: {} bytes (max {})",
+                    path.len(),
+                    Self::MAX_PATH_LEN
+                ),
             ));
         }
 
@@ -127,7 +131,11 @@ impl MemoryFs {
             if component.len() > Self::MAX_NAME_LEN {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
-                    format!("path component too long: {} bytes (max {})", component.len(), Self::MAX_NAME_LEN),
+                    format!(
+                        "path component too long: {} bytes (max {})",
+                        component.len(),
+                        Self::MAX_NAME_LEN
+                    ),
                 ));
             }
         }
@@ -178,13 +186,13 @@ impl MemoryFs {
 
     /// Ensure parent directories exist
     fn ensure_parent(&mut self, path: &str) -> io::Result<()> {
-        if let Some(parent) = Self::parent_path(path) {
-            if !self.nodes.contains_key(&parent) {
-                return Err(io::Error::new(
-                    io::ErrorKind::NotFound,
-                    format!("Parent directory not found: {}", parent),
-                ));
-            }
+        if let Some(parent) = Self::parent_path(path)
+            && !self.nodes.contains_key(&parent)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("Parent directory not found: {}", parent),
+            ));
         }
         Ok(())
     }
@@ -299,11 +307,9 @@ impl FileSystem for MemoryFs {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     "Cannot open directory as file",
-                ))
+                ));
             }
-            None => {
-                return Err(io::Error::new(io::ErrorKind::NotFound, "File not found"))
-            }
+            None => return Err(io::Error::new(io::ErrorKind::NotFound, "File not found")),
             _ => {}
         }
 
@@ -331,9 +337,10 @@ impl FileSystem for MemoryFs {
     }
 
     fn read(&mut self, handle: FileHandle, buf: &mut [u8]) -> io::Result<usize> {
-        let file = self.handles.get_mut(handle).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidInput, "Invalid file handle")
-        })?;
+        let file = self
+            .handles
+            .get_mut(handle)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Invalid file handle"))?;
 
         if !file.readable {
             return Err(io::Error::new(
@@ -364,9 +371,10 @@ impl FileSystem for MemoryFs {
     }
 
     fn write(&mut self, handle: FileHandle, buf: &[u8]) -> io::Result<usize> {
-        let file = self.handles.get_mut(handle).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidInput, "Invalid file handle")
-        })?;
+        let file = self
+            .handles
+            .get_mut(handle)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Invalid file handle"))?;
 
         if !file.writable {
             return Err(io::Error::new(
@@ -399,9 +407,10 @@ impl FileSystem for MemoryFs {
     }
 
     fn seek(&mut self, handle: FileHandle, pos: SeekFrom) -> io::Result<u64> {
-        let file = self.handles.get_mut(handle).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidInput, "Invalid file handle")
-        })?;
+        let file = self
+            .handles
+            .get_mut(handle)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Invalid file handle"))?;
 
         let path = file.path.clone();
         let current = file.position;
@@ -506,9 +515,14 @@ impl FileSystem for MemoryFs {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     "Not a directory",
-                ))
+                ));
             }
-            None => return Err(io::Error::new(io::ErrorKind::NotFound, "Directory not found")),
+            None => {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "Directory not found",
+                ));
+            }
         }
 
         let prefix = if path == "/" {
@@ -681,7 +695,7 @@ impl FileSystem for MemoryFs {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     "Cannot copy directory with copy_file",
-                ))
+                ));
             }
             None => return Err(io::Error::new(io::ErrorKind::NotFound, "Source not found")),
         };
@@ -725,13 +739,17 @@ impl FileSystem for MemoryFs {
         self.ensure_parent(&link_path)?;
 
         // Create the symlink (target is stored as-is, can be relative or absolute)
-        self.nodes.insert(link_path.clone(), Node::Symlink(target.to_string()));
+        self.nodes
+            .insert(link_path.clone(), Node::Symlink(target.to_string()));
         // Symlinks have mode 0o777 by convention (permissions are on target)
-        self.meta.insert(link_path, NodeMeta {
-            uid: 1000,
-            gid: 1000,
-            mode: 0o777,
-        });
+        self.meta.insert(
+            link_path,
+            NodeMeta {
+                uid: 1000,
+                gid: 1000,
+                mode: 0o777,
+            },
+        );
         Ok(())
     }
 
@@ -759,11 +777,14 @@ impl FileSystem for MemoryFs {
             meta.mode = mode & 0o7777; // Mask to valid permission bits
         } else {
             // Create default meta with the new mode
-            self.meta.insert(path, NodeMeta {
-                uid: 1000,
-                gid: 1000,
-                mode: mode & 0o7777,
-            });
+            self.meta.insert(
+                path,
+                NodeMeta {
+                    uid: 1000,
+                    gid: 1000,
+                    mode: mode & 0o7777,
+                },
+            );
         }
 
         Ok(())
@@ -776,7 +797,7 @@ impl FileSystem for MemoryFs {
             return Err(io::Error::new(io::ErrorKind::NotFound, "Path not found"));
         }
 
-        let meta = self.meta.entry(path).or_insert_with(NodeMeta::default);
+        let meta = self.meta.entry(path).or_default();
 
         if let Some(new_uid) = uid {
             meta.uid = new_uid;
@@ -882,10 +903,7 @@ mod tests {
 
         // Truncate and write new content
         let handle = fs
-            .open(
-                "/test.txt",
-                OpenOptions::new().write(true).truncate(true),
-            )
+            .open("/test.txt", OpenOptions::new().write(true).truncate(true))
             .unwrap();
         fs.write(handle, b"hi").unwrap();
         fs.close(handle).unwrap();
@@ -904,9 +922,7 @@ mod tests {
         fs.write(handle, b"hello world").unwrap();
         fs.close(handle).unwrap();
 
-        let handle = fs
-            .open("/test.txt", OpenOptions::new().read(true))
-            .unwrap();
+        let handle = fs.open("/test.txt", OpenOptions::new().read(true)).unwrap();
 
         // Seek to position 6
         fs.seek(handle, SeekFrom::Start(6)).unwrap();
@@ -924,10 +940,16 @@ mod tests {
 
         fs.create_dir("/home").unwrap();
         let _ = fs
-            .open("/home/file1.txt", OpenOptions::new().write(true).create(true))
+            .open(
+                "/home/file1.txt",
+                OpenOptions::new().write(true).create(true),
+            )
             .unwrap();
         let _ = fs
-            .open("/home/file2.txt", OpenOptions::new().write(true).create(true))
+            .open(
+                "/home/file2.txt",
+                OpenOptions::new().write(true).create(true),
+            )
             .unwrap();
         fs.create_dir("/home/subdir").unwrap();
 
@@ -1041,7 +1063,10 @@ mod tests {
 
         fs.create_dir("/olddir").unwrap();
         let handle = fs
-            .open("/olddir/file.txt", OpenOptions::new().write(true).create(true))
+            .open(
+                "/olddir/file.txt",
+                OpenOptions::new().write(true).create(true),
+            )
             .unwrap();
         fs.write(handle, b"test").unwrap();
         fs.close(handle).unwrap();
@@ -1138,7 +1163,10 @@ mod tests {
         fs.create_dir("/dir2").unwrap();
 
         let handle = fs
-            .open("/dir1/file.txt", OpenOptions::new().write(true).create(true))
+            .open(
+                "/dir1/file.txt",
+                OpenOptions::new().write(true).create(true),
+            )
             .unwrap();
         fs.write(handle, b"moving").unwrap();
         fs.close(handle).unwrap();

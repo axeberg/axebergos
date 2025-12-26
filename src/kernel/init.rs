@@ -127,7 +127,7 @@ pub enum Target {
 }
 
 impl Target {
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "rescue" | "rescue.target" => Some(Target::Rescue),
             "multi-user" | "multi-user.target" => Some(Target::MultiUser),
@@ -218,9 +218,14 @@ impl InitSystem {
     pub fn start_service(&mut self, name: &str) -> Result<(), String> {
         // First, check if service exists and get dependencies
         let (is_running, deps) = {
-            let service = self.services.get(name)
+            let service = self
+                .services
+                .get(name)
                 .ok_or_else(|| format!("Service '{}' not found", name))?;
-            (service.state == ServiceState::Running, service.config.after.clone())
+            (
+                service.state == ServiceState::Running,
+                service.config.after.clone(),
+            )
         };
 
         if is_running {
@@ -229,10 +234,10 @@ impl InitSystem {
 
         // Check dependencies (without holding any borrows)
         for dep in &deps {
-            if let Some(dep_svc) = self.services.get(dep) {
-                if dep_svc.state != ServiceState::Running {
-                    return Err(format!("Dependency '{}' not running", dep));
-                }
+            if let Some(dep_svc) = self.services.get(dep)
+                && dep_svc.state != ServiceState::Running
+            {
+                return Err(format!("Dependency '{}' not running", dep));
             }
         }
 
@@ -249,7 +254,9 @@ impl InitSystem {
 
     /// Stop a service
     pub fn stop_service(&mut self, name: &str) -> Result<(), String> {
-        let service = self.services.get_mut(name)
+        let service = self
+            .services
+            .get_mut(name)
             .ok_or_else(|| format!("Service '{}' not found", name))?;
 
         if service.state == ServiceState::Stopped {
@@ -272,21 +279,35 @@ impl InitSystem {
 
     /// Enable a service (to start at boot)
     pub fn enable_service(&mut self, name: &str) -> Result<(), String> {
-        let service = self.services.get_mut(name)
+        let service = self
+            .services
+            .get_mut(name)
             .ok_or_else(|| format!("Service '{}' not found", name))?;
 
-        if !service.config.wanted_by.contains(&"multi-user.target".to_string()) {
-            service.config.wanted_by.push("multi-user.target".to_string());
+        if !service
+            .config
+            .wanted_by
+            .contains(&"multi-user.target".to_string())
+        {
+            service
+                .config
+                .wanted_by
+                .push("multi-user.target".to_string());
         }
         Ok(())
     }
 
     /// Disable a service
     pub fn disable_service(&mut self, name: &str) -> Result<(), String> {
-        let service = self.services.get_mut(name)
+        let service = self
+            .services
+            .get_mut(name)
             .ok_or_else(|| format!("Service '{}' not found", name))?;
 
-        service.config.wanted_by.retain(|t| t != "multi-user.target");
+        service
+            .config
+            .wanted_by
+            .retain(|t| t != "multi-user.target");
         Ok(())
     }
 
@@ -317,7 +338,8 @@ impl InitSystem {
             _ => {
                 // Start services wanted by this target
                 let target_str = target.as_str().to_string();
-                let to_start: Vec<String> = self.services
+                let to_start: Vec<String> = self
+                    .services
                     .values()
                     .filter(|s| s.config.wanted_by.contains(&target_str))
                     .map(|s| s.config.name.clone())
@@ -440,18 +462,24 @@ mod tests {
         init.register_service(config);
 
         init.start_service("test").unwrap();
-        assert_eq!(init.get_service("test").unwrap().state, ServiceState::Running);
+        assert_eq!(
+            init.get_service("test").unwrap().state,
+            ServiceState::Running
+        );
 
         init.stop_service("test").unwrap();
-        assert_eq!(init.get_service("test").unwrap().state, ServiceState::Stopped);
+        assert_eq!(
+            init.get_service("test").unwrap().state,
+            ServiceState::Stopped
+        );
     }
 
     #[test]
     fn test_target_parsing() {
-        assert_eq!(Target::from_str("rescue"), Some(Target::Rescue));
-        assert_eq!(Target::from_str("multi-user.target"), Some(Target::MultiUser));
-        assert_eq!(Target::from_str("graphical"), Some(Target::Graphical));
-        assert_eq!(Target::from_str("invalid"), None);
+        assert_eq!(Target::parse("rescue"), Some(Target::Rescue));
+        assert_eq!(Target::parse("multi-user.target"), Some(Target::MultiUser));
+        assert_eq!(Target::parse("graphical"), Some(Target::Graphical));
+        assert_eq!(Target::parse("invalid"), None);
     }
 
     #[test]
@@ -480,10 +508,20 @@ mod tests {
 
         init.enable_service("test").unwrap();
         let service = init.get_service("test").unwrap();
-        assert!(service.config.wanted_by.contains(&"multi-user.target".to_string()));
+        assert!(
+            service
+                .config
+                .wanted_by
+                .contains(&"multi-user.target".to_string())
+        );
 
         init.disable_service("test").unwrap();
         let service = init.get_service("test").unwrap();
-        assert!(!service.config.wanted_by.contains(&"multi-user.target".to_string()));
+        assert!(
+            !service
+                .config
+                .wanted_by
+                .contains(&"multi-user.target".to_string())
+        );
     }
 }

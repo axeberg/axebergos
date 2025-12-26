@@ -11,9 +11,17 @@ use std::collections::VecDeque;
 #[derive(Debug, Clone)]
 pub enum InputEvent {
     /// Key pressed
-    KeyDown { key: String, code: String, modifiers: Modifiers },
+    KeyDown {
+        key: String,
+        code: String,
+        modifiers: Modifiers,
+    },
     /// Key released
-    KeyUp { key: String, code: String, modifiers: Modifiers },
+    KeyUp {
+        key: String,
+        code: String,
+        modifiers: Modifiers,
+    },
     /// Window resized
     Resize { width: u32, height: u32 },
     /// Mouse button pressed
@@ -152,8 +160,14 @@ mod tests {
     fn test_event_queue_push_pop() {
         let queue = EventQueue::new();
 
-        queue.push_input(InputEvent::Resize { width: 800, height: 600 });
-        queue.push_input(InputEvent::Resize { width: 1024, height: 768 });
+        queue.push_input(InputEvent::Resize {
+            width: 800,
+            height: 600,
+        });
+        queue.push_input(InputEvent::Resize {
+            width: 1024,
+            height: 768,
+        });
 
         assert_eq!(queue.len(), 2);
         assert!(!queue.is_empty());
@@ -174,9 +188,18 @@ mod tests {
     fn test_event_queue_drain() {
         let queue = EventQueue::new();
 
-        queue.push_input(InputEvent::Resize { width: 1, height: 1 });
-        queue.push_input(InputEvent::Resize { width: 2, height: 2 });
-        queue.push_input(InputEvent::Resize { width: 3, height: 3 });
+        queue.push_input(InputEvent::Resize {
+            width: 1,
+            height: 1,
+        });
+        queue.push_input(InputEvent::Resize {
+            width: 2,
+            height: 2,
+        });
+        queue.push_input(InputEvent::Resize {
+            width: 3,
+            height: 3,
+        });
 
         let events = queue.drain();
         assert_eq!(events.len(), 3);
@@ -197,7 +220,9 @@ mod tests {
         let queue = EventQueue::new();
 
         for i in 0..10 {
-            queue.push_system(SystemEvent::Frame { timestamp: i as f64 });
+            queue.push_system(SystemEvent::Frame {
+                timestamp: i as f64,
+            });
         }
 
         for i in 0..10 {

@@ -1,4 +1,4 @@
-.PHONY: build dev clean check serve
+.PHONY: build dev clean check serve docs docs-serve
 
 # Build WASM package
 build:
@@ -16,7 +16,15 @@ serve: build
 check:
 	cargo check --lib --target wasm32-unknown-unknown
 
+# Build documentation with Zensical
+docs:
+	zensical build
+
+# Serve documentation locally with hot reload
+docs-serve:
+	zensical serve
+
 # Clean build artifacts
 clean:
 	cargo clean
-	rm -rf pkg/
+	rm -rf pkg/ site/

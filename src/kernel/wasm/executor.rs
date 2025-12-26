@@ -3,19 +3,22 @@
 //! Executes WASM command modules using the browser's WebAssembly API.
 //! This is the core execution engine that bridges WASM modules to the kernel.
 
-use super::abi::{fd, ArgLayout, OpenFlags, StatBuf, SyscallError};
-use super::error::{CommandResult, WasmError, WasmResult};
+#[cfg(target_arch = "wasm32")]
+use super::abi::{ArgLayout, OpenFlags, SyscallError};
+#[cfg(target_arch = "wasm32")]
+use super::error::WasmError;
+use super::error::{CommandResult, WasmResult};
 use super::runtime::Runtime;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
 #[cfg(target_arch = "wasm32")]
-use js_sys::{Array, Function, Object, Reflect, Uint8Array, WebAssembly};
-#[cfg(target_arch = "wasm32")]
-use wasm_bindgen::prelude::*;
+use js_sys::{Function, Object, Reflect, Uint8Array, WebAssembly};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
 
 /// Shared state for syscall handlers
 pub type SharedRuntime = Rc<RefCell<RuntimeState>>;
@@ -101,7 +104,8 @@ impl WasmMemoryRef {
     /// Get memory size in bytes
     pub fn size(&self) -> u32 {
         let buffer = self.memory.buffer();
-        buffer.byte_length() as u32
+        let array_buffer: js_sys::ArrayBuffer = buffer.unchecked_into();
+        array_buffer.byte_length() as u32
     }
 }
 
@@ -200,8 +204,6 @@ impl WasmExecutor {
         args: &[&str],
         stdin: &[u8],
     ) -> WasmResult<CommandResult> {
-        use crate::kernel::syscall as ksyscall;
-
         // Create runtime with stdin and environment
         let mut runtime = Runtime::new();
         runtime.stdin = stdin.to_vec();
@@ -226,9 +228,8 @@ impl WasmExecutor {
         let exports = instance.exports();
         let memory = Reflect::get(&exports, &JsValue::from_str("memory"))
             .map_err(|_| WasmError::MissingExport { name: "memory" })?;
-        let memory: WebAssembly::Memory = memory
-            .dyn_into()
-            .map_err(|_| WasmError::WrongExportType {
+        let memory: WebAssembly::Memory =
+            memory.dyn_into().map_err(|_| WasmError::WrongExportType {
                 name: "memory",
                 expected: "Memory",
                 got: "unknown".to_string(),
@@ -260,9 +261,7 @@ impl WasmExecutor {
                     state_ref.runtime.exit_code().unwrap_or(1)
                 } else {
                     // Actual trap/error
-                    let msg = e
-                        .as_string()
-                        .unwrap_or_else(|| "unknown error".to_string());
+                    let msg = e.as_string().unwrap_or_else(|| "unknown error".to_string());
                     return Err(WasmError::Aborted { reason: msg });
                 }
             }
@@ -334,10 +333,11 @@ impl WasmExecutor {
         self.add_syscall_unlink(&env, Rc::clone(&state))?;
         self.add_syscall_rename(&env, Rc::clone(&state))?;
 
-        Reflect::set(&imports, &JsValue::from_str("env"), &env)
-            .map_err(|_| WasmError::InstantiationFailed {
+        Reflect::set(&imports, &JsValue::from_str("env"), &env).map_err(|_| {
+            WasmError::InstantiationFailed {
                 reason: "failed to set env imports".to_string(),
-            })?;
+            }
+        })?;
 
         Ok(imports)
     }
@@ -356,10 +356,11 @@ impl WasmExecutor {
             }
         }) as Box<dyn Fn(i32, i32, i32) -> i32>);
 
-        Reflect::set(env, &JsValue::from_str("write"), closure.as_ref())
-            .map_err(|_| WasmError::InstantiationFailed {
+        Reflect::set(env, &JsValue::from_str("write"), closure.as_ref()).map_err(|_| {
+            WasmError::InstantiationFailed {
                 reason: "failed to set write import".to_string(),
-            })?;
+            }
+        })?;
         closure.forget();
         Ok(())
     }
@@ -379,10 +380,11 @@ impl WasmExecutor {
             result
         }) as Box<dyn Fn(i32, i32, i32) -> i32>);
 
-        Reflect::set(env, &JsValue::from_str("read"), closure.as_ref())
-            .map_err(|_| WasmError::InstantiationFailed {
+        Reflect::set(env, &JsValue::from_str("read"), closure.as_ref()).map_err(|_| {
+            WasmError::InstantiationFailed {
                 reason: "failed to set read import".to_string(),
-            })?;
+            }
+        })?;
         closure.forget();
         Ok(())
     }
@@ -390,27 +392,24 @@ impl WasmExecutor {
     /// Add open syscall: open(path_ptr, path_len, flags) -> fd
     #[cfg(target_arch = "wasm32")]
     fn add_syscall_open(&self, env: &Object, state: SharedRuntime) -> WasmResult<()> {
-        let closure =
-            Closure::wrap(
-                Box::new(move |path_ptr: i32, path_len: i32, flags: i32| -> i32 {
-                    let state_ref = state.borrow();
-                    if let Some(ref memory) = state_ref.memory {
-                        let path = memory.read_string_len(path_ptr as u32, path_len as u32);
-                        drop(state_ref);
-                        state
-                            .borrow_mut()
-                            .runtime
-                            .sys_open(&path, OpenFlags(flags))
-                    } else {
-                        SyscallError::Generic.code()
-                    }
-                }) as Box<dyn Fn(i32, i32, i32) -> i32>,
-            );
+        let closure = Closure::wrap(Box::new(
+            move |path_ptr: i32, path_len: i32, flags: i32| -> i32 {
+                let state_ref = state.borrow();
+                if let Some(ref memory) = state_ref.memory {
+                    let path = memory.read_string_len(path_ptr as u32, path_len as u32);
+                    drop(state_ref);
+                    state.borrow_mut().runtime.sys_open(&path, OpenFlags(flags))
+                } else {
+                    SyscallError::Generic.code()
+                }
+            },
+        ) as Box<dyn Fn(i32, i32, i32) -> i32>);
 
-        Reflect::set(env, &JsValue::from_str("open"), closure.as_ref())
-            .map_err(|_| WasmError::InstantiationFailed {
+        Reflect::set(env, &JsValue::from_str("open"), closure.as_ref()).map_err(|_| {
+            WasmError::InstantiationFailed {
                 reason: "failed to set open import".to_string(),
-            })?;
+            }
+        })?;
         closure.forget();
         Ok(())
     }
@@ -422,10 +421,11 @@ impl WasmExecutor {
             state.borrow_mut().runtime.sys_close(fd)
         }) as Box<dyn Fn(i32) -> i32>);
 
-        Reflect::set(env, &JsValue::from_str("close"), closure.as_ref())
-            .map_err(|_| WasmError::InstantiationFailed {
+        Reflect::set(env, &JsValue::from_str("close"), closure.as_ref()).map_err(|_| {
+            WasmError::InstantiationFailed {
                 reason: "failed to set close import".to_string(),
-            })?;
+            }
+        })?;
         closure.forget();
         Ok(())
     }
@@ -441,10 +441,11 @@ impl WasmExecutor {
             // The caller will check terminated flag
         }) as Box<dyn Fn(i32)>);
 
-        Reflect::set(env, &JsValue::from_str("exit"), closure.as_ref())
-            .map_err(|_| WasmError::InstantiationFailed {
+        Reflect::set(env, &JsValue::from_str("exit"), closure.as_ref()).map_err(|_| {
+            WasmError::InstantiationFailed {
                 reason: "failed to set exit import".to_string(),
-            })?;
+            }
+        })?;
         closure.forget();
         Ok(())
     }
@@ -471,10 +472,11 @@ impl WasmExecutor {
             },
         ) as Box<dyn Fn(i32, i32, i32, i32) -> i32>);
 
-        Reflect::set(env, &JsValue::from_str("getenv"), closure.as_ref())
-            .map_err(|_| WasmError::InstantiationFailed {
+        Reflect::set(env, &JsValue::from_str("getenv"), closure.as_ref()).map_err(|_| {
+            WasmError::InstantiationFailed {
                 reason: "failed to set getenv import".to_string(),
-            })?;
+            }
+        })?;
         closure.forget();
         Ok(())
     }
@@ -495,10 +497,11 @@ impl WasmExecutor {
             }
         }) as Box<dyn Fn(i32, i32) -> i32>);
 
-        Reflect::set(env, &JsValue::from_str("getcwd"), closure.as_ref())
-            .map_err(|_| WasmError::InstantiationFailed {
+        Reflect::set(env, &JsValue::from_str("getcwd"), closure.as_ref()).map_err(|_| {
+            WasmError::InstantiationFailed {
                 reason: "failed to set getcwd import".to_string(),
-            })?;
+            }
+        })?;
         closure.forget();
         Ok(())
     }
@@ -506,29 +509,29 @@ impl WasmExecutor {
     /// Add stat syscall: stat(path_ptr, path_len, stat_buf) -> 0 or error
     #[cfg(target_arch = "wasm32")]
     fn add_syscall_stat(&self, env: &Object, state: SharedRuntime) -> WasmResult<()> {
-        let closure =
-            Closure::wrap(
-                Box::new(move |path_ptr: i32, path_len: i32, stat_buf: i32| -> i32 {
-                    let state_ref = state.borrow();
-                    if let Some(ref memory) = state_ref.memory {
-                        let path = memory.read_string_len(path_ptr as u32, path_len as u32);
-                        match state_ref.runtime.sys_stat(&path) {
-                            Ok(stat) => {
-                                memory.write(stat_buf as u32, &stat.to_bytes());
-                                0
-                            }
-                            Err(e) => e.code(),
+        let closure = Closure::wrap(Box::new(
+            move |path_ptr: i32, path_len: i32, stat_buf: i32| -> i32 {
+                let state_ref = state.borrow();
+                if let Some(ref memory) = state_ref.memory {
+                    let path = memory.read_string_len(path_ptr as u32, path_len as u32);
+                    match state_ref.runtime.sys_stat(&path) {
+                        Ok(stat) => {
+                            memory.write(stat_buf as u32, &stat.to_bytes());
+                            0
                         }
-                    } else {
-                        SyscallError::Generic.code()
+                        Err(e) => e.code(),
                     }
-                }) as Box<dyn Fn(i32, i32, i32) -> i32>,
-            );
+                } else {
+                    SyscallError::Generic.code()
+                }
+            },
+        ) as Box<dyn Fn(i32, i32, i32) -> i32>);
 
-        Reflect::set(env, &JsValue::from_str("stat"), closure.as_ref())
-            .map_err(|_| WasmError::InstantiationFailed {
+        Reflect::set(env, &JsValue::from_str("stat"), closure.as_ref()).map_err(|_| {
+            WasmError::InstantiationFailed {
                 reason: "failed to set stat import".to_string(),
-            })?;
+            }
+        })?;
         closure.forget();
         Ok(())
     }
@@ -551,10 +554,11 @@ impl WasmExecutor {
             }
         }) as Box<dyn Fn(i32, i32) -> i32>);
 
-        Reflect::set(env, &JsValue::from_str("mkdir"), closure.as_ref())
-            .map_err(|_| WasmError::InstantiationFailed {
+        Reflect::set(env, &JsValue::from_str("mkdir"), closure.as_ref()).map_err(|_| {
+            WasmError::InstantiationFailed {
                 reason: "failed to set mkdir import".to_string(),
-            })?;
+            }
+        })?;
         closure.forget();
         Ok(())
     }
@@ -592,10 +596,11 @@ impl WasmExecutor {
             },
         ) as Box<dyn Fn(i32, i32, i32, i32) -> i32>);
 
-        Reflect::set(env, &JsValue::from_str("readdir"), closure.as_ref())
-            .map_err(|_| WasmError::InstantiationFailed {
+        Reflect::set(env, &JsValue::from_str("readdir"), closure.as_ref()).map_err(|_| {
+            WasmError::InstantiationFailed {
                 reason: "failed to set readdir import".to_string(),
-            })?;
+            }
+        })?;
         closure.forget();
         Ok(())
     }
@@ -618,10 +623,11 @@ impl WasmExecutor {
             }
         }) as Box<dyn Fn(i32, i32) -> i32>);
 
-        Reflect::set(env, &JsValue::from_str("rmdir"), closure.as_ref())
-            .map_err(|_| WasmError::InstantiationFailed {
+        Reflect::set(env, &JsValue::from_str("rmdir"), closure.as_ref()).map_err(|_| {
+            WasmError::InstantiationFailed {
                 reason: "failed to set rmdir import".to_string(),
-            })?;
+            }
+        })?;
         closure.forget();
         Ok(())
     }
@@ -644,10 +650,11 @@ impl WasmExecutor {
             }
         }) as Box<dyn Fn(i32, i32) -> i32>);
 
-        Reflect::set(env, &JsValue::from_str("unlink"), closure.as_ref())
-            .map_err(|_| WasmError::InstantiationFailed {
+        Reflect::set(env, &JsValue::from_str("unlink"), closure.as_ref()).map_err(|_| {
+            WasmError::InstantiationFailed {
                 reason: "failed to set unlink import".to_string(),
-            })?;
+            }
+        })?;
         closure.forget();
         Ok(())
     }
@@ -673,10 +680,11 @@ impl WasmExecutor {
             },
         ) as Box<dyn Fn(i32, i32, i32, i32) -> i32>);
 
-        Reflect::set(env, &JsValue::from_str("rename"), closure.as_ref())
-            .map_err(|_| WasmError::InstantiationFailed {
+        Reflect::set(env, &JsValue::from_str("rename"), closure.as_ref()).map_err(|_| {
+            WasmError::InstantiationFailed {
                 reason: "failed to set rename import".to_string(),
-            })?;
+            }
+        })?;
         closure.forget();
         Ok(())
     }
@@ -708,9 +716,12 @@ impl WasmExecutor {
     #[cfg(target_arch = "wasm32")]
     fn setup_args(&self, state: &SharedRuntime, args: &[&str]) -> WasmResult<(i32, i32)> {
         let state_ref = state.borrow();
-        let memory = state_ref.memory.as_ref().ok_or(WasmError::InstantiationFailed {
-            reason: "memory not available".to_string(),
-        })?;
+        let memory = state_ref
+            .memory
+            .as_ref()
+            .ok_or(WasmError::InstantiationFailed {
+                reason: "memory not available".to_string(),
+            })?;
 
         let layout = ArgLayout::new(args);
         let total_size = layout.total_size();

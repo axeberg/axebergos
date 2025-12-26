@@ -98,9 +98,11 @@ impl Signal {
     /// Get default action for this signal
     pub fn default_action(&self) -> SignalAction {
         match self {
-            Signal::SIGTERM | Signal::SIGINT | Signal::SIGQUIT | Signal::SIGHUP | Signal::SIGPIPE => {
-                SignalAction::Terminate
-            }
+            Signal::SIGTERM
+            | Signal::SIGINT
+            | Signal::SIGQUIT
+            | Signal::SIGHUP
+            | Signal::SIGPIPE => SignalAction::Terminate,
             Signal::SIGKILL => SignalAction::Kill,
             Signal::SIGSTOP => SignalAction::Stop,
             Signal::SIGCONT => SignalAction::Continue,
@@ -166,7 +168,10 @@ impl SignalDisposition {
 
     /// Get action for a signal
     pub fn get_action(&self, signal: Signal) -> SignalAction {
-        self.actions.get(&signal).copied().unwrap_or(SignalAction::Default)
+        self.actions
+            .get(&signal)
+            .copied()
+            .unwrap_or(SignalAction::Default)
     }
 
     /// Set action for a signal
@@ -258,7 +263,9 @@ impl ProcessSignals {
 
     /// Check if there are pending signals
     pub fn has_pending(&self) -> bool {
-        self.pending.iter().any(|s| !self.blocked.contains(s) || !s.can_catch())
+        self.pending
+            .iter()
+            .any(|s| !self.blocked.contains(s) || !s.can_catch())
     }
 
     /// Block a signal
@@ -382,11 +389,15 @@ mod tests {
         assert_eq!(disp.get_action(Signal::SIGTERM), SignalAction::Default);
 
         // Set custom action
-        disp.set_action(Signal::SIGTERM, SignalAction::Ignore).unwrap();
+        disp.set_action(Signal::SIGTERM, SignalAction::Ignore)
+            .unwrap();
         assert_eq!(disp.get_action(Signal::SIGTERM), SignalAction::Ignore);
 
         // Can't change SIGKILL
-        assert!(disp.set_action(Signal::SIGKILL, SignalAction::Ignore).is_err());
+        assert!(
+            disp.set_action(Signal::SIGKILL, SignalAction::Ignore)
+                .is_err()
+        );
     }
 
     #[test]
@@ -473,10 +484,14 @@ mod tests {
         let mut disp = SignalDisposition::new();
 
         // Default -> use signal's default
-        assert_eq!(resolve_action(Signal::SIGTERM, &disp), SignalAction::Terminate);
+        assert_eq!(
+            resolve_action(Signal::SIGTERM, &disp),
+            SignalAction::Terminate
+        );
 
         // Custom action
-        disp.set_action(Signal::SIGTERM, SignalAction::Ignore).unwrap();
+        disp.set_action(Signal::SIGTERM, SignalAction::Ignore)
+            .unwrap();
         assert_eq!(resolve_action(Signal::SIGTERM, &disp), SignalAction::Ignore);
     }
 }

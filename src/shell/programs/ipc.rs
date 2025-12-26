@@ -3,10 +3,18 @@
 use super::{args_to_strs, check_help};
 use crate::kernel::syscall;
 
-pub fn prog_mkfifo(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_mkfifo(
+    args: &[String],
+    __stdin: &str,
+    stdout: &mut String,
+    stderr: &mut String,
+) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: mkfifo NAME...\nCreate named pipes (FIFOs).\n\nOptions:\n  -m MODE  Set permission mode (octal)") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: mkfifo NAME...\nCreate named pipes (FIFOs).\n\nOptions:\n  -m MODE  Set permission mode (octal)",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -39,18 +47,21 @@ pub fn prog_mkfifo(args: &[String], stdin: &str, stdout: &mut String, stderr: &m
     exit_code
 }
 
-pub fn prog_ipcs(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+pub fn prog_ipcs(args: &[String], __stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: ipcs [options]\nShow IPC facilities.\n\nOptions:\n  -a  Show all (default)\n  -q  Show message queues\n  -s  Show semaphores\n  -m  Show shared memory") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: ipcs [options]\nShow IPC facilities.\n\nOptions:\n  -a  Show all (default)\n  -q  Show message queues\n  -s  Show semaphores\n  -m  Show shared memory",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
 
-    let show_all = args.is_empty() || args.iter().any(|a| *a == "-a");
-    let show_queues = show_all || args.iter().any(|a| *a == "-q");
-    let show_sems = show_all || args.iter().any(|a| *a == "-s");
-    let show_shm = show_all || args.iter().any(|a| *a == "-m");
+    let show_all = args.is_empty() || args.contains(&"-a");
+    let show_queues = show_all || args.contains(&"-q");
+    let show_sems = show_all || args.contains(&"-s");
+    let show_shm = show_all || args.contains(&"-m");
 
     syscall::KERNEL.with(|k| {
         let kernel = k.borrow();
@@ -86,7 +97,11 @@ pub fn prog_ipcs(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mu
                     if let Some(set) = kernel.semaphores().get_set(id) {
                         stdout.push_str(&format!(
                             "{:<10} {:<10} {:<10} {:04o}       {}\n",
-                            "-", id.0, set.uid, set.mode, set.len()
+                            "-",
+                            id.0,
+                            set.uid,
+                            set.mode,
+                            set.len()
                         ));
                     }
                 }
@@ -110,16 +125,19 @@ pub fn prog_ipcs(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mu
             }
         }
 
-        stdout.push_str("\n");
+        stdout.push('\n');
     });
 
     0
 }
 
-pub fn prog_ipcrm(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_ipcrm(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: ipcrm [options]\nRemove IPC resources.\n\nOptions:\n  -q ID   Remove message queue with ID\n  -s ID   Remove semaphore set with ID\n  -m ID   Remove shared memory with ID\n  -a      Remove all IPC resources") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: ipcrm [options]\nRemove IPC resources.\n\nOptions:\n  -q ID   Remove message queue with ID\n  -s ID   Remove semaphore set with ID\n  -m ID   Remove shared memory with ID\n  -a      Remove all IPC resources",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -127,7 +145,7 @@ pub fn prog_ipcrm(args: &[String], stdin: &str, stdout: &mut String, stderr: &mu
     let mut exit_code = 0;
 
     // Check for -a (remove all)
-    if args.iter().any(|a| *a == "-a") {
+    if args.contains(&"-a") {
         syscall::KERNEL.with(|k| {
             let mut kernel = k.borrow_mut();
 
@@ -149,7 +167,7 @@ pub fn prog_ipcrm(args: &[String], stdin: &str, stdout: &mut String, stderr: &mu
 
     let mut i = 0;
     while i < args.len() {
-        let opt = &args[i][..];
+        let opt = args[i];
         match opt {
             "-q" => {
                 if i + 1 >= args.len() {
@@ -160,7 +178,10 @@ pub fn prog_ipcrm(args: &[String], stdin: &str, stdout: &mut String, stderr: &mu
                     if let Ok(id) = args[i].parse::<u32>() {
                         use crate::kernel::msgqueue::MsgQueueId;
                         let success = syscall::KERNEL.with(|k| {
-                            k.borrow_mut().msgqueues_mut().msgctl_rmid(MsgQueueId(id)).is_ok()
+                            k.borrow_mut()
+                                .msgqueues_mut()
+                                .msgctl_rmid(MsgQueueId(id))
+                                .is_ok()
                         });
                         if !success {
                             stderr.push_str(&format!("ipcrm: invalid id: {}\n", id));
@@ -181,7 +202,10 @@ pub fn prog_ipcrm(args: &[String], stdin: &str, stdout: &mut String, stderr: &mu
                     if let Ok(id) = args[i].parse::<u32>() {
                         use crate::kernel::semaphore::SemId;
                         let success = syscall::KERNEL.with(|k| {
-                            k.borrow_mut().semaphores_mut().semctl_rmid(SemId(id)).is_ok()
+                            k.borrow_mut()
+                                .semaphores_mut()
+                                .semctl_rmid(SemId(id))
+                                .is_ok()
                         });
                         if !success {
                             stderr.push_str(&format!("ipcrm: invalid id: {}\n", id));
@@ -201,8 +225,13 @@ pub fn prog_ipcrm(args: &[String], stdin: &str, stdout: &mut String, stderr: &mu
                     i += 1;
                     // Note: Shared memory segments cannot be removed directly in this implementation
                     // They are automatically cleaned up when all processes detach
-                    stderr.push_str(&format!("ipcrm: shared memory removal not supported (id: {})\n", args[i]));
-                    stderr.push_str("       Shared memory is cleaned up when all processes detach.\n");
+                    stderr.push_str(&format!(
+                        "ipcrm: shared memory removal not supported (id: {})\n",
+                        args[i]
+                    ));
+                    stderr.push_str(
+                        "       Shared memory is cleaned up when all processes detach.\n",
+                    );
                 }
             }
             _ => {

@@ -3,10 +3,13 @@
 use super::{args_to_strs, check_help};
 use crate::kernel::syscall;
 
-pub fn prog_mount(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_mount(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: mount [-t TYPE] [-o OPTIONS] SOURCE TARGET\n       mount (show all mounts)\n\nMount a filesystem.\n\nOptions:\n  -t TYPE   Filesystem type (proc, sysfs, devfs, tmpfs)\n  -o OPTS   Mount options (ro, noexec, noatime, etc.)") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: mount [-t TYPE] [-o OPTIONS] SOURCE TARGET\n       mount (show all mounts)\n\nMount a filesystem.\n\nOptions:\n  -t TYPE   Filesystem type (proc, sysfs, devfs, tmpfs)\n  -o OPTS   Mount options (ro, noexec, noatime, etc.)",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -21,7 +24,7 @@ pub fn prog_mount(args: &[String], stdin: &str, stdout: &mut String, stderr: &mu
                     entry.source,
                     entry.target,
                     entry.fstype.as_str(),
-                    entry.options.to_string()
+                    entry.options
                 ));
             }
         });
@@ -35,7 +38,7 @@ pub fn prog_mount(args: &[String], stdin: &str, stdout: &mut String, stderr: &mu
     let mut i = 0;
 
     while i < args.len() {
-        let arg = &args[i][..];
+        let arg = args[i];
         match arg {
             "-t" => {
                 if i + 1 < args.len() {
@@ -75,7 +78,7 @@ pub fn prog_mount(args: &[String], stdin: &str, stdout: &mut String, stderr: &mu
 
     use crate::kernel::mount::{FsType, MountOptions};
 
-    let fs = FsType::from_str(&fstype);
+    let fs = FsType::parse(&fstype);
     let opts = MountOptions::parse(&options);
     let now = syscall::KERNEL.with(|k| k.borrow().now());
 
@@ -93,7 +96,12 @@ pub fn prog_mount(args: &[String], stdin: &str, stdout: &mut String, stderr: &mu
     }
 }
 
-pub fn prog_umount(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_umount(
+    args: &[String],
+    __stdin: &str,
+    stdout: &mut String,
+    stderr: &mut String,
+) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: umount TARGET\nUnmount a filesystem.") {
@@ -108,9 +116,7 @@ pub fn prog_umount(args: &[String], stdin: &str, stdout: &mut String, stderr: &m
 
     let target = &args[0];
 
-    let result = syscall::KERNEL.with(|k| {
-        k.borrow_mut().mounts_mut().umount(target)
-    });
+    let result = syscall::KERNEL.with(|k| k.borrow_mut().mounts_mut().umount(target));
 
     match result {
         Ok(_) => 0,
@@ -121,10 +127,18 @@ pub fn prog_umount(args: &[String], stdin: &str, stdout: &mut String, stderr: &m
     }
 }
 
-pub fn prog_findmnt(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+pub fn prog_findmnt(
+    args: &[String],
+    __stdin: &str,
+    stdout: &mut String,
+    _stderr: &mut String,
+) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: findmnt [TARGET]\nFind a filesystem mount point.\n\nWith no arguments, lists all mounts in a tree-like format.") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: findmnt [TARGET]\nFind a filesystem mount point.\n\nWith no arguments, lists all mounts in a tree-like format.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -142,9 +156,13 @@ pub fn prog_findmnt(args: &[String], stdin: &str, stdout: &mut String, _stderr: 
                 stdout.push_str(&format!(
                     "{:<23} {:<10} {:<8} {}\n",
                     entry.target,
-                    if entry.source.len() > 10 { &entry.source[..10] } else { &entry.source },
+                    if entry.source.len() > 10 {
+                        &entry.source[..10]
+                    } else {
+                        &entry.source
+                    },
                     entry.fstype.as_str(),
-                    entry.options.to_string()
+                    entry.options
                 ));
             }
         } else {
@@ -156,7 +174,7 @@ pub fn prog_findmnt(args: &[String], stdin: &str, stdout: &mut String, _stderr: 
                     entry.target,
                     entry.source,
                     entry.fstype.as_str(),
-                    entry.options.to_string()
+                    entry.options
                 ));
             } else if let Some(entry) = kernel.mounts().get_containing_mount(target) {
                 stdout.push_str(&format!(

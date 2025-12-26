@@ -8,51 +8,26 @@
 //! - `wget`: Download files from URLs to the filesystem
 
 use super::{args_to_strs, check_help};
+#[cfg(target_arch = "wasm32")]
 use crate::kernel::syscall;
 
 /// curl - transfer data from URL
-pub fn prog_curl(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_curl(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
-    if let Some(help) = check_help(&args, "Usage: curl [OPTIONS] URL\nTransfer data from URL.\n  -i  Include headers in output\n  -s  Silent mode\n  -X METHOD  Specify request method\n  -H HEADER  Add custom header\nSee 'man curl' for details.") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: curl [OPTIONS] URL\nTransfer data from URL.\n  -i  Include headers in output\n  -s  Silent mode\n  -X METHOD  Specify request method\n  -H HEADER  Add custom header\nSee 'man curl' for details.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
 
-    // Parse arguments
-    let mut url = String::new();
-    let mut include_headers = false;
-    let mut method = "GET";
-    let mut headers: Vec<(String, String)> = Vec::new();
-    let mut i = 0;
-
-    #[allow(unused_assignments)]
-    while i < args.len() {
-        match args[i] {
-            "-i" => include_headers = true,
-            "-s" => {} // silent mode
-            "-X" => {
-                i += 1;
-                if i < args.len() {
-                    method = args[i];
-                }
-            }
-            "-H" => {
-                i += 1;
-                if i < args.len() {
-                    if let Some(pos) = args[i].find(':') {
-                        let name = args[i][..pos].trim().to_string();
-                        let value = args[i][pos+1..].trim().to_string();
-                        headers.push((name, value));
-                    }
-                }
-            }
-            s if !s.starts_with('-') => {
-                url = s.to_string();
-            }
-            _ => {}
-        }
-        i += 1;
-    }
+    // Parse URL from arguments (needed for both wasm and non-wasm paths)
+    let url: String = args
+        .iter()
+        .find(|s| !s.starts_with('-') && !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_default();
 
     if url.is_empty() {
         stderr.push_str("curl: no URL specified\n");
@@ -62,6 +37,37 @@ pub fn prog_curl(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut
     #[cfg(target_arch = "wasm32")]
     {
         use crate::kernel::network::{HttpMethod, HttpRequest};
+
+        // Parse WASM-specific options
+        let mut include_headers = false;
+        let mut method = "GET";
+        let mut headers: Vec<(String, String)> = Vec::new();
+        let mut i = 0;
+
+        while i < args.len() {
+            match args[i] {
+                "-i" => include_headers = true,
+                "-s" => {} // silent mode
+                "-X" => {
+                    i += 1;
+                    if i < args.len() {
+                        method = args[i];
+                    }
+                }
+                "-H" => {
+                    i += 1;
+                    if i < args.len() {
+                        if let Some(pos) = args[i].find(':') {
+                            let name = args[i][..pos].trim().to_string();
+                            let value = args[i][pos + 1..].trim().to_string();
+                            headers.push((name, value));
+                        }
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
 
         let http_method = match method.to_uppercase().as_str() {
             "GET" => HttpMethod::Get,
@@ -119,9 +125,12 @@ pub fn prog_curl(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut
 
 /// wget - download file from URL
 #[allow(unused_variables)]
-pub fn prog_wget(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_wget(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
-    if let Some(help) = check_help(&args, "Usage: wget [OPTIONS] URL\nDownload file from URL.\n  -O FILE  Save to FILE instead of default\n  -q       Quiet mode\nSee 'man wget' for details.") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: wget [OPTIONS] URL\nDownload file from URL.\n  -O FILE  Save to FILE instead of default\n  -q       Quiet mode\nSee 'man wget' for details.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -173,13 +182,24 @@ pub fn prog_wget(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut
                 Ok(resp) => {
                     if resp.status >= 200 && resp.status < 300 {
                         // Write to file
-                        match syscall::write_file(&filename_clone, &String::from_utf8_lossy(&resp.body)) {
+                        match syscall::write_file(
+                            &filename_clone,
+                            &String::from_utf8_lossy(&resp.body),
+                        ) {
                             Ok(_) => {
-                                crate::console_log!("Downloaded {} -> {} ({} bytes)",
-                                    url_clone, filename_clone, resp.body.len());
+                                crate::console_log!(
+                                    "Downloaded {} -> {} ({} bytes)",
+                                    url_clone,
+                                    filename_clone,
+                                    resp.body.len()
+                                );
                             }
                             Err(e) => {
-                                crate::console_log!("wget: failed to write {}: {}", filename_clone, e);
+                                crate::console_log!(
+                                    "wget: failed to write {}: {}",
+                                    filename_clone,
+                                    e
+                                );
                             }
                         }
                     } else {
