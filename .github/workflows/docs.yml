@@ -5,7 +5,7 @@ on:
     branches: [main]
     paths:
       - 'docs/**'
-      - 'zensical.toml'
+      - 'mkdocs.yml'
       - '.github/workflows/docs.yml'
   workflow_dispatch:  # Allow manual trigger
 
@@ -30,11 +30,11 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install Zensical
-        run: pip install zensical
+      - name: Install MkDocs and dependencies
+        run: pip install mkdocs-material pymdown-extensions
 
       - name: Build documentation
-        run: zensical build
+        run: mkdocs build
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
