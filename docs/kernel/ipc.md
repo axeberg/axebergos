@@ -312,13 +312,9 @@ All IPC mechanisms are designed for single-threaded WASM:
 
 If multi-threading is added, these would need synchronization primitives.
 
-## Future Work
-
-- **Bounded channels**: Back-pressure for producers
-- **Waker-based async**: Register wakers for efficient wake-up (currently polling-based)
-
 ## Related Documentation
 
 - [Process Model](processes.md) - Process isolation
 - [Memory Management](memory.md) - Shared memory details
 - [Executor](executor.md) - Async task scheduling
+- [Future Work](../future-work.md) - Planned enhancements

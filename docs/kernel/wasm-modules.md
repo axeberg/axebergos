@@ -242,14 +242,9 @@ INIT → LOADING → READY → RUNNING → TERMINATED
 2. **No dynamic linking**: Each command is fully standalone
 3. **No user-space WASM commands yet**: The infrastructure is ready, but no `.wasm` files exist in `/bin`
 
-## Future Work
-
-- [ ] Port existing commands to standalone WASM modules
-- [ ] Add package manager for installing commands
-- [ ] Support WASI preview2 for broader compatibility
-
 ## Related Documentation
 
 - [Shell](../userspace/shell.md) - Shell command execution
 - [Syscall Interface](syscalls.md) - Full syscall reference
 - [VFS](../userspace/vfs.md) - Filesystem where commands are stored
+- [Future Work](../future-work.md) - Planned enhancements

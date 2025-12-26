@@ -296,23 +296,8 @@ Benefits:
 - Larger storage quota than localStorage
 - Async operations via wasm-bindgen-futures
 
-## Future Work
-
-### Layered Filesystem
-
-Union mount for overlays:
-
-```rust
-pub struct LayeredFs {
-    layers: Vec<Box<dyn FileSystem>>,
-}
-```
-
-Use cases:
-- Read-only base + writable overlay
-- Merged views of multiple sources
-
 ## Related Documentation
 
 - [Syscall Interface](../kernel/syscalls.md) - File syscalls
 - [Kernel Objects](../kernel/objects.md) - FileObject details
+- [Future Work](../future-work.md) - Planned enhancements

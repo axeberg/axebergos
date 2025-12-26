@@ -306,15 +306,9 @@ async fn consumer(shm_id: ShmId) {
 }
 ```
 
-## Future Work
-
-- **Memory-mapped files**: Map VFS files into memory
-- **Copy-on-write**: Efficient fork
-- **Memory pools**: Arena allocation for performance
-- **OPFS persistence**: Persist memory regions to disk
-
 ## Related Documentation
 
 - [Syscall Interface](syscalls.md) - Memory syscalls
 - [Process Model](processes.md) - Per-process memory
 - [IPC](ipc.md) - Communication patterns
+- [Future Work](../future-work.md) - Planned enhancements
