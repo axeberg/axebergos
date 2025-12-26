@@ -482,11 +482,9 @@ fn parse_pipeline_internal(
     ))
 }
 
-/// Parse a command line into a pipeline (legacy API, wraps parse_command_list)
+/// Parse a command line into a single pipeline.
 pub fn parse(input: &str) -> Result<Pipeline, ParseError> {
     let cmd_list = parse_command_list(input)?;
-    // Return just the first pipeline for backwards compatibility
-    // Caller should use parse_command_list for full functionality
     Ok(cmd_list.first)
 }
 

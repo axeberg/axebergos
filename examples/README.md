@@ -25,10 +25,7 @@ Composing commands with Unix pipes.
 ### 4. [Users and Permissions](04-users-and-permissions.md)
 Multi-user system and access control.
 
-### 5. [Adding a Shell Command](05-adding-a-command.md)
-Extend axeberg with your own command.
-
-### 6. [Understanding the Kernel](06-understanding-kernel.md)
+### 5. [Understanding the Kernel](06-understanding-kernel.md)
 Deep dive into kernel internals.
 
 ## Quick Examples
@@ -88,41 +85,11 @@ $ jobs
 
 ### Reading Kernel Source
 
-The kernel is surprisingly readable. Start here:
+The kernel is readable. Start here:
 
-```rust
-// src/kernel/syscall.rs - All system calls
-// src/kernel/process.rs - Process management
-// src/shell/executor.rs - How commands run
-```
-
-### Adding a Simple Command
-
-```rust
-// In src/shell/programs/mod.rs, add:
-("mycommand", mycommand::run),
-
-// Create src/shell/programs/mycommand.rs:
-pub async fn run(args: &[String], kernel: &Kernel) -> i32 {
-    kernel.write_stdout("Hello from mycommand!\n");
-    0  // exit code
-}
-```
-
-### Understanding the VFS
-
-```rust
-// The VFS is a trait:
-pub trait Filesystem {
-    fn read(&self, path: &str) -> Result<Vec<u8>>;
-    fn write(&mut self, path: &str, data: &[u8]) -> Result<()>;
-    fn create_dir(&mut self, path: &str) -> Result<()>;
-    // ...
-}
-
-// MemoryFs implements it in-memory
-// You could implement your own!
-```
+- `src/kernel/syscall.rs` - System calls
+- `src/kernel/process.rs` - Process management
+- `src/shell/executor.rs` - How commands run
 
 ## Architecture Exploration
 

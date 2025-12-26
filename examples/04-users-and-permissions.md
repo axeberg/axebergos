@@ -221,20 +221,6 @@ Edit `/etc/sudoers`:
 alice ALL=(ALL) NOPASSWD: ALL
 ```
 
-## Default Permissions (umask)
-
-```bash
-$ umask
-0022
-
-# This means:
-# Files: 666 - 022 = 644 (rw-r--r--)
-# Dirs:  777 - 022 = 755 (rwxr-xr-x)
-
-$ umask 077    # More restrictive
-# Files: 600, Dirs: 700
-```
-
 ## Practical Examples
 
 ### Shared project directory
@@ -297,4 +283,4 @@ In the real axeberg:
 
 ## What's Next?
 
-Continue to [Adding a Shell Command](05-adding-a-command.md) to extend axeberg with your own commands.
+Continue to [Understanding the Kernel](06-understanding-kernel.md) for a deep dive into axeberg's internals.

@@ -97,7 +97,6 @@ src
 $ cp hello.txt hello_backup.txt
 $ mv hello_backup.txt backup.txt
 $ rm backup.txt
-$ rmdir projects/rust/src    # Remove empty directory
 $ rm -r projects             # Remove directory and contents
 ```
 
@@ -110,9 +109,8 @@ $ help
 Available commands:
   cat, cd, chmod, chown, cp, date, df, du, echo, env, exit,
   find, grep, head, help, id, kill, ln, login, logout, ls,
-  mkdir, mv, passwd, ps, pwd, rm, rmdir, sleep, sort, su,
-  sudo, tail, touch, uname, uniq, useradd, wc, which, whoami
-  ...
+  mkdir, mv, passwd, ps, pwd, rm, sleep, sort, su, sudo,
+  tail, touch, uname, uniq, useradd, wc, which, whoami, ...
 ```
 
 ### Command-Specific Help
