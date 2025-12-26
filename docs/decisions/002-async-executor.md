@@ -27,10 +27,12 @@ The executor will:
 - Support task spawning, sleeping, and waking
 
 ```rust
+// From src/kernel/executor.rs
 pub struct Executor {
-    critical: VecDeque<Task>,
-    normal: VecDeque<Task>,
-    background: VecDeque<Task>,
+    tasks: BTreeMap<TaskId, ManagedTask>,
+    ready: Rc<RefCell<HashSet<TaskId>>>,
+    pending_spawn: RefCell<VecDeque<ManagedTask>>,
+    next_id: u64,
 }
 ```
 
@@ -75,34 +77,34 @@ pub struct Executor {
 
 ## Implementation Notes
 
-Key components of our executor:
+Key components of our executor (from `src/kernel/executor.rs`):
 
 ```rust
-// Task wrapper
-struct Task {
+/// A managed task with metadata
+struct ManagedTask {
     id: TaskId,
-    future: Pin<Box<dyn Future<Output = ()>>>,
     priority: Priority,
+    future: BoxFuture,
 }
 
-// Priority levels
-enum Priority {
-    Critical,   // Interactive, user-facing
-    Normal,     // Regular processes
-    Background, // Cleanup, persistence
+/// Task priority levels
+pub enum Priority {
+    Critical = 0,   // System-critical (compositor, input)
+    Normal = 1,     // Regular application tasks
+    Background = 2, // Can be starved
 }
+```
 
-// Main loop
-fn run_until_idle(&mut self) {
-    while let Some(task) = self.next_task() {
-        let waker = self.make_waker(task.id);
-        let mut cx = Context::from_waker(&waker);
+The executor polls tasks by priority, using a ready set to track which tasks need polling:
 
-        match task.future.poll(&mut cx) {
-            Poll::Ready(()) => { /* task done */ }
-            Poll::Pending => { /* will be re-queued on wake */ }
-        }
-    }
+```rust
+pub fn tick(&mut self) -> usize {
+    self.integrate_pending();
+    let mut polled = 0;
+
+    // Get ready tasks sorted by priority
+    let ready_ids: Vec<TaskId> = self.ready.borrow().iter().copied().collect();
+    // ... poll each task
 }
 ```
 

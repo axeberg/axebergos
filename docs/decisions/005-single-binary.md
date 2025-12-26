@@ -100,13 +100,23 @@ Even though it's one binary, the code is organized as if they were separate:
 
 ## WASM Module Loading
 
-We do have WASM module loading for extensibility:
+We do have WASM module loading for extensibility (from `src/kernel/wasm/loader.rs`):
 
 ```rust
-// Load a WASM module as a "program"
-pub fn load_wasm_module(&mut self, bytes: &[u8]) -> Result<ModuleId> {
-    let module = WasmModule::parse(bytes)?;
-    self.modules.insert(module)
+pub struct Loader {
+    module: Option<Vec<u8>>,
+}
+
+impl Loader {
+    pub fn load(&mut self, bytes: &[u8]) -> WasmResult<()> {
+        ModuleValidator::validate(bytes)?;
+        self.module = Some(bytes.to_vec());
+        Ok(())
+    }
+
+    pub fn execute(&self, args: &[&str]) -> WasmResult<CommandResult> {
+        // ...
+    }
 }
 ```
 

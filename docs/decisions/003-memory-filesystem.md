@@ -23,19 +23,23 @@ Requirements:
 We will use an **in-memory filesystem** as the primary implementation, with optional OPFS persistence for saving/restoring state.
 
 ```rust
+// From src/vfs/memory.rs
 pub struct MemoryFs {
-    root: Directory,
+    nodes: HashMap<String, Node>,
+    meta: HashMap<String, NodeMeta>,
+    handles: Slab<OpenFile>,
 }
 
-struct Directory {
-    entries: HashMap<String, Entry>,
-    metadata: Metadata,
-}
-
-enum Entry {
-    File(FileData),
-    Directory(Directory),
+enum Node {
+    File(Vec<u8>),
+    Directory,
     Symlink(String),
+}
+
+struct NodeMeta {
+    uid: u32,
+    gid: u32,
+    mode: u16,
 }
 ```
 
@@ -101,42 +105,27 @@ pub trait FileSystem {
 
 ### Persistence Strategy
 
-Save/restore entire filesystem to OPFS:
+Snapshot/restore via serialization (from `src/vfs/memory.rs`):
 
 ```rust
+#[derive(Serialize, Deserialize)]
+pub struct FsSnapshot {
+    nodes: HashMap<String, Node>,
+    meta: HashMap<String, NodeMeta>,
+    version: u32,
+}
+
 impl MemoryFs {
-    pub async fn save(&self) -> Result<()> {
-        let snapshot = self.serialize();
-        opfs::write("axeberg_fs.json", &snapshot).await
-    }
-
-    pub async fn restore() -> Result<Self> {
-        let data = opfs::read("axeberg_fs.json").await?;
-        Self::deserialize(&data)
-    }
+    pub fn snapshot(&self) -> FsSnapshot { ... }
+    pub fn restore(snapshot: FsSnapshot) -> Self { ... }
 }
 ```
 
-### File Metadata
-
-Full Unix-style metadata:
-
-```rust
-pub struct Metadata {
-    pub mode: u16,      // Permission bits
-    pub uid: Uid,       // Owner
-    pub gid: Gid,       // Group
-    pub size: u64,
-    pub atime: u64,     // Access time
-    pub mtime: u64,     // Modify time
-    pub ctime: u64,     // Change time
-    pub kind: FileType,
-}
-```
+Persistence to OPFS is handled by `src/vfs/persist.rs`.
 
 ## Lessons Learned
 
 1. Start with in-memory, add persistence later
-2. The VFS trait abstraction was worth it for virtual filesystems
+2. The FileSystem trait abstraction was worth it for virtual filesystems
 3. JSON serialization is good enough for snapshots
 4. Symlinks were tricky to get right (resolution loops, relative paths)
