@@ -4,7 +4,7 @@ axeberg has a comprehensive test suite ensuring kernel reliability.
 
 ## Test Overview
 
-**674 tests (646 unit tests + 28 integration tests)** across all major components:
+**703 tests (675 unit tests + 28 integration tests)** across all major components:
 
 | Component | Tests | Coverage |
 |-----------|-------|----------|

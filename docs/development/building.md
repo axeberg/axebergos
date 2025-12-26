@@ -109,7 +109,7 @@ cargo run --bin serve
 cargo test
 ```
 
-Currently runs 99 tests covering:
+Currently runs 675 tests covering:
 - Executor scheduling
 - Process management
 - Memory allocation

@@ -165,7 +165,7 @@ When you type `cat file.txt | grep hello`:
 
 ### Test Coverage
 
-The kernel has 674 tests covering:
+The kernel has 703 tests covering:
 
 - Executor scheduling and priorities
 - Process creation and lifecycle
@@ -225,7 +225,7 @@ Critical subsystems have TLA+ specifications:
 
 Current capabilities:
 - ✅ Working shell with pipes, redirects, and job control
-- ✅ 98 Unix-like commands
+- ✅ 96 programs + 12 builtins
 - ✅ Multi-user system with sessions (`login`, `logout`, `su`, `sudo`)
 - ✅ Permission enforcement (Unix rwx model)
 - ✅ User persistence (`/etc/passwd`, `/etc/shadow`, `/etc/group`)

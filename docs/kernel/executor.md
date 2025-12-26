@@ -127,20 +127,10 @@ pub fn tick(&mut self) -> usize {
 When a task blocks, it needs to be woken later:
 
 ```rust
-impl ArcWake for TaskWaker {
-    fn wake_by_ref(arc_self: &Arc<Self>) {
-        EXECUTOR.with(|e| {
-            e.borrow_mut().wake(arc_self.task_id);
-        });
-    }
-}
-
+// Waker adds task ID back to ready set
 fn wake(&mut self, task_id: TaskId) {
-    if let Some(task) = self.tasks.get_mut(task_id.0) {
-        if task.state == TaskState::Blocked {
-            task.state = TaskState::Ready;
-            self.ready.push_back(task_id);
-        }
+    if self.tasks.contains_key(&task_id) {
+        self.ready.borrow_mut().insert(task_id);
     }
 }
 ```

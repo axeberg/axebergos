@@ -315,7 +315,7 @@ impl Executor {
 
 Programs are simple functions:
 ```rust
-type Program = fn(args: &[String], stdout: &mut String, stderr: &mut String) -> i32;
+type ProgramFn = fn(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32;
 ```
 
 ## Terminal
@@ -380,8 +380,8 @@ Built-in commands:
   ...
 
 Programs:
-  File: cat, ls, mkdir, touch, rm, cp, mv, ln, stat
-  Text: head, tail, wc, grep, sort, uniq, cut, tr, sed, awk
+  File: cat, ls, mkdir, touch, rm, cp, mv, ln, readlink, tree
+  Text: head, tail, wc, grep, sort, uniq, cut, tr, diff, comm
   System: ps, kill, mount, df, free, uname, uptime
   User: id, whoami, groups, su, sudo, chmod, chown
   Service: systemctl, reboot, poweroff
