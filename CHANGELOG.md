@@ -54,28 +54,13 @@ Initial release of axeberg - a mini-OS in Rust running in WebAssembly.
 - **Background Jobs**: `command &` with job control (`fg`, `bg`, `jobs`)
 - **Quoting**: Single and double quote support
 
-### Commands (96 programs + 12 builtins)
-- **File Operations**: `cat`, `ls`, `mkdir`, `touch`, `rm`, `cp`, `mv`, `ln`, `find`, `tree`
-- **Text Processing**: `grep`, `sort`, `uniq`, `cut`, `tr`, `diff`, `head`, `tail`, `wc`
-- **User Management**: `login`, `logout`, `useradd`, `passwd`, `id`, `whoami`, `sudo`, `su`
-- **System**: `ps`, `kill`, `uptime`, `free`, `df`, `du`, `uname`, `date`
-- **Networking**: `curl`, `wget`
-- **Package Manager**: `pkg install`, `pkg list`, `pkg remove`
-
 ### Signals
 - POSIX-like signal delivery with coalescing
 - Supported: SIGTERM, SIGKILL, SIGINT, SIGSTOP, SIGCONT, SIGHUP, SIGUSR1/2
 
 ### Documentation
-- Full kernel documentation in `docs/kernel/`
-- Shell guide in `docs/userspace/shell.md`
-- Building and testing guides in `docs/development/`
-- 89 Unix-style man pages
-
-### Testing
-- 675 unit tests across all kernel modules
-- 28 integration tests
-- CI/CD with format, lint, type-check, test, and WASM build
+- Kernel docs in `docs/kernel/`
+- Man pages in `man/`
 
 ### Formal Specifications (TLA+)
 - Process state machine

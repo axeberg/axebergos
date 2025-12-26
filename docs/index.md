@@ -163,22 +163,6 @@ When you type `cat file.txt | grep hello`:
 | **Reference-counted objects** | Simple lifetime management, works with Rust ownership |
 | **In-memory VFS** | Fast, simple; OPFS persistence planned for later |
 
-### Test Coverage
-
-The kernel has 703 tests covering:
-
-- Executor scheduling and priorities
-- Process creation and lifecycle
-- Memory allocation and limits
-- Shared memory operations
-- File operations via VFS
-- WASM module validation and loading
-- Shell parsing and execution
-- IPC channels
-- Object reference counting
-
-Run tests with: `cargo test`
-
 ## Project Structure
 
 ```
@@ -224,14 +208,12 @@ Critical subsystems have TLA+ specifications:
 **axeberg v0.1.0**
 
 Current capabilities:
-- ✅ Working shell with pipes, redirects, and job control
-- ✅ 96 programs + 12 builtins
-- ✅ Multi-user system with sessions (`login`, `logout`, `su`, `sudo`)
-- ✅ Permission enforcement (Unix rwx model)
-- ✅ User persistence (`/etc/passwd`, `/etc/shadow`, `/etc/group`)
-- ✅ In-memory VFS with proc/sys/dev virtual filesystems
-- ✅ WASM build and deployment verified
-- 🚧 WASM command modules (ABI defined, execution in progress)
+- Working shell with pipes, redirects, and job control
+- Multi-user system with sessions
+- Permission enforcement (Unix rwx model)
+- User persistence (`/etc/passwd`, `/etc/shadow`, `/etc/group`)
+- In-memory VFS with proc/sys/dev virtual filesystems
+- WASM command module ABI (execution in progress)
 
 ## License
 

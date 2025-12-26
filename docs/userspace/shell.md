@@ -372,21 +372,7 @@ $ cat greeting.txt | wc
       1       2      16
 
 $ help
-Built-in commands:
-  cd <path>     - Change directory
-  pwd           - Print working directory
-  exit [code]   - Exit shell
-  export VAR=val - Set environment variable
-  ...
-
-Programs:
-  File: cat, ls, mkdir, touch, rm, cp, mv, ln, readlink, tree
-  Text: head, tail, wc, grep, sort, uniq, cut, tr, diff, comm
-  System: ps, kill, mount, df, free, uname, uptime
-  User: id, whoami, groups, su, sudo, chmod, chown
-  Service: systemctl, reboot, poweroff
-  IPC: mkfifo, ipcs, ipcrm
-  TTY: tty, stty
+(lists available commands - see man pages for details)
 ```
 
 ## Related Documentation
