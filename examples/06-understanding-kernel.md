@@ -29,31 +29,39 @@ pub fn main() {
 
 ## The Kernel Struct
 
-Located in `src/kernel/mod.rs`:
+Located in `src/kernel/syscall.rs`:
 
 ```rust
 pub struct Kernel {
     // Process management
-    process_table: ProcessTable,
-    object_table: ObjectTable,
+    processes: HashMap<Pid, Process>,
+    next_pid: u32,
+    objects: ObjectTable,
+    current: Option<Pid>,
 
     // Filesystem
     vfs: MemoryFs,
+    procfs: ProcFs,
+    devfs: DevFs,
+    sysfs: SysFs,
 
     // Users
-    user_db: UserDatabase,
-    session_manager: SessionManager,
+    users: UserDb,
 
     // IPC
-    pipes: PipeRegistry,
-    message_queues: MessageQueueRegistry,
-    shared_memory: SharedMemoryRegistry,
+    fifos: FifoRegistry,
+    msgqueues: MsgQueueManager,
+    semaphores: SemaphoreManager,
 
-    // Time
-    timer_queue: TimerQueue,
+    // Time and memory
+    timers: TimerQueue,
+    memory: MemoryManager,
 
-    // I/O
-    console: ConsoleHandle,
+    // Other
+    console_handle: Handle,
+    mounts: MountTable,
+    ttys: TtyManager,
+    init: InitSystem,
 }
 ```
 
@@ -117,11 +125,11 @@ pub struct Process {
 }
 
 pub enum ProcessState {
-    Created,
     Running,
     Sleeping,
+    Blocked(Pid),  // Waiting for another process
     Stopped,
-    Zombie,
+    Zombie(i32),   // Exited with status code
 }
 ```
 
@@ -159,13 +167,13 @@ The executor (`src/kernel/executor.rs`) runs async tasks:
 
 ```rust
 pub struct Executor {
-    // Priority queues
-    critical: VecDeque<Task>,
-    normal: VecDeque<Task>,
-    background: VecDeque<Task>,
-
-    // Waker registry
-    wakers: HashMap<TaskId, Waker>,
+    // All tasks, indexed by ID
+    tasks: BTreeMap<TaskId, ManagedTask>,
+    // Tasks ready to be polled
+    ready: Rc<RefCell<HashSet<TaskId>>>,
+    // Tasks waiting to be spawned
+    pending_spawn: RefCell<VecDeque<ManagedTask>>,
+    next_id: u64,
 }
 
 impl Executor {
@@ -204,14 +212,15 @@ impl Executor {
 The VFS (`src/vfs/memory.rs`) provides a unified file interface:
 
 ```rust
-pub trait Filesystem {
-    fn open(&self, path: &str, flags: OpenFlags) -> Result<File>;
-    fn read(&self, path: &str) -> Result<Vec<u8>>;
-    fn write(&mut self, path: &str, data: &[u8]) -> Result<()>;
-    fn create_dir(&mut self, path: &str) -> Result<()>;
-    fn remove(&mut self, path: &str) -> Result<()>;
-    fn read_dir(&self, path: &str) -> Result<Vec<DirEntry>>;
-    fn metadata(&self, path: &str) -> Result<Metadata>;
+pub trait FileSystem {
+    fn open(&mut self, path: &str, options: OpenOptions) -> io::Result<FileHandle>;
+    fn close(&mut self, handle: FileHandle) -> io::Result<()>;
+    fn read(&mut self, handle: FileHandle, buf: &mut [u8]) -> io::Result<usize>;
+    fn write(&mut self, handle: FileHandle, data: &[u8]) -> io::Result<usize>;
+    fn create_dir(&mut self, path: &str) -> io::Result<()>;
+    fn remove_file(&mut self, path: &str) -> io::Result<()>;
+    fn read_dir(&self, path: &str) -> io::Result<Vec<DirEntry>>;
+    fn metadata(&self, path: &str) -> io::Result<Metadata>;
     // ...
 }
 ```

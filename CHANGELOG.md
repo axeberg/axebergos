@@ -70,10 +70,10 @@ Initial release of axeberg - a mini-OS in Rust running in WebAssembly.
 - Full kernel documentation in `docs/kernel/`
 - Shell guide in `docs/userspace/shell.md`
 - Building and testing guides in `docs/development/`
-- 61 Unix-style man pages
+- 89 Unix-style man pages
 
 ### Testing
-- 646 unit tests across all kernel modules
+- 675 unit tests across all kernel modules
 - 28 integration tests
 - CI/CD with format, lint, type-check, test, and WASM build
 

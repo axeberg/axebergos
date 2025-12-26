@@ -83,12 +83,13 @@ enum Entry {
 
 ### Virtual Filesystems
 
-The VFS trait allows plugging in special filesystems:
+The FileSystem trait allows plugging in special filesystems:
 
 ```rust
-pub trait VirtualFs {
-    fn read(&self, path: &str) -> Result<Vec<u8>>;
-    fn write(&mut self, path: &str, data: &[u8]) -> Result<()>;
+pub trait FileSystem {
+    fn open(&mut self, path: &str, options: OpenOptions) -> io::Result<FileHandle>;
+    fn read(&mut self, handle: FileHandle, buf: &mut [u8]) -> io::Result<usize>;
+    fn write(&mut self, handle: FileHandle, data: &[u8]) -> io::Result<usize>;
     // ...
 }
 
