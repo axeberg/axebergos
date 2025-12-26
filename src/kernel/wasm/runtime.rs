@@ -3,7 +3,7 @@
 //! Provides the syscall implementations that WASM commands can call.
 //! This is the bridge between WASM modules and the axeberg kernel.
 
-use super::abi::{fd, OpenFlags, SyscallError, StatBuf};
+use super::abi::{OpenFlags, StatBuf, SyscallError, fd};
 use super::loader::FdTable;
 use crate::kernel::syscall as ksyscall;
 use std::collections::HashMap;
@@ -123,8 +123,7 @@ impl Runtime {
         let to_read = std::cmp::min(remaining, buf.len());
 
         if to_read > 0 {
-            buf[..to_read]
-                .copy_from_slice(&self.stdin[self.stdin_pos..self.stdin_pos + to_read]);
+            buf[..to_read].copy_from_slice(&self.stdin[self.stdin_pos..self.stdin_pos + to_read]);
             self.stdin_pos += to_read;
         }
 

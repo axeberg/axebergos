@@ -4,10 +4,18 @@ use super::{args_to_strs, check_help};
 use crate::kernel::syscall;
 
 /// crontab - maintain cron tables for scheduled jobs
-pub fn prog_crontab(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_crontab(
+    args: &[String],
+    __stdin: &str,
+    stdout: &mut String,
+    stderr: &mut String,
+) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: crontab [-l | -e | -r] [file]\n\nMaintain cron tables for scheduled jobs.\n\nOptions:\n  -l        List current crontab\n  -e        Edit crontab (prints current, use crontab file to set)\n  -r        Remove crontab\n  file      Install crontab from file\n\nCrontab format:\n  minute hour day month weekday command\n  @reboot  Run at startup\n  @hourly  Run every hour (0 * * * *)\n  @daily   Run daily (0 0 * * *)\n\nExamples:\n  */5 * * * * echo 'every 5 min'    Run every 5 minutes\n  0 * * * * date                    Run at the top of every hour\n  @reboot /var/packages/startup     Run at boot") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: crontab [-l | -e | -r] [file]\n\nMaintain cron tables for scheduled jobs.\n\nOptions:\n  -l        List current crontab\n  -e        Edit crontab (prints current, use crontab file to set)\n  -r        Remove crontab\n  file      Install crontab from file\n\nCrontab format:\n  minute hour day month weekday command\n  @reboot  Run at startup\n  @hourly  Run every hour (0 * * * *)\n  @daily   Run daily (0 0 * * *)\n\nExamples:\n  */5 * * * * echo 'every 5 min'    Run every 5 minutes\n  0 * * * * date                    Run at the top of every hour\n  @reboot /var/packages/startup     Run at boot",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -20,10 +28,10 @@ pub fn prog_crontab(args: &[String], __stdin: &str, stdout: &mut String, stderr:
     // Get current username
     let username = syscall::KERNEL.with(|k| {
         let kernel = k.borrow();
-        let uid = kernel.current_process()
-            .map(|p| p.uid.0)
-            .unwrap_or(1000);
-        kernel.users().get_user(crate::kernel::users::Uid(uid))
+        let uid = kernel.current_process().map(|p| p.uid.0).unwrap_or(1000);
+        kernel
+            .users()
+            .get_user(crate::kernel::users::Uid(uid))
             .map(|u| u.name.clone())
             .unwrap_or_else(|| "user".to_string())
     });
@@ -100,7 +108,9 @@ pub fn prog_crontab(args: &[String], __stdin: &str, stdout: &mut String, stderr:
         }
         "-" => {
             // Read from stdin (the rest of the args after -)
-            stderr.push_str("crontab: use 'crontab <file>' or 'echo ... > /var/spool/cron/username'\n");
+            stderr.push_str(
+                "crontab: use 'crontab <file>' or 'echo ... > /var/spool/cron/username'\n",
+            );
             1
         }
         file => {
@@ -130,7 +140,10 @@ pub fn prog_crontab(args: &[String], __stdin: &str, stdout: &mut String, stderr:
                                         entry_count += 1;
                                     }
 
-                                    stdout.push_str(&format!("crontab: installed {} entries for {}\n", entry_count, username));
+                                    stdout.push_str(&format!(
+                                        "crontab: installed {} entries for {}\n",
+                                        entry_count, username
+                                    ));
                                     0
                                 }
                                 Err(e) => {
@@ -172,7 +185,10 @@ pub fn prog_crontab(args: &[String], __stdin: &str, stdout: &mut String, stderr:
 pub fn prog_at(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: at <time> <command>\n       at -l         List pending jobs\n       at -r <id>    Remove a job\n\nSchedule a command to run at a specific time.\n\nTime formats:\n  +5m    5 minutes from now\n  +1h    1 hour from now\n  +30s   30 seconds from now\n\nExamples:\n  at +5m echo 'Hello'     Run in 5 minutes\n  at +1h date             Run in 1 hour") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: at <time> <command>\n       at -l         List pending jobs\n       at -r <id>    Remove a job\n\nSchedule a command to run at a specific time.\n\nTime formats:\n  +5m    5 minutes from now\n  +1h    1 hour from now\n  +30s   30 seconds from now\n\nExamples:\n  at +5m echo 'Hello'     Run in 5 minutes\n  at +1h date             Run in 1 hour",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -288,7 +304,10 @@ pub fn prog_at(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut
                     let _ = syscall::write(fd, job_content.as_bytes());
                     let _ = syscall::close(fd);
 
-                    stdout.push_str(&format!("Job {} scheduled to run in {}\n", job_id, time_spec));
+                    stdout.push_str(&format!(
+                        "Job {} scheduled to run in {}\n",
+                        job_id, time_spec
+                    ));
                     stdout.push_str(&format!("Command: {}\n", command));
                     0
                 }

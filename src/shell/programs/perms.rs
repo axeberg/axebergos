@@ -20,7 +20,10 @@ pub fn prog_chmod(args: &[String], __stdin: &str, stdout: &mut String, stderr: &
         octal
     } else {
         // Parse symbolic mode (simplified)
-        stderr.push_str(&format!("chmod: invalid mode: '{}' (use octal for now)\n", mode_str));
+        stderr.push_str(&format!(
+            "chmod: invalid mode: '{}' (use octal for now)\n",
+            mode_str
+        ));
         return 1;
     };
 

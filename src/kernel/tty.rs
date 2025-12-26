@@ -152,16 +152,16 @@ pub struct ControlChars {
 impl Default for ControlChars {
     fn default() -> Self {
         Self {
-            vintr: '\x03',    // Ctrl-C
-            vquit: '\x1c',    // Ctrl-\
-            verase: '\x7f',   // DEL
-            vkill: '\x15',    // Ctrl-U
-            veof: '\x04',     // Ctrl-D
+            vintr: '\x03',  // Ctrl-C
+            vquit: '\x1c',  // Ctrl-\
+            verase: '\x7f', // DEL
+            vkill: '\x15',  // Ctrl-U
+            veof: '\x04',   // Ctrl-D
             vtime: 0,
             vmin: 1,
-            vstart: '\x11',   // Ctrl-Q
-            vstop: '\x13',    // Ctrl-S
-            vsusp: '\x1a',    // Ctrl-Z
+            vstart: '\x11', // Ctrl-Q
+            vstop: '\x13',  // Ctrl-S
+            vsusp: '\x1a',  // Ctrl-Z
             veol: '\0',
             vreprint: '\x12', // Ctrl-R
             vwerase: '\x17',  // Ctrl-W
@@ -484,26 +484,66 @@ pub fn format_stty_settings(termios: &Termios) -> String {
 
     // Input flags
     let mut iflags = Vec::new();
-    if termios.iflag.icrnl { iflags.push("icrnl"); } else { iflags.push("-icrnl"); }
-    if termios.iflag.ixon { iflags.push("ixon"); } else { iflags.push("-ixon"); }
-    if termios.iflag.istrip { iflags.push("istrip"); } else { iflags.push("-istrip"); }
+    if termios.iflag.icrnl {
+        iflags.push("icrnl");
+    } else {
+        iflags.push("-icrnl");
+    }
+    if termios.iflag.ixon {
+        iflags.push("ixon");
+    } else {
+        iflags.push("-ixon");
+    }
+    if termios.iflag.istrip {
+        iflags.push("istrip");
+    } else {
+        iflags.push("-istrip");
+    }
     output.push_str(&iflags.join(" "));
     output.push('\n');
 
     // Output flags
     let mut oflags = Vec::new();
-    if termios.oflag.opost { oflags.push("opost"); } else { oflags.push("-opost"); }
-    if termios.oflag.onlcr { oflags.push("onlcr"); } else { oflags.push("-onlcr"); }
+    if termios.oflag.opost {
+        oflags.push("opost");
+    } else {
+        oflags.push("-opost");
+    }
+    if termios.oflag.onlcr {
+        oflags.push("onlcr");
+    } else {
+        oflags.push("-onlcr");
+    }
     output.push_str(&oflags.join(" "));
     output.push('\n');
 
     // Local flags
     let mut lflags = Vec::new();
-    if termios.lflag.isig { lflags.push("isig"); } else { lflags.push("-isig"); }
-    if termios.lflag.icanon { lflags.push("icanon"); } else { lflags.push("-icanon"); }
-    if termios.lflag.echo { lflags.push("echo"); } else { lflags.push("-echo"); }
-    if termios.lflag.echoe { lflags.push("echoe"); } else { lflags.push("-echoe"); }
-    if termios.lflag.echok { lflags.push("echok"); } else { lflags.push("-echok"); }
+    if termios.lflag.isig {
+        lflags.push("isig");
+    } else {
+        lflags.push("-isig");
+    }
+    if termios.lflag.icanon {
+        lflags.push("icanon");
+    } else {
+        lflags.push("-icanon");
+    }
+    if termios.lflag.echo {
+        lflags.push("echo");
+    } else {
+        lflags.push("-echo");
+    }
+    if termios.lflag.echoe {
+        lflags.push("echoe");
+    } else {
+        lflags.push("-echoe");
+    }
+    if termios.lflag.echok {
+        lflags.push("echok");
+    } else {
+        lflags.push("-echok");
+    }
     output.push_str(&lflags.join(" "));
     output.push('\n');
 

@@ -42,13 +42,19 @@ mod invariants_test;
 
 pub use executor::{Executor, Priority};
 pub use fifo::{FifoBuffer, FifoError, FifoRegistry};
-pub use init::{InitSystem, RestartPolicy, Service, ServiceConfig, ServiceState, ServiceStatus, Target};
-pub use ipc::{channel, Receiver, Sender};
-pub use memory::{MemoryError, MemoryStats, Protection, RegionId, ShmId, ShmInfo, SystemMemoryStats};
+pub use init::{
+    InitSystem, RestartPolicy, Service, ServiceConfig, ServiceState, ServiceStatus, Target,
+};
+pub use ipc::{Receiver, Sender, channel};
+pub use memory::{
+    MemoryError, MemoryStats, Protection, RegionId, ShmId, ShmInfo, SystemMemoryStats,
+};
 pub use mount::{FsType, MountEntry, MountError, MountOptions, MountTable};
-pub use msgqueue::{Message, MessageQueue, MsgQueueError, MsgQueueId, MsgQueueManager, MsgQueueStats};
+pub use msgqueue::{
+    Message, MessageQueue, MsgQueueError, MsgQueueId, MsgQueueManager, MsgQueueStats,
+};
 pub use process::{Fd, Handle, OpenFlags, Pid};
-pub use semaphore::{SemaphoreManager, SemaphoreSet, SemError, SemId, SemOpResult, SemSetStats};
+pub use semaphore::{SemError, SemId, SemOpResult, SemSetStats, SemaphoreManager, SemaphoreSet};
 pub use signal::{Signal, SignalAction, SignalError};
 pub use syscall::{SyscallError, SyscallResult};
 pub use task::{Task, TaskId, TaskState};

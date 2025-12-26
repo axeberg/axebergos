@@ -143,7 +143,10 @@ fn parse_size(s: &str) -> Result<usize, ()> {
         (s, 1)
     };
 
-    num_str.parse::<usize>().map(|n| n * multiplier).map_err(|_| ())
+    num_str
+        .parse::<usize>()
+        .map(|n| n * multiplier)
+        .map_err(|_| ())
 }
 
 /// A mounted filesystem entry
@@ -162,7 +165,13 @@ pub struct MountEntry {
 }
 
 impl MountEntry {
-    pub fn new(source: &str, target: &str, fstype: FsType, options: MountOptions, now: f64) -> Self {
+    pub fn new(
+        source: &str,
+        target: &str,
+        fstype: FsType,
+        options: MountOptions,
+        now: f64,
+    ) -> Self {
         Self {
             source: source.to_string(),
             target: target.to_string(),
@@ -251,20 +260,17 @@ impl MountTable {
         let mut table = Self::new();
 
         // Root filesystem
-        let _ = table.mount(
-            "rootfs",
-            "/",
-            FsType::MemoryFs,
-            MountOptions::new(),
-            now,
-        );
+        let _ = table.mount("rootfs", "/", FsType::MemoryFs, MountOptions::new(), now);
 
         // Virtual filesystems
         let _ = table.mount(
             "proc",
             "/proc",
             FsType::Proc,
-            MountOptions { read_only: true, ..Default::default() },
+            MountOptions {
+                read_only: true,
+                ..Default::default()
+            },
             now,
         );
 
@@ -272,25 +278,16 @@ impl MountTable {
             "sysfs",
             "/sys",
             FsType::Sysfs,
-            MountOptions { read_only: true, ..Default::default() },
+            MountOptions {
+                read_only: true,
+                ..Default::default()
+            },
             now,
         );
 
-        let _ = table.mount(
-            "devfs",
-            "/dev",
-            FsType::Devfs,
-            MountOptions::new(),
-            now,
-        );
+        let _ = table.mount("devfs", "/dev", FsType::Devfs, MountOptions::new(), now);
 
-        let _ = table.mount(
-            "tmpfs",
-            "/tmp",
-            FsType::Tmpfs,
-            MountOptions::new(),
-            now,
-        );
+        let _ = table.mount("tmpfs", "/tmp", FsType::Tmpfs, MountOptions::new(), now);
 
         table
     }
@@ -439,11 +436,25 @@ mod tests {
         let mut table = MountTable::new();
 
         // Mount
-        table.mount("tmpfs", "/mnt/test", FsType::Tmpfs, MountOptions::new(), 1.0).unwrap();
+        table
+            .mount(
+                "tmpfs",
+                "/mnt/test",
+                FsType::Tmpfs,
+                MountOptions::new(),
+                1.0,
+            )
+            .unwrap();
         assert!(table.is_mount_point("/mnt/test"));
 
         // Can't mount again
-        let err = table.mount("tmpfs", "/mnt/test", FsType::Tmpfs, MountOptions::new(), 2.0);
+        let err = table.mount(
+            "tmpfs",
+            "/mnt/test",
+            FsType::Tmpfs,
+            MountOptions::new(),
+            2.0,
+        );
         assert_eq!(err, Err(MountError::AlreadyMounted));
 
         // Unmount
@@ -500,7 +511,9 @@ mod tests {
     #[test]
     fn test_proc_mounts_format() {
         let mut table = MountTable::new();
-        table.mount("tmpfs", "/tmp", FsType::Tmpfs, MountOptions::new(), 1.0).unwrap();
+        table
+            .mount("tmpfs", "/tmp", FsType::Tmpfs, MountOptions::new(), 1.0)
+            .unwrap();
 
         let output = table.to_proc_mounts();
         assert!(output.contains("tmpfs /tmp tmpfs"));

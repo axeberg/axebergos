@@ -209,7 +209,13 @@ impl MsgQueueManager {
     ///
     /// key < 0: create private queue
     /// key >= 0: get existing or create new
-    pub fn msgget(&mut self, key: i32, uid: u32, gid: u32, create: bool) -> Result<MsgQueueId, MsgQueueError> {
+    pub fn msgget(
+        &mut self,
+        key: i32,
+        uid: u32,
+        gid: u32,
+        create: bool,
+    ) -> Result<MsgQueueId, MsgQueueError> {
         if key < 0 {
             // Private queue
             let id = MsgQueueId(self.next_id);
@@ -244,7 +250,12 @@ impl MsgQueueManager {
     }
 
     /// Receive a message
-    pub fn msgrcv(&mut self, id: MsgQueueId, mtype: i64, now: f64) -> Result<Message, MsgQueueError> {
+    pub fn msgrcv(
+        &mut self,
+        id: MsgQueueId,
+        mtype: i64,
+        now: f64,
+    ) -> Result<Message, MsgQueueError> {
         let queue = self.queues.get_mut(&id).ok_or(MsgQueueError::NotFound)?;
         queue.receive(mtype, now)
     }
@@ -333,7 +344,8 @@ mod tests {
         let id2 = mgr.msgget(100, 1000, 1000, true).unwrap();
         assert_eq!(id1, id2); // Same key, same ID
 
-        mgr.msgsnd(id1, Message::new(1, b"test".to_vec()), 1.0).unwrap();
+        mgr.msgsnd(id1, Message::new(1, b"test".to_vec()), 1.0)
+            .unwrap();
         let msg = mgr.msgrcv(id1, 0, 2.0).unwrap();
         assert_eq!(msg.data, b"test");
     }

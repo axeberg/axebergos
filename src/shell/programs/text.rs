@@ -10,7 +10,10 @@ use crate::kernel::syscall;
 pub fn prog_head(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: head [-n N] [FILE]\nOutput first N lines (default 10). See 'man head' for details.") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: head [-n N] [FILE]\nOutput first N lines (default 10). See 'man head' for details.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -61,7 +64,10 @@ pub fn prog_head(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mu
 pub fn prog_tail(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: tail [-n N] [FILE]\nOutput last N lines (default 10). See 'man tail' for details.") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: tail [-n N] [FILE]\nOutput last N lines (default 10). See 'man tail' for details.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -96,7 +102,10 @@ pub fn prog_tail(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mu
 pub fn prog_wc(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: wc [-lwc] [FILE]\nCount lines, words, and characters. See 'man wc' for details.") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: wc [-lwc] [FILE]\nCount lines, words, and characters. See 'man wc' for details.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -134,7 +143,10 @@ pub fn prog_wc(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut 
 pub fn prog_grep(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: grep [-inv] PATTERN [FILE]...\nSearch for patterns in files. See 'man grep' for details.") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: grep [-inv] PATTERN [FILE]...\nSearch for patterns in files. See 'man grep' for details.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -173,7 +185,10 @@ pub fn prog_grep(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut
 pub fn prog_sort(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: sort [-ru] [FILE]\nSort lines of text. See 'man sort' for details.") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: sort [-ru] [FILE]\nSort lines of text. See 'man sort' for details.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -200,7 +215,10 @@ pub fn prog_sort(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mu
 pub fn prog_uniq(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: uniq [-c] [FILE]\nFilter adjacent duplicate lines. See 'man uniq' for details.") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: uniq [-c] [FILE]\nFilter adjacent duplicate lines. See 'man uniq' for details.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -244,7 +262,10 @@ pub fn prog_uniq(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mu
 pub fn prog_tee(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let files = args_to_strs(args);
 
-    if let Some(help) = check_help(&files, "Usage: tee [-a] FILE\nCopy stdin to file and stdout. See 'man tee' for details.") {
+    if let Some(help) = check_help(
+        &files,
+        "Usage: tee [-a] FILE\nCopy stdin to file and stdout. See 'man tee' for details.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -315,7 +336,10 @@ pub fn prog_rev(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut 
 pub fn prog_cut(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: cut -d DELIM -f FIELDS [FILE]\nRemove sections from each line.") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: cut -d DELIM -f FIELDS [FILE]\nRemove sections from each line.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -382,7 +406,8 @@ pub fn prog_cut(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut 
 
     for line in content.lines() {
         let parts: Vec<&str> = line.split(delimiter).collect();
-        let selected: Vec<&str> = fields.iter()
+        let selected: Vec<&str> = fields
+            .iter()
             .filter_map(|&f| parts.get(f.saturating_sub(1)))
             .copied()
             .collect();
@@ -397,7 +422,10 @@ pub fn prog_cut(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut 
 pub fn prog_tr(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: tr SET1 SET2\nTranslate characters from SET1 to SET2.") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: tr SET1 SET2\nTranslate characters from SET1 to SET2.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -414,7 +442,9 @@ pub fn prog_tr(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut S
 
     for ch in content.chars() {
         let translated = if let Some(pos) = set1.iter().position(|&c| c == ch) {
-            set2.get(pos).copied().unwrap_or(*set2.last().unwrap_or(&ch))
+            set2.get(pos)
+                .copied()
+                .unwrap_or(*set2.last().unwrap_or(&ch))
         } else {
             ch
         };
@@ -456,7 +486,10 @@ pub fn prog_nl(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut S
 pub fn prog_fold(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: fold [-w WIDTH] [FILE]\nWrap lines at specified width.\n  -w WIDTH  Width (default 80)") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: fold [-w WIDTH] [FILE]\nWrap lines at specified width.\n  -w WIDTH  Width (default 80)",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -534,7 +567,9 @@ pub fn prog_paste(args: &[String], _stdin: &str, stdout: &mut String, stderr: &m
 
     for i in 0..max_lines {
         for (j, lines) in file_lines.iter().enumerate() {
-            if j > 0 { stdout.push('\t'); }
+            if j > 0 {
+                stdout.push('\t');
+            }
             if let Some(line) = lines.get(i) {
                 stdout.push_str(line);
             }
@@ -549,7 +584,10 @@ pub fn prog_paste(args: &[String], _stdin: &str, stdout: &mut String, stderr: &m
 pub fn prog_comm(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: comm [-123] FILE1 FILE2\nCompare sorted files line by line.\n  -1  Suppress column 1 (lines unique to FILE1)\n  -2  Suppress column 2 (lines unique to FILE2)\n  -3  Suppress column 3 (common lines)") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: comm [-123] FILE1 FILE2\nCompare sorted files line by line.\n  -1  Suppress column 1 (lines unique to FILE1)\n  -2  Suppress column 2 (lines unique to FILE2)\n  -3  Suppress column 3 (common lines)",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -558,7 +596,11 @@ pub fn prog_comm(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mu
     let suppress2 = args.iter().any(|a| a.contains('2'));
     let suppress3 = args.iter().any(|a| a.contains('3'));
 
-    let files: Vec<&str> = args.iter().filter(|a| !a.starts_with('-')).map(|s| s.as_ref()).collect();
+    let files: Vec<&str> = args
+        .iter()
+        .filter(|a| !a.starts_with('-'))
+        .map(|s| s.as_ref())
+        .collect();
     if files.len() < 2 {
         stderr.push_str("comm: requires two files\n");
         return 1;
@@ -633,7 +675,10 @@ pub fn prog_comm(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mu
 pub fn prog_strings(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: strings [-n MIN] [FILE]\nPrint printable strings from file.\n  -n MIN  Minimum string length (default 4)") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: strings [-n MIN] [FILE]\nPrint printable strings from file.\n  -n MIN  Minimum string length (default 4)",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -693,7 +738,10 @@ pub fn prog_strings(args: &[String], stdin: &str, stdout: &mut String, stderr: &
 pub fn prog_diff(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: diff FILE1 FILE2\nCompare files line by line.") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: diff FILE1 FILE2\nCompare files line by line.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -782,7 +830,8 @@ mod tests {
         let code = prog_grep(&args, stdin, &mut stdout, &mut stderr);
         assert_eq!(code, 0);
         // Strip ANSI codes for checking
-        let plain: String = stdout.chars()
+        let plain: String = stdout
+            .chars()
             .filter(|&c| c != '\x1b')
             .collect::<String>()
             .replace("[31m", "")

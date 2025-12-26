@@ -12,8 +12,8 @@
 #![cfg(target_arch = "wasm32")]
 
 use std::collections::HashMap;
-use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
+use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
 /// HTTP method
@@ -109,7 +109,8 @@ impl HttpRequest {
 
     /// Set JSON body
     pub fn json(mut self, json: &str) -> Self {
-        self.headers.insert("Content-Type".to_string(), "application/json".to_string());
+        self.headers
+            .insert("Content-Type".to_string(), "application/json".to_string());
         self.body = Some(json.as_bytes().to_vec());
         self
     }
@@ -158,7 +159,15 @@ impl HttpRequest {
         let mut response_headers = HashMap::new();
         let header_entries = resp.headers();
         // Note: Headers iteration is limited in web-sys, we get common ones
-        for name in ["content-type", "content-length", "cache-control", "date", "server"].iter() {
+        for name in [
+            "content-type",
+            "content-length",
+            "cache-control",
+            "date",
+            "server",
+        ]
+        .iter()
+        {
             if let Ok(Some(value)) = header_entries.get(*name) {
                 response_headers.insert(name.to_string(), value);
             }
@@ -328,6 +337,9 @@ mod tests {
 
         assert_eq!(req.url, "https://example.com");
         assert_eq!(req.method, HttpMethod::Get);
-        assert_eq!(req.headers.get("Accept"), Some(&"application/json".to_string()));
+        assert_eq!(
+            req.headers.get("Accept"),
+            Some(&"application/json".to_string())
+        );
     }
 }

@@ -15,9 +15,9 @@ pub mod parser;
 pub mod programs;
 pub mod terminal;
 
-pub use builtins::{execute as execute_builtin, is_builtin, BuiltinResult, ShellState};
+pub use builtins::{BuiltinResult, ShellState, execute as execute_builtin, is_builtin};
 pub use executor::{ExecResult, Executor, ProgramRegistry};
-pub use parser::{parse, ParseError, Pipeline, Redirect, SimpleCommand};
+pub use parser::{ParseError, Pipeline, Redirect, SimpleCommand, parse};
 pub use terminal::{Selection, TermPos, Terminal};
 
 use std::cell::RefCell;

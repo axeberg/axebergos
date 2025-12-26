@@ -145,7 +145,10 @@ impl FifoRegistry {
 
     /// Remove a FIFO
     pub fn unlink(&mut self, path: &str) -> Result<(), FifoError> {
-        self.fifos.remove(path).map(|_| ()).ok_or(FifoError::NotFound)
+        self.fifos
+            .remove(path)
+            .map(|_| ())
+            .ok_or(FifoError::NotFound)
     }
 
     /// Get a FIFO by path
@@ -226,7 +229,10 @@ mod tests {
         assert!(registry.is_fifo("/tmp/myfifo"));
 
         // Can't create duplicate
-        assert_eq!(registry.mkfifo("/tmp/myfifo"), Err(FifoError::AlreadyExists));
+        assert_eq!(
+            registry.mkfifo("/tmp/myfifo"),
+            Err(FifoError::AlreadyExists)
+        );
 
         registry.unlink("/tmp/myfifo").unwrap();
         assert!(!registry.is_fifo("/tmp/myfifo"));

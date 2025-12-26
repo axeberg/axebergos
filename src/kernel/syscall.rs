@@ -14,28 +14,28 @@
 //! - Process groups for job control (fg/bg)
 //! - Environment variables per-process
 
+use super::devfs::DevFs;
+use super::fifo::FifoRegistry;
+use super::init::InitSystem;
 use super::memory::{
     MemoryError, MemoryManager, MemoryStats, Protection, RegionId, ShmId, ShmInfo,
     SystemMemoryStats,
 };
+use super::mount::MountTable;
+use super::msgqueue::MsgQueueManager;
 use super::object::{
     ConsoleObject, FileObject, KernelObject, ObjectTable, PipeObject, WindowId, WindowObject,
 };
 pub use super::process::{Fd, Handle, OpenFlags, Pgid, Pid, Process, ProcessState, Sid};
-use super::devfs::DevFs;
-use super::fifo::FifoRegistry;
-use super::init::InitSystem;
-use super::mount::MountTable;
-use super::tty::TtyManager;
-use super::msgqueue::MsgQueueManager;
-use super::procfs::{generate_proc_content, ProcContext, ProcFs, SystemContext};
+use super::procfs::{ProcContext, ProcFs, SystemContext, generate_proc_content};
 use super::semaphore::SemaphoreManager;
-use super::signal::{resolve_action, Signal, SignalAction, SignalError};
+use super::signal::{Signal, SignalAction, SignalError, resolve_action};
 use super::sysfs::SysFs;
 use super::task::TaskId;
 use super::timer::{TimerId, TimerQueue};
 use super::trace::{TraceCategory, TraceSummary, Tracer};
-use super::users::{check_permission, FileMode, Gid, Group, Uid, User, UserDb};
+use super::tty::TtyManager;
+use super::users::{FileMode, Gid, Group, Uid, User, UserDb, check_permission};
 use crate::vfs::{FileSystem, MemoryFs, OpenOptions as VfsOpenOptions};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -659,9 +659,10 @@ impl Kernel {
 
         // Track parent-child relationship
         if let Some(parent_pid) = parent
-            && let Some(parent_proc) = self.processes.get_mut(&parent_pid) {
-                parent_proc.children.push(pid);
-            }
+            && let Some(parent_proc) = self.processes.get_mut(&parent_pid)
+        {
+            parent_proc.children.push(pid);
+        }
 
         self.processes.insert(pid, process);
         pid
@@ -692,7 +693,9 @@ impl Kernel {
     /// getsid - Get session ID (like Linux getsid(2))
     pub fn sys_getsid(&self, pid: Option<Pid>) -> SyscallResult<u32> {
         let target_pid = pid.unwrap_or_else(|| self.current.unwrap());
-        let process = self.processes.get(&target_pid)
+        let process = self
+            .processes
+            .get(&target_pid)
             .ok_or(SyscallError::NoProcess)?;
         Ok(process.sid.0)
     }
@@ -854,7 +857,7 @@ impl Kernel {
                     gid: p.gid.0,
                     cwd: p.cwd.to_str().unwrap_or("/"),
                     cmdline: &p.name,
-                    environ: &[],  // Will be filled from snapshot
+                    environ: &[], // Will be filled from snapshot
                     memory_used: p.memory.stats().allocated as u64,
                     memory_limit: p.memory.stats().limit as u64,
                 }
@@ -891,7 +894,9 @@ impl Kernel {
         }
 
         // Generate content
-        let content = self.sysfs.generate_content(path)
+        let content = self
+            .sysfs
+            .generate_content(path)
             .ok_or(SyscallError::NotFound)?;
 
         // Create a file object with the generated content
@@ -975,8 +980,7 @@ impl Kernel {
 
         // For now, use a placeholder window ID
         // The compositor integration will make this real
-        static NEXT_WINDOW_ID: std::sync::atomic::AtomicU64 =
-            std::sync::atomic::AtomicU64::new(1);
+        static NEXT_WINDOW_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let window_id = WindowId(NEXT_WINDOW_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
 
         let window = WindowObject::new(window_id);
@@ -1106,7 +1110,10 @@ impl Kernel {
 
         // Find matching children
         let children: Vec<Pid> = {
-            let parent = self.processes.get(&current).ok_or(SyscallError::NoProcess)?;
+            let parent = self
+                .processes
+                .get(&current)
+                .ok_or(SyscallError::NoProcess)?;
             let pgid = parent.pgid;
 
             parent
@@ -1193,13 +1200,19 @@ impl Kernel {
 
         // Can only setpgid on self or children
         if pid != current {
-            let parent = self.processes.get(&current).ok_or(SyscallError::NoProcess)?;
+            let parent = self
+                .processes
+                .get(&current)
+                .ok_or(SyscallError::NoProcess)?;
             if !parent.children.contains(&pid) {
                 return Err(SyscallError::PermissionDenied);
             }
         }
 
-        let process = self.processes.get_mut(&pid).ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .processes
+            .get_mut(&pid)
+            .ok_or(SyscallError::NoProcess)?;
         process.pgid = pgid;
         Ok(())
     }
@@ -1628,7 +1641,9 @@ impl Kernel {
         let current = self.current.ok_or(SyscallError::NoProcess)?;
         let from_resolved = self.resolve_path(current, from)?;
         let to_resolved = self.resolve_path(current, to)?;
-        let from_str = from_resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
+        let from_str = from_resolved
+            .to_str()
+            .ok_or(SyscallError::InvalidArgument)?;
         let to_str = to_resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
 
         // Check write/execute permission on both source and destination parent directories
@@ -1644,7 +1659,9 @@ impl Kernel {
         let current = self.current.ok_or(SyscallError::NoProcess)?;
         let from_resolved = self.resolve_path(current, from)?;
         let to_resolved = self.resolve_path(current, to)?;
-        let from_str = from_resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
+        let from_str = from_resolved
+            .to_str()
+            .ok_or(SyscallError::InvalidArgument)?;
         let to_str = to_resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
 
         // Check read permission on source file
@@ -1666,7 +1683,9 @@ impl Kernel {
     pub fn sys_symlink(&mut self, target: &str, link_path: &str) -> SyscallResult<()> {
         let current = self.current.ok_or(SyscallError::NoProcess)?;
         let link_resolved = self.resolve_path(current, link_path)?;
-        let link_str = link_resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
+        let link_str = link_resolved
+            .to_str()
+            .ok_or(SyscallError::InvalidArgument)?;
 
         // Check write/execute permission on parent directory
         self.check_parent_write_permission(link_str)?;
@@ -1696,7 +1715,10 @@ impl Kernel {
     /// Allocate a memory region for the current process
     pub fn sys_alloc(&mut self, size: usize, prot: Protection) -> SyscallResult<RegionId> {
         let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get_mut(&current).ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .processes
+            .get_mut(&current)
+            .ok_or(SyscallError::NoProcess)?;
 
         let region_id = self.memory.alloc_region_id();
         process.memory.allocate(region_id, size, prot)?;
@@ -1707,7 +1729,10 @@ impl Kernel {
     /// Free a memory region
     pub fn sys_free(&mut self, region_id: RegionId) -> SyscallResult<()> {
         let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get_mut(&current).ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .processes
+            .get_mut(&current)
+            .ok_or(SyscallError::NoProcess)?;
 
         process.memory.free(region_id)?;
         Ok(())
@@ -1721,11 +1746,15 @@ impl Kernel {
         buf: &mut [u8],
     ) -> SyscallResult<usize> {
         let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get_mut(&current).ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .processes
+            .get_mut(&current)
+            .ok_or(SyscallError::NoProcess)?;
 
-        let region = process.memory.get(region_id).ok_or(SyscallError::Memory(
-            MemoryError::InvalidRegion,
-        ))?;
+        let region = process
+            .memory
+            .get(region_id)
+            .ok_or(SyscallError::Memory(MemoryError::InvalidRegion))?;
 
         Ok(region.read(offset, buf)?)
     }
@@ -1738,11 +1767,15 @@ impl Kernel {
         buf: &[u8],
     ) -> SyscallResult<usize> {
         let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get_mut(&current).ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .processes
+            .get_mut(&current)
+            .ok_or(SyscallError::NoProcess)?;
 
-        let region = process.memory.get_mut(region_id).ok_or(SyscallError::Memory(
-            MemoryError::InvalidRegion,
-        ))?;
+        let region = process
+            .memory
+            .get_mut(region_id)
+            .ok_or(SyscallError::Memory(MemoryError::InvalidRegion))?;
 
         Ok(region.write(offset, buf)?)
     }
@@ -1762,7 +1795,10 @@ impl Kernel {
         let region_id = region.id;
 
         // Attach to the process memory
-        let process = self.processes.get_mut(&current).ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .processes
+            .get_mut(&current)
+            .ok_or(SyscallError::NoProcess)?;
         process.memory.attach_shm(shm_id, region)?;
 
         Ok(region_id)
@@ -1773,14 +1809,18 @@ impl Kernel {
         let current = self.current.ok_or(SyscallError::NoProcess)?;
 
         // Sync changes back to shared memory before detaching
-        let process = self.processes.get_mut(&current).ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .processes
+            .get_mut(&current)
+            .ok_or(SyscallError::NoProcess)?;
 
         // Get the region data before detaching
         if let Some(region_id) = process.memory.shm_region(shm_id)
-            && let Some(region) = process.memory.get(region_id) {
-                let data = region.as_slice().to_vec();
-                self.memory.shm_sync(shm_id, &data)?;
-            }
+            && let Some(region) = process.memory.get(region_id)
+        {
+            let data = region.as_slice().to_vec();
+            self.memory.shm_sync(shm_id, &data)?;
+        }
 
         // Detach from process memory
         process.memory.detach_shm(shm_id)?;
@@ -1794,16 +1834,21 @@ impl Kernel {
     /// Sync shared memory region (write local changes to shared segment)
     pub fn sys_shm_sync(&mut self, shm_id: ShmId) -> SyscallResult<()> {
         let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get(&current).ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .processes
+            .get(&current)
+            .ok_or(SyscallError::NoProcess)?;
 
         // Get the region data
-        let region_id = process.memory.shm_region(shm_id).ok_or(SyscallError::Memory(
-            MemoryError::NotAttached,
-        ))?;
+        let region_id = process
+            .memory
+            .shm_region(shm_id)
+            .ok_or(SyscallError::Memory(MemoryError::NotAttached))?;
 
-        let region = process.memory.get(region_id).ok_or(SyscallError::Memory(
-            MemoryError::InvalidRegion,
-        ))?;
+        let region = process
+            .memory
+            .get(region_id)
+            .ok_or(SyscallError::Memory(MemoryError::InvalidRegion))?;
 
         let data = region.as_slice().to_vec();
         self.memory.shm_sync(shm_id, &data)?;
@@ -1819,14 +1864,19 @@ impl Kernel {
         let data = self.memory.shm_read(shm_id)?.to_vec();
 
         // Update local region
-        let process = self.processes.get_mut(&current).ok_or(SyscallError::NoProcess)?;
-        let region_id = process.memory.shm_region(shm_id).ok_or(SyscallError::Memory(
-            MemoryError::NotAttached,
-        ))?;
+        let process = self
+            .processes
+            .get_mut(&current)
+            .ok_or(SyscallError::NoProcess)?;
+        let region_id = process
+            .memory
+            .shm_region(shm_id)
+            .ok_or(SyscallError::Memory(MemoryError::NotAttached))?;
 
-        let region = process.memory.get_mut(region_id).ok_or(SyscallError::Memory(
-            MemoryError::InvalidRegion,
-        ))?;
+        let region = process
+            .memory
+            .get_mut(region_id)
+            .ok_or(SyscallError::Memory(MemoryError::InvalidRegion))?;
 
         region.write(0, &data)?;
         Ok(())
@@ -1845,14 +1895,20 @@ impl Kernel {
     /// Get memory stats for current process
     pub fn sys_memstats(&self) -> SyscallResult<MemoryStats> {
         let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get(&current).ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .processes
+            .get(&current)
+            .ok_or(SyscallError::NoProcess)?;
         Ok(process.memory.stats())
     }
 
     /// Set memory limit for current process
     pub fn sys_set_memlimit(&mut self, limit: usize) -> SyscallResult<()> {
         let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get_mut(&current).ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .processes
+            .get_mut(&current)
+            .ok_or(SyscallError::NoProcess)?;
         process.memory.set_limit(limit);
         Ok(())
     }
@@ -1875,7 +1931,11 @@ impl Kernel {
     }
 
     /// Schedule a one-shot timer
-    pub fn sys_timer_set(&mut self, delay_ms: f64, wake_task: Option<TaskId>) -> SyscallResult<TimerId> {
+    pub fn sys_timer_set(
+        &mut self,
+        delay_ms: f64,
+        wake_task: Option<TaskId>,
+    ) -> SyscallResult<TimerId> {
         if delay_ms < 0.0 {
             return Err(SyscallError::InvalidArgument);
         }
@@ -1883,11 +1943,17 @@ impl Kernel {
     }
 
     /// Schedule a repeating interval timer
-    pub fn sys_timer_interval(&mut self, interval_ms: f64, wake_task: Option<TaskId>) -> SyscallResult<TimerId> {
+    pub fn sys_timer_interval(
+        &mut self,
+        interval_ms: f64,
+        wake_task: Option<TaskId>,
+    ) -> SyscallResult<TimerId> {
         if interval_ms <= 0.0 {
             return Err(SyscallError::InvalidArgument);
         }
-        Ok(self.timers.schedule_interval(interval_ms, self.now, wake_task))
+        Ok(self
+            .timers
+            .schedule_interval(interval_ms, self.now, wake_task))
     }
 
     /// Cancel a timer
@@ -1918,7 +1984,10 @@ impl Kernel {
     /// Set an alarm for the current process (SIGALRM after delay)
     pub fn sys_alarm(&mut self, delay_ms: f64) -> SyscallResult<TimerId> {
         let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get(&current).ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .processes
+            .get(&current)
+            .ok_or(SyscallError::NoProcess)?;
         let task = process.task;
         self.sys_timer_set(delay_ms, task)
     }
@@ -1927,7 +1996,10 @@ impl Kernel {
 
     /// Send a signal to a process
     pub fn sys_kill(&mut self, pid: Pid, signal: Signal) -> SyscallResult<()> {
-        let process = self.processes.get_mut(&pid).ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .processes
+            .get_mut(&pid)
+            .ok_or(SyscallError::NoProcess)?;
 
         // Can't signal zombies
         if matches!(process.state, ProcessState::Zombie(_)) {
@@ -1941,9 +2013,16 @@ impl Kernel {
     }
 
     /// Set signal handler for current process
-    pub fn sys_signal(&mut self, signal: Signal, action: SignalAction) -> SyscallResult<SignalAction> {
+    pub fn sys_signal(
+        &mut self,
+        signal: Signal,
+        action: SignalAction,
+    ) -> SyscallResult<SignalAction> {
         let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get_mut(&current).ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .processes
+            .get_mut(&current)
+            .ok_or(SyscallError::NoProcess)?;
 
         let old_action = process.signals.disposition.get_action(signal);
         process.signals.disposition.set_action(signal, action)?;
@@ -1954,7 +2033,10 @@ impl Kernel {
     /// Block a signal for current process
     pub fn sys_sigblock(&mut self, signal: Signal) -> SyscallResult<()> {
         let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get_mut(&current).ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .processes
+            .get_mut(&current)
+            .ok_or(SyscallError::NoProcess)?;
         process.signals.block(signal)?;
         Ok(())
     }
@@ -1962,7 +2044,10 @@ impl Kernel {
     /// Unblock a signal for current process
     pub fn sys_sigunblock(&mut self, signal: Signal) -> SyscallResult<()> {
         let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get_mut(&current).ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .processes
+            .get_mut(&current)
+            .ok_or(SyscallError::NoProcess)?;
         process.signals.unblock(signal);
         Ok(())
     }
@@ -1970,7 +2055,10 @@ impl Kernel {
     /// Check if current process has pending signals
     pub fn sys_sigpending(&self) -> SyscallResult<bool> {
         let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get(&current).ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .processes
+            .get(&current)
+            .ok_or(SyscallError::NoProcess)?;
         Ok(process.signals.has_pending())
     }
 
@@ -2229,7 +2317,12 @@ impl Kernel {
     }
 
     /// Change file ownership
-    pub fn sys_chown(&mut self, path: &str, uid: Option<u32>, gid: Option<u32>) -> SyscallResult<()> {
+    pub fn sys_chown(
+        &mut self,
+        path: &str,
+        uid: Option<u32>,
+        gid: Option<u32>,
+    ) -> SyscallResult<()> {
         // Check if caller is root (only root can chown)
         let current = self.current.ok_or(SyscallError::NoProcess)?;
         let process = self.processes.get(&current).unwrap();
@@ -2482,23 +2575,11 @@ pub fn spawn_process(name: &str) -> Pid {
 
 /// Spawn a new login shell process for a user
 /// Creates a new session leader with proper credentials and environment
-pub fn spawn_login_shell(
-    username: &str,
-    uid: u32,
-    gid: u32,
-    home: &str,
-    shell: &str,
-) -> Pid {
+pub fn spawn_login_shell(username: &str, uid: u32, gid: u32, home: &str, shell: &str) -> Pid {
     KERNEL.with(|k| {
         let current = k.borrow().current;
-        k.borrow_mut().spawn_login_shell(
-            username,
-            Uid(uid),
-            Gid(gid),
-            home,
-            shell,
-            current,
-        )
+        k.borrow_mut()
+            .spawn_login_shell(username, Uid(uid), Gid(gid), home, shell, current)
     })
 }
 
@@ -2842,7 +2923,14 @@ pub fn get_group_by_gid(gid: Gid) -> Option<Group> {
 
 /// List all groups
 pub fn list_groups() -> Vec<Group> {
-    KERNEL.with(|k| k.borrow().users.list_groups().into_iter().cloned().collect())
+    KERNEL.with(|k| {
+        k.borrow()
+            .users
+            .list_groups()
+            .into_iter()
+            .cloned()
+            .collect()
+    })
 }
 
 /// Add a new user (requires root)
@@ -2851,9 +2939,10 @@ pub fn add_user(name: &str, gid: Option<Gid>) -> SyscallResult<Uid> {
         let mut kernel = k.borrow_mut();
         // Check if caller is root
         if let Ok(euid) = kernel.sys_geteuid()
-            && euid != Uid::ROOT {
-                return Err(SyscallError::PermissionDenied);
-            }
+            && euid != Uid::ROOT
+        {
+            return Err(SyscallError::PermissionDenied);
+        }
         kernel
             .users_mut()
             .add_user(name, gid)
@@ -2867,9 +2956,10 @@ pub fn add_group(name: &str) -> SyscallResult<Gid> {
         let mut kernel = k.borrow_mut();
         // Check if caller is root
         if let Ok(euid) = kernel.sys_geteuid()
-            && euid != Uid::ROOT {
-                return Err(SyscallError::PermissionDenied);
-            }
+            && euid != Uid::ROOT
+        {
+            return Err(SyscallError::PermissionDenied);
+        }
         kernel
             .users_mut()
             .add_group(name)
@@ -3803,7 +3893,10 @@ mod tests {
         close(fd).unwrap();
 
         assert_eq!(n2, 32);
-        assert_ne!(buf1, buf2, "/dev/random should provide different bytes on each open");
+        assert_ne!(
+            buf1, buf2,
+            "/dev/random should provide different bytes on each open"
+        );
     }
 
     #[test]

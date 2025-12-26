@@ -2,7 +2,7 @@
 //!
 //! Handles loading, validating, and instantiating WASM command modules.
 
-use super::abi::{exports, OpenFlags};
+use super::abi::{OpenFlags, exports};
 use super::error::{CommandResult, WasmError, WasmResult};
 use super::runtime::Runtime;
 
@@ -94,7 +94,9 @@ impl ModuleValidator {
         }
 
         if !has_main_export {
-            return Err(WasmError::MissingExport { name: exports::MAIN });
+            return Err(WasmError::MissingExport {
+                name: exports::MAIN,
+            });
         }
 
         Ok(())

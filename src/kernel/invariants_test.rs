@@ -5,7 +5,7 @@
 
 #[cfg(test)]
 mod process_invariants {
-    use crate::kernel::process::{Process, ProcessState, Pid};
+    use crate::kernel::process::{Pid, Process, ProcessState};
     use crate::kernel::signal::{ProcessSignals, Signal};
 
     /// P1: Process State Machine - Valid transitions only
@@ -65,7 +65,7 @@ mod process_invariants {
 
 #[cfg(test)]
 mod signal_invariants {
-    use crate::kernel::signal::{Signal, SignalAction, ProcessSignals, SignalDisposition};
+    use crate::kernel::signal::{ProcessSignals, Signal, SignalAction, SignalDisposition};
 
     /// S1: SIGKILL Guarantee - Cannot be blocked, ignored, or caught
     #[test]
@@ -77,8 +77,14 @@ mod signal_invariants {
 
         // SIGKILL disposition cannot be changed
         let mut disp = SignalDisposition::new();
-        assert!(disp.set_action(Signal::SIGKILL, SignalAction::Ignore).is_err());
-        assert!(disp.set_action(Signal::SIGKILL, SignalAction::Handle).is_err());
+        assert!(
+            disp.set_action(Signal::SIGKILL, SignalAction::Ignore)
+                .is_err()
+        );
+        assert!(
+            disp.set_action(Signal::SIGKILL, SignalAction::Handle)
+                .is_err()
+        );
 
         // Default action for SIGKILL is terminate
         assert_eq!(disp.get_action(Signal::SIGKILL), SignalAction::Default);
@@ -113,7 +119,10 @@ mod signal_invariants {
 
         // SIGSTOP disposition cannot be changed
         let mut disp = SignalDisposition::new();
-        assert!(disp.set_action(Signal::SIGSTOP, SignalAction::Ignore).is_err());
+        assert!(
+            disp.set_action(Signal::SIGSTOP, SignalAction::Ignore)
+                .is_err()
+        );
     }
 
     /// S3: Signal Coalescing - Multiple same signals become one
@@ -200,7 +209,7 @@ mod signal_invariants {
 
 #[cfg(test)]
 mod memory_invariants {
-    use crate::kernel::memory::{MemoryRegion, ProcessMemory, Protection, MemoryError, RegionId};
+    use crate::kernel::memory::{MemoryError, MemoryRegion, ProcessMemory, Protection, RegionId};
 
     /// M1: Limit Enforcement
     #[test]
@@ -218,7 +227,10 @@ mod memory_invariants {
 
         // Allocate exceeding limit - must fail
         let r3 = RegionId(3);
-        assert!(matches!(mem.allocate(r3, 200, Protection::READ_WRITE), Err(MemoryError::OutOfMemory)));
+        assert!(matches!(
+            mem.allocate(r3, 200, Protection::READ_WRITE),
+            Err(MemoryError::OutOfMemory)
+        ));
     }
 
     /// M2: Region Bounds
@@ -266,7 +278,8 @@ mod memory_invariants {
         let mut mem = ProcessMemory::new();
 
         let region_id = RegionId(1);
-        mem.allocate(region_id, 100, Protection::READ_WRITE).unwrap();
+        mem.allocate(region_id, 100, Protection::READ_WRITE)
+            .unwrap();
 
         // Use before free works - access through get_mut
         {
@@ -287,8 +300,8 @@ mod memory_invariants {
 
 #[cfg(test)]
 mod timer_invariants {
-    use crate::kernel::timer::TimerQueue;
     use crate::kernel::task::TaskId;
+    use crate::kernel::timer::TimerQueue;
 
     /// T1: Monotonic Ordering - Timers fire earliest first
     #[test]
@@ -386,8 +399,8 @@ mod timer_invariants {
 
 #[cfg(test)]
 mod fd_invariants {
-    use crate::kernel::object::{ObjectTable, KernelObject, FileObject};
-    use crate::kernel::process::{FileTable, Handle, Fd};
+    use crate::kernel::object::{FileObject, KernelObject, ObjectTable};
+    use crate::kernel::process::{Fd, FileTable, Handle};
     use std::path::PathBuf;
 
     fn make_file() -> KernelObject {
@@ -487,21 +500,30 @@ mod executor_invariants {
         // Spawn in reverse priority order
         {
             let order = order.clone();
-            exec.spawn_with_priority(async move {
-                order.borrow_mut().push("background");
-            }, Priority::Background);
+            exec.spawn_with_priority(
+                async move {
+                    order.borrow_mut().push("background");
+                },
+                Priority::Background,
+            );
         }
         {
             let order = order.clone();
-            exec.spawn_with_priority(async move {
-                order.borrow_mut().push("normal");
-            }, Priority::Normal);
+            exec.spawn_with_priority(
+                async move {
+                    order.borrow_mut().push("normal");
+                },
+                Priority::Normal,
+            );
         }
         {
             let order = order.clone();
-            exec.spawn_with_priority(async move {
-                order.borrow_mut().push("critical");
-            }, Priority::Critical);
+            exec.spawn_with_priority(
+                async move {
+                    order.borrow_mut().push("critical");
+                },
+                Priority::Critical,
+            );
         }
 
         exec.tick();
@@ -591,9 +613,9 @@ mod executor_invariants {
 mod integration_tests {
     //! Tests that verify invariants across multiple subsystems
 
-    use crate::kernel::syscall::*;
-    use crate::kernel::signal::Signal;
     use crate::kernel::memory::Protection;
+    use crate::kernel::signal::Signal;
+    use crate::kernel::syscall::*;
 
     fn setup_kernel() {
         KERNEL.with(|k| {
@@ -608,9 +630,7 @@ mod integration_tests {
     fn integration_sigkill_terminates() {
         setup_kernel();
 
-        let target_pid = KERNEL.with(|k| {
-            k.borrow_mut().spawn_process("victim", None)
-        });
+        let target_pid = KERNEL.with(|k| k.borrow_mut().spawn_process("victim", None));
 
         // Verify alive
         let state = get_process_state(target_pid);

@@ -54,7 +54,10 @@ pub fn prog_id(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut
         .unwrap_or_else(|| gid.0.to_string());
 
     // Format uid and gid
-    stdout.push_str(&format!("uid={}({}) gid={}({})", uid.0, uid_name, gid.0, gid_name));
+    stdout.push_str(&format!(
+        "uid={}({}) gid={}({})",
+        uid.0, uid_name, gid.0, gid_name
+    ));
 
     // Show effective uid if different
     if euid != uid {
@@ -92,7 +95,12 @@ pub fn prog_id(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut
 }
 
 /// whoami - print effective username
-pub fn prog_whoami(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_whoami(
+    args: &[String],
+    __stdin: &str,
+    stdout: &mut String,
+    stderr: &mut String,
+) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: whoami\nPrint effective username.") {
@@ -127,7 +135,12 @@ pub fn prog_whoami(args: &[String], __stdin: &str, stdout: &mut String, stderr: 
 }
 
 /// groups - print group memberships
-pub fn prog_groups(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_groups(
+    args: &[String],
+    __stdin: &str,
+    stdout: &mut String,
+    stderr: &mut String,
+) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: groups [USER]\nPrint group memberships.") {
@@ -187,10 +200,18 @@ pub fn prog_groups(args: &[String], __stdin: &str, stdout: &mut String, stderr: 
 }
 
 /// hostname - show or set system hostname
-pub fn prog_hostname(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_hostname(
+    args: &[String],
+    __stdin: &str,
+    stdout: &mut String,
+    stderr: &mut String,
+) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: hostname [NAME]\nShow or set system hostname.") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: hostname [NAME]\nShow or set system hostname.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -227,7 +248,12 @@ pub fn prog_hostname(args: &[String], __stdin: &str, stdout: &mut String, stderr
 }
 
 /// uname - print system information
-pub fn prog_uname(args: &[String], __stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+pub fn prog_uname(
+    args: &[String],
+    __stdin: &str,
+    stdout: &mut String,
+    _stderr: &mut String,
+) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: uname [-amnrsv]\nPrint system information.") {
@@ -325,7 +351,10 @@ pub fn prog_ps(args: &[String], __stdin: &str, stdout: &mut String, _stderr: &mu
 pub fn prog_time(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: time COMMAND [ARGS...]\nTime command execution.") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: time COMMAND [ARGS...]\nTime command execution.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -379,10 +408,18 @@ pub fn prog_date(args: &[String], __stdin: &str, stdout: &mut String, _stderr: &
 }
 
 /// uptime - show how long system has been running
-pub fn prog_uptime(args: &[String], __stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+pub fn prog_uptime(
+    args: &[String],
+    __stdin: &str,
+    stdout: &mut String,
+    _stderr: &mut String,
+) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: uptime\nShow how long the system has been running.") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: uptime\nShow how long the system has been running.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -402,7 +439,11 @@ pub fn prog_uptime(args: &[String], __stdin: &str, stdout: &mut String, _stderr:
 
     stdout.push_str("up ");
     if days > 0 {
-        stdout.push_str(&format!("{} day{}, ", days, if days > 1 { "s" } else { "" }));
+        stdout.push_str(&format!(
+            "{} day{}, ",
+            days,
+            if days > 1 { "s" } else { "" }
+        ));
     }
     if hours > 0 || days > 0 {
         stdout.push_str(&format!("{}:{:02}, ", hrs, mins));
@@ -413,7 +454,10 @@ pub fn prog_uptime(args: &[String], __stdin: &str, stdout: &mut String, _stderr:
 
     // Show system stats
     stdout.push_str(&format!("syscalls: {}, ", summary.syscall_count));
-    stdout.push_str(&format!("processes: {}/{}\n", summary.processes_spawned, summary.processes_exited));
+    stdout.push_str(&format!(
+        "processes: {}/{}\n",
+        summary.processes_spawned, summary.processes_exited
+    ));
 
     0
 }
@@ -423,7 +467,10 @@ pub fn prog_free(args: &[String], __stdin: &str, stdout: &mut String, _stderr: &
     let args = args_to_strs(args);
     let human = args.iter().any(|a| *a == "-h" || *a == "--human");
 
-    if let Some(help) = check_help(&args, "Usage: free [-h]\nDisplay memory usage.\n  -h  Human readable output") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: free [-h]\nDisplay memory usage.\n  -h  Human readable output",
+    ) {
         stdout.push_str(&help);
         return 0;
     }

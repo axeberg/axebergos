@@ -11,14 +11,10 @@ pub type WasmResult<T> = Result<T, WasmError>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WasmError {
     /// Module binary is malformed or invalid
-    InvalidModule {
-        reason: String,
-    },
+    InvalidModule { reason: String },
 
     /// Required export is missing
-    MissingExport {
-        name: &'static str,
-    },
+    MissingExport { name: &'static str },
 
     /// Export has wrong type
     WrongExportType {
@@ -35,51 +31,31 @@ pub enum WasmError {
     },
 
     /// Invalid file descriptor
-    InvalidFd {
-        fd: i32,
-    },
+    InvalidFd { fd: i32 },
 
     /// Syscall error (wraps ABI error code)
-    Syscall {
-        name: &'static str,
-        code: i32,
-    },
+    Syscall { name: &'static str, code: i32 },
 
     /// Command exited with non-zero code
-    NonZeroExit {
-        code: i32,
-    },
+    NonZeroExit { code: i32 },
 
     /// Command was aborted (e.g., via trap)
-    Aborted {
-        reason: String,
-    },
+    Aborted { reason: String },
 
     /// Module instantiation failed
-    InstantiationFailed {
-        reason: String,
-    },
+    InstantiationFailed { reason: String },
 
     /// Command not found in filesystem
-    CommandNotFound {
-        name: String,
-    },
+    CommandNotFound { name: String },
 
     /// I/O error reading module
-    IoError {
-        message: String,
-    },
+    IoError { message: String },
 
     /// Memory allocation failed
-    OutOfMemory {
-        requested: u32,
-        available: u32,
-    },
+    OutOfMemory { requested: u32, available: u32 },
 
     /// Maximum open files exceeded
-    TooManyOpenFiles {
-        max: usize,
-    },
+    TooManyOpenFiles { max: usize },
 }
 
 impl fmt::Display for WasmError {

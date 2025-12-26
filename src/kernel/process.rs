@@ -10,10 +10,10 @@
 //! - Parent/child relationships
 //! - Wait/reap semantics for zombie processes
 
+use super::TaskId;
 use super::memory::ProcessMemory;
 use super::signal::ProcessSignals;
 use super::users::{Gid, Uid};
-use super::TaskId;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -342,7 +342,10 @@ impl Process {
         environ.insert("USER".to_string(), username.to_string());
         environ.insert("LOGNAME".to_string(), username.to_string());
         environ.insert("SHELL".to_string(), shell.to_string());
-        environ.insert("PATH".to_string(), "/bin:/usr/bin:/usr/local/bin".to_string());
+        environ.insert(
+            "PATH".to_string(),
+            "/bin:/usr/bin:/usr/local/bin".to_string(),
+        );
         environ.insert("TERM".to_string(), "xterm-256color".to_string());
         environ.insert("PWD".to_string(), home.to_string());
 

@@ -4,7 +4,12 @@ use super::{args_to_strs, check_help};
 use crate::kernel::syscall;
 
 /// systemctl - service management
-pub fn prog_systemctl(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_systemctl(
+    args: &[String],
+    __stdin: &str,
+    stdout: &mut String,
+    stderr: &mut String,
+) -> i32 {
     let args = args_to_strs(args);
 
     if args.is_empty() {
@@ -43,9 +48,7 @@ pub fn prog_systemctl(args: &[String], __stdin: &str, stdout: &mut String, stder
                     };
                     stdout.push_str(&format!(
                         "{:<23} {} {}\n",
-                        &svc.config.name,
-                        state_str,
-                        &svc.config.description
+                        &svc.config.name, state_str, &svc.config.description
                     ));
                 }
             });
@@ -193,7 +196,10 @@ pub fn prog_systemctl(args: &[String], __stdin: &str, stdout: &mut String, stder
                 syscall::KERNEL.with(|k| {
                     let mut kernel = k.borrow_mut();
                     kernel.init_mut().set_target(target);
-                    stdout.push_str(&format!("Created symlink /etc/systemd/system/default.target -> {}\n", target.as_str()));
+                    stdout.push_str(&format!(
+                        "Created symlink /etc/systemd/system/default.target -> {}\n",
+                        target.as_str()
+                    ));
                 });
                 0
             } else {
@@ -209,7 +215,12 @@ pub fn prog_systemctl(args: &[String], __stdin: &str, stdout: &mut String, stder
 }
 
 /// reboot - reboot the system
-pub fn prog_reboot(args: &[String], __stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+pub fn prog_reboot(
+    args: &[String],
+    __stdin: &str,
+    stdout: &mut String,
+    _stderr: &mut String,
+) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: reboot\nReboot the system.") {
@@ -228,7 +239,12 @@ pub fn prog_reboot(args: &[String], __stdin: &str, stdout: &mut String, _stderr:
 }
 
 /// poweroff - power off the system
-pub fn prog_poweroff(args: &[String], __stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+pub fn prog_poweroff(
+    args: &[String],
+    __stdin: &str,
+    stdout: &mut String,
+    _stderr: &mut String,
+) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: poweroff\nPower off the system.") {

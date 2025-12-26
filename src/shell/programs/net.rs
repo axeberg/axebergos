@@ -14,13 +14,17 @@ use crate::kernel::syscall;
 /// curl - transfer data from URL
 pub fn prog_curl(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
-    if let Some(help) = check_help(&args, "Usage: curl [OPTIONS] URL\nTransfer data from URL.\n  -i  Include headers in output\n  -s  Silent mode\n  -X METHOD  Specify request method\n  -H HEADER  Add custom header\nSee 'man curl' for details.") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: curl [OPTIONS] URL\nTransfer data from URL.\n  -i  Include headers in output\n  -s  Silent mode\n  -X METHOD  Specify request method\n  -H HEADER  Add custom header\nSee 'man curl' for details.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
 
     // Parse URL from arguments (needed for both wasm and non-wasm paths)
-    let url: String = args.iter()
+    let url: String = args
+        .iter()
         .find(|s| !s.starts_with('-') && !s.is_empty())
         .map(|s| s.to_string())
         .unwrap_or_default();
@@ -55,7 +59,7 @@ pub fn prog_curl(args: &[String], __stdin: &str, stdout: &mut String, stderr: &m
                     if i < args.len() {
                         if let Some(pos) = args[i].find(':') {
                             let name = args[i][..pos].trim().to_string();
-                            let value = args[i][pos+1..].trim().to_string();
+                            let value = args[i][pos + 1..].trim().to_string();
                             headers.push((name, value));
                         }
                     }
@@ -123,7 +127,10 @@ pub fn prog_curl(args: &[String], __stdin: &str, stdout: &mut String, stderr: &m
 #[allow(unused_variables)]
 pub fn prog_wget(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
-    if let Some(help) = check_help(&args, "Usage: wget [OPTIONS] URL\nDownload file from URL.\n  -O FILE  Save to FILE instead of default\n  -q       Quiet mode\nSee 'man wget' for details.") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: wget [OPTIONS] URL\nDownload file from URL.\n  -O FILE  Save to FILE instead of default\n  -q       Quiet mode\nSee 'man wget' for details.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -175,13 +182,24 @@ pub fn prog_wget(args: &[String], __stdin: &str, stdout: &mut String, stderr: &m
                 Ok(resp) => {
                     if resp.status >= 200 && resp.status < 300 {
                         // Write to file
-                        match syscall::write_file(&filename_clone, &String::from_utf8_lossy(&resp.body)) {
+                        match syscall::write_file(
+                            &filename_clone,
+                            &String::from_utf8_lossy(&resp.body),
+                        ) {
                             Ok(_) => {
-                                crate::console_log!("Downloaded {} -> {} ({} bytes)",
-                                    url_clone, filename_clone, resp.body.len());
+                                crate::console_log!(
+                                    "Downloaded {} -> {} ({} bytes)",
+                                    url_clone,
+                                    filename_clone,
+                                    resp.body.len()
+                                );
                             }
                             Err(e) => {
-                                crate::console_log!("wget: failed to write {}: {}", filename_clone, e);
+                                crate::console_log!(
+                                    "wget: failed to write {}: {}",
+                                    filename_clone,
+                                    e
+                                );
                             }
                         }
                     } else {

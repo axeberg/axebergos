@@ -523,12 +523,20 @@ impl Editor {
                     let chars: Vec<char> = row.chars.chars().collect();
                     let mut pos = self.cx;
                     // Skip whitespace
-                    while pos > 0 && chars.get(pos - 1).map(|c| c.is_whitespace()).unwrap_or(false)
+                    while pos > 0
+                        && chars
+                            .get(pos - 1)
+                            .map(|c| c.is_whitespace())
+                            .unwrap_or(false)
                     {
                         pos -= 1;
                     }
                     // Skip word
-                    while pos > 0 && chars.get(pos - 1).map(|c| !c.is_whitespace()).unwrap_or(false)
+                    while pos > 0
+                        && chars
+                            .get(pos - 1)
+                            .map(|c| !c.is_whitespace())
+                            .unwrap_or(false)
                     {
                         pos -= 1;
                     }
@@ -698,10 +706,7 @@ impl Editor {
         }
 
         // Horizontal scrolling
-        let rx = self
-            .current_row()
-            .map(|r| r.cx_to_rx(self.cx))
-            .unwrap_or(0);
+        let rx = self.current_row().map(|r| r.cx_to_rx(self.cx)).unwrap_or(0);
         if rx < self.col_offset {
             self.col_offset = rx;
         }
@@ -742,10 +747,7 @@ impl Editor {
 
         // Position cursor
         let cursor_y = self.cy - self.row_offset + 1;
-        let rx = self
-            .current_row()
-            .map(|r| r.cx_to_rx(self.cx))
-            .unwrap_or(0);
+        let rx = self.current_row().map(|r| r.cx_to_rx(self.cx)).unwrap_or(0);
         let cursor_x = rx - self.col_offset + 1;
         buf.push_str(&format!("\x1b[{};{}H", cursor_y, cursor_x));
 
@@ -771,7 +773,13 @@ impl Editor {
         let left_len = left.chars().count().min(width);
         let right_len = right.chars().count();
 
-        buf.push_str(&left[..left.char_indices().nth(left_len).map(|(i, _)| i).unwrap_or(left.len())]);
+        buf.push_str(
+            &left[..left
+                .char_indices()
+                .nth(left_len)
+                .map(|(i, _)| i)
+                .unwrap_or(left.len())],
+        );
 
         let padding = width.saturating_sub(left_len + right_len);
         for _ in 0..padding {
@@ -841,9 +849,9 @@ impl Editor {
                     row.chars[..search_start + p].chars().count()
                 })
             } else {
-                row.chars[..search_start].rfind(query).map(|p| {
-                    row.chars[..p].chars().count()
-                })
+                row.chars[..search_start]
+                    .rfind(query)
+                    .map(|p| row.chars[..p].chars().count())
             } {
                 self.cy = row_idx;
                 self.cx = col;
@@ -981,41 +989,35 @@ impl Editor {
                 self.prompt_mode = PromptMode::None;
                 self.status_msg = String::from("Cancelled");
             }
-            Key::Enter => {
-                match &self.prompt_mode {
-                    PromptMode::Save(input) => {
-                        let path = input.clone();
-                        self.filename = Some(path.clone());
-                        self.prompt_mode = PromptMode::None;
-                        if let Err(e) = self.save() {
-                            self.status_msg = format!("Save failed: {}", e);
-                        }
+            Key::Enter => match &self.prompt_mode {
+                PromptMode::Save(input) => {
+                    let path = input.clone();
+                    self.filename = Some(path.clone());
+                    self.prompt_mode = PromptMode::None;
+                    if let Err(e) = self.save() {
+                        self.status_msg = format!("Save failed: {}", e);
                     }
-                    PromptMode::Find(query) => {
-                        let q = query.clone();
-                        self.prompt_mode = PromptMode::None;
-                        self.find(&q, true);
-                    }
-                    PromptMode::GoTo(input) => {
-                        let line = input.clone();
-                        self.prompt_mode = PromptMode::None;
-                        self.goto_line(&line);
-                    }
-                    PromptMode::None => {}
                 }
-            }
+                PromptMode::Find(query) => {
+                    let q = query.clone();
+                    self.prompt_mode = PromptMode::None;
+                    self.find(&q, true);
+                }
+                PromptMode::GoTo(input) => {
+                    let line = input.clone();
+                    self.prompt_mode = PromptMode::None;
+                    self.goto_line(&line);
+                }
+                PromptMode::None => {}
+            },
             Key::Backspace => match &mut self.prompt_mode {
-                PromptMode::Save(input)
-                | PromptMode::Find(input)
-                | PromptMode::GoTo(input) => {
+                PromptMode::Save(input) | PromptMode::Find(input) | PromptMode::GoTo(input) => {
                     input.pop();
                 }
                 PromptMode::None => {}
             },
             Key::Char(ch) => match &mut self.prompt_mode {
-                PromptMode::Save(input)
-                | PromptMode::Find(input)
-                | PromptMode::GoTo(input) => {
+                PromptMode::Save(input) | PromptMode::Find(input) | PromptMode::GoTo(input) => {
                     input.push(ch);
                     // Live search for Find mode
                     if matches!(self.prompt_mode, PromptMode::Find(_)) {

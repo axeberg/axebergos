@@ -25,7 +25,7 @@ impl DevFs {
         devices.insert("stderr");
         devices.insert("tty");
         devices.insert("ptmx");
-        devices.insert("fd");  // Directory - symlinks to /proc/self/fd
+        devices.insert("fd"); // Directory - symlinks to /proc/self/fd
 
         Self { devices }
     }

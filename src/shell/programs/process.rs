@@ -4,7 +4,12 @@ use super::{args_to_strs, check_help};
 use crate::kernel::syscall;
 
 /// sleep - pause for specified seconds
-pub fn prog_sleep(args: &[String], __stdin: &str, _stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_sleep(
+    args: &[String],
+    __stdin: &str,
+    _stdout: &mut String,
+    stderr: &mut String,
+) -> i32 {
     let args = args_to_strs(args);
 
     if args.is_empty() {
@@ -26,7 +31,10 @@ pub fn prog_sleep(args: &[String], __stdin: &str, _stdout: &mut String, stderr: 
     #[cfg(target_arch = "wasm32")]
     {
         // Can't block in WASM - would need async support
-        crate::console_log!("[sleep] Would sleep for {} seconds (non-blocking in WASM)", seconds);
+        crate::console_log!(
+            "[sleep] Would sleep for {} seconds (non-blocking in WASM)",
+            seconds
+        );
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -73,7 +81,10 @@ pub fn prog_jobs(args: &[String], __stdin: &str, stdout: &mut String, _stderr: &
 
         job_num += 1;
         if long_format {
-            stdout.push_str(&format!("[{}]  {} {}\t\t{}\n", job_num, pid.0, state_str, name));
+            stdout.push_str(&format!(
+                "[{}]  {} {}\t\t{}\n",
+                job_num, pid.0, state_str, name
+            ));
         } else {
             stdout.push_str(&format!("[{}]  {}\t\t{}\n", job_num, state_str, name));
         }
@@ -109,7 +120,8 @@ pub fn prog_fg(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut
 
     // Get processes and find the matching job
     let processes = syscall::list_processes();
-    let jobs: Vec<_> = processes.into_iter()
+    let jobs: Vec<_> = processes
+        .into_iter()
         .filter(|(pid, _, _)| pid.0 != 1) // Skip shell
         .collect();
 
@@ -119,9 +131,7 @@ pub fn prog_fg(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut
     }
 
     let target = match job_spec {
-        Some(n) if n > 0 && (n as usize) <= jobs.len() => {
-            jobs.get((n - 1) as usize)
-        }
+        Some(n) if n > 0 && (n as usize) <= jobs.len() => jobs.get((n - 1) as usize),
         None => jobs.last(), // Default to most recent
         _ => {
             stderr.push_str("fg: no such job\n");
@@ -132,10 +142,11 @@ pub fn prog_fg(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut
     if let Some((pid, name, state)) = target {
         // If stopped, send SIGCONT
         if matches!(state, syscall::ProcessState::Stopped)
-            && let Err(e) = syscall::kill(*pid, crate::kernel::signal::Signal::SIGCONT) {
-                stderr.push_str(&format!("fg: {}\n", e));
-                return 1;
-            }
+            && let Err(e) = syscall::kill(*pid, crate::kernel::signal::Signal::SIGCONT)
+        {
+            stderr.push_str(&format!("fg: {}\n", e));
+            return 1;
+        }
         stdout.push_str(&format!("{}\n", name));
         0
     } else {
@@ -166,10 +177,9 @@ pub fn prog_bg(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut
     };
 
     let processes = syscall::list_processes();
-    let stopped_jobs: Vec<_> = processes.into_iter()
-        .filter(|(pid, _, state)| {
-            pid.0 != 1 && matches!(state, syscall::ProcessState::Stopped)
-        })
+    let stopped_jobs: Vec<_> = processes
+        .into_iter()
+        .filter(|(pid, _, state)| pid.0 != 1 && matches!(state, syscall::ProcessState::Stopped))
         .collect();
 
     if stopped_jobs.is_empty() {
@@ -202,10 +212,18 @@ pub fn prog_bg(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut
 }
 
 /// strace - trace system calls
-pub fn prog_strace(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_strace(
+    args: &[String],
+    __stdin: &str,
+    stdout: &mut String,
+    stderr: &mut String,
+) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: strace [-c] COMMAND [ARGS...]\nTrace system calls.") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: strace [-c] COMMAND [ARGS...]\nTrace system calls.",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -216,8 +234,10 @@ pub fn prog_strace(args: &[String], __stdin: &str, stdout: &mut String, stderr: 
     }
 
     let count_mode = args.contains(&"-c");
-    let cmd_args: Vec<_> = args.iter()
-        .filter(|a| !a.starts_with('-')).copied()
+    let cmd_args: Vec<_> = args
+        .iter()
+        .filter(|a| !a.starts_with('-'))
+        .copied()
         .collect();
 
     if cmd_args.is_empty() {
@@ -249,9 +269,7 @@ pub fn prog_strace(args: &[String], __stdin: &str, stdout: &mut String, stderr: 
             "--- tracing enabled for {:.3}ms ---\n\
              syscalls: {}\n\
              events: {}\n",
-            summary.uptime,
-            summary.syscall_count,
-            summary.event_count
+            summary.uptime, summary.syscall_count, summary.event_count
         ));
     }
 
@@ -265,7 +283,10 @@ pub fn prog_strace(args: &[String], __stdin: &str, stdout: &mut String, stderr: 
 pub fn prog_kill(args: &[String], __stdin: &str, _stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: kill [-s SIGNAL] PID...\nSend signal to processes.") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: kill [-s SIGNAL] PID...\nSend signal to processes.",
+    ) {
         stderr.push_str(&help);
         return 0;
     }

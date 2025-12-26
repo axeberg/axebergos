@@ -402,7 +402,12 @@ fn parse_pipeline_internal(
                 if current_words.is_empty() {
                     return Err(ParseError::EmptyCommand);
                 }
-                let cmd = build_command(&mut current_words, stdin.take(), stdout.take(), stderr.take());
+                let cmd = build_command(
+                    &mut current_words,
+                    stdin.take(),
+                    stdout.take(),
+                    stderr.take(),
+                );
                 commands.push(cmd);
                 expecting_command = true; // Expect command after pipe
             }
@@ -468,7 +473,13 @@ fn parse_pipeline_internal(
         commands.push(cmd);
     }
 
-    Ok((Pipeline { commands, background }, trailing_op))
+    Ok((
+        Pipeline {
+            commands,
+            background,
+        },
+        trailing_op,
+    ))
 }
 
 /// Parse a command line into a pipeline (legacy API, wraps parse_command_list)
@@ -530,7 +541,10 @@ mod tests {
     fn test_command_with_many_args() {
         let result = parse("echo one two three four five").unwrap();
         assert_eq!(result.commands[0].program, "echo");
-        assert_eq!(result.commands[0].args, vec!["one", "two", "three", "four", "five"]);
+        assert_eq!(
+            result.commands[0].args,
+            vec!["one", "two", "three", "four", "five"]
+        );
     }
 
     #[test]
@@ -651,47 +665,74 @@ mod tests {
         let result = parse("echo hello > file.txt").unwrap();
         assert_eq!(result.commands[0].program, "echo");
         assert_eq!(result.commands[0].args, vec!["hello"]);
-        assert_eq!(result.commands[0].stdout, Some(Redirect::new("file.txt", false)));
+        assert_eq!(
+            result.commands[0].stdout,
+            Some(Redirect::new("file.txt", false))
+        );
     }
 
     #[test]
     fn test_output_append() {
         let result = parse("echo hello >> file.txt").unwrap();
-        assert_eq!(result.commands[0].stdout, Some(Redirect::new("file.txt", true)));
+        assert_eq!(
+            result.commands[0].stdout,
+            Some(Redirect::new("file.txt", true))
+        );
     }
 
     #[test]
     fn test_input_redirect() {
         let result = parse("cat < input.txt").unwrap();
         assert_eq!(result.commands[0].program, "cat");
-        assert_eq!(result.commands[0].stdin, Some(Redirect::new("input.txt", false)));
+        assert_eq!(
+            result.commands[0].stdin,
+            Some(Redirect::new("input.txt", false))
+        );
     }
 
     #[test]
     fn test_stderr_redirect() {
         let result = parse("cmd 2> errors.txt").unwrap();
-        assert_eq!(result.commands[0].stderr, Some(Redirect::new("errors.txt", false)));
+        assert_eq!(
+            result.commands[0].stderr,
+            Some(Redirect::new("errors.txt", false))
+        );
     }
 
     #[test]
     fn test_stderr_append() {
         let result = parse("cmd 2>> errors.txt").unwrap();
-        assert_eq!(result.commands[0].stderr, Some(Redirect::new("errors.txt", true)));
+        assert_eq!(
+            result.commands[0].stderr,
+            Some(Redirect::new("errors.txt", true))
+        );
     }
 
     #[test]
     fn test_multiple_redirects() {
         let result = parse("cmd < in.txt > out.txt 2> err.txt").unwrap();
-        assert_eq!(result.commands[0].stdin, Some(Redirect::new("in.txt", false)));
-        assert_eq!(result.commands[0].stdout, Some(Redirect::new("out.txt", false)));
-        assert_eq!(result.commands[0].stderr, Some(Redirect::new("err.txt", false)));
+        assert_eq!(
+            result.commands[0].stdin,
+            Some(Redirect::new("in.txt", false))
+        );
+        assert_eq!(
+            result.commands[0].stdout,
+            Some(Redirect::new("out.txt", false))
+        );
+        assert_eq!(
+            result.commands[0].stderr,
+            Some(Redirect::new("err.txt", false))
+        );
     }
 
     #[test]
     fn test_redirect_no_space() {
         let result = parse("echo hello>file.txt").unwrap();
         assert_eq!(result.commands[0].args, vec!["hello"]);
-        assert_eq!(result.commands[0].stdout, Some(Redirect::new("file.txt", false)));
+        assert_eq!(
+            result.commands[0].stdout,
+            Some(Redirect::new("file.txt", false))
+        );
     }
 
     #[test]
@@ -725,22 +766,34 @@ mod tests {
         assert_eq!(result.commands.len(), 2);
         assert_eq!(result.commands[0].program, "cat");
         assert_eq!(result.commands[1].program, "grep");
-        assert_eq!(result.commands[1].stdout, Some(Redirect::new("output.txt", false)));
+        assert_eq!(
+            result.commands[1].stdout,
+            Some(Redirect::new("output.txt", false))
+        );
     }
 
     #[test]
     fn test_complex_pipeline() {
         let result = parse("cat < input.txt | sort | uniq > output.txt &").unwrap();
         assert_eq!(result.commands.len(), 3);
-        assert_eq!(result.commands[0].stdin, Some(Redirect::new("input.txt", false)));
-        assert_eq!(result.commands[2].stdout, Some(Redirect::new("output.txt", false)));
+        assert_eq!(
+            result.commands[0].stdin,
+            Some(Redirect::new("input.txt", false))
+        );
+        assert_eq!(
+            result.commands[2].stdout,
+            Some(Redirect::new("output.txt", false))
+        );
         assert!(result.background);
     }
 
     #[test]
     fn test_quoted_redirect_target() {
         let result = parse(r#"echo hello > "file with spaces.txt""#).unwrap();
-        assert_eq!(result.commands[0].stdout, Some(Redirect::new("file with spaces.txt", false)));
+        assert_eq!(
+            result.commands[0].stdout,
+            Some(Redirect::new("file with spaces.txt", false))
+        );
     }
 
     // ============ Logical Operators ============

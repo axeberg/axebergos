@@ -21,7 +21,9 @@ const FS_FILENAME: &str = "axeberg_fs.json";
 impl Persistence {
     /// Save filesystem to OPFS
     pub async fn save(fs: &MemoryFs) -> Result<(), String> {
-        let data = fs.to_json().map_err(|e| format!("Serialize error: {}", e))?;
+        let data = fs
+            .to_json()
+            .map_err(|e| format!("Serialize error: {}", e))?;
 
         // Get OPFS root
         let root = Self::get_opfs_root().await?;
@@ -30,13 +32,12 @@ impl Persistence {
         let file_opts = web_sys::FileSystemGetFileOptions::new();
         file_opts.set_create(true);
 
-        let file_handle: web_sys::FileSystemFileHandle = JsFuture::from(
-            root.get_file_handle_with_options(FS_FILENAME, &file_opts),
-        )
-        .await
-        .map_err(|e| format!("Failed to get file handle: {:?}", e))?
-        .dyn_into()
-        .map_err(|_| "Failed to cast to FileSystemFileHandle")?;
+        let file_handle: web_sys::FileSystemFileHandle =
+            JsFuture::from(root.get_file_handle_with_options(FS_FILENAME, &file_opts))
+                .await
+                .map_err(|e| format!("Failed to get file handle: {:?}", e))?
+                .dyn_into()
+                .map_err(|_| "Failed to cast to FileSystemFileHandle")?;
 
         // Create writable stream
         let writable: web_sys::FileSystemWritableFileStream =
@@ -114,20 +115,18 @@ impl Persistence {
 
     /// Get the OPFS root directory handle
     async fn get_opfs_root() -> Result<web_sys::FileSystemDirectoryHandle, String> {
-        let window =
-            web_sys::window().ok_or_else(|| "No window object".to_string())?;
+        let window = web_sys::window().ok_or_else(|| "No window object".to_string())?;
         let navigator = window.navigator();
 
         // StorageManager access
         let storage = navigator.storage();
 
         // Get OPFS root
-        let root: web_sys::FileSystemDirectoryHandle =
-            JsFuture::from(storage.get_directory())
-                .await
-                .map_err(|e| format!("Failed to get OPFS root: {:?}", e))?
-                .dyn_into()
-                .map_err(|_| "Failed to cast to FileSystemDirectoryHandle")?;
+        let root: web_sys::FileSystemDirectoryHandle = JsFuture::from(storage.get_directory())
+            .await
+            .map_err(|e| format!("Failed to get OPFS root: {:?}", e))?
+            .dyn_into()
+            .map_err(|_| "Failed to cast to FileSystemDirectoryHandle")?;
 
         Ok(root)
     }
@@ -137,9 +136,7 @@ impl Persistence {
         let root = Self::get_opfs_root().await?;
 
         // Remove the file if it exists
-        JsFuture::from(root.remove_entry(FS_FILENAME))
-            .await
-            .ok(); // Ignore errors (file might not exist)
+        JsFuture::from(root.remove_entry(FS_FILENAME)).await.ok(); // Ignore errors (file might not exist)
 
         Ok(())
     }
@@ -152,7 +149,6 @@ mod tests {
 
     #[test]
     fn test_fs_snapshot_roundtrip() {
-
         let mut fs = MemoryFs::new();
 
         // Create some content
@@ -160,7 +156,10 @@ mod tests {
         fs.create_dir("/home/user").unwrap();
 
         let handle = fs
-            .open("/home/user/test.txt", OpenOptions::new().write(true).create(true))
+            .open(
+                "/home/user/test.txt",
+                OpenOptions::new().write(true).create(true),
+            )
             .unwrap();
         fs.write(handle, b"hello persistence").unwrap();
         fs.close(handle).unwrap();

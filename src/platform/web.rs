@@ -9,8 +9,8 @@
 use super::{KeyEvent, Platform, PlatformResult, TermSize};
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
+use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
 /// Browser platform state

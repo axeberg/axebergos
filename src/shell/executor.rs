@@ -73,7 +73,8 @@ impl ExecResult {
 /// - stderr: Buffer for standard error
 ///
 /// Returns: Exit code (0 for success)
-pub type ProgramFn = fn(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32;
+pub type ProgramFn =
+    fn(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32;
 
 /// Registry of available programs
 pub struct ProgramRegistry {
@@ -154,7 +155,7 @@ impl ProgramRegistry {
         reg.register("clear", programs::prog_clear);
         reg.register("printf", programs::prog_printf);
         reg.register("test", programs::prog_test);
-        reg.register("[", programs::prog_test);  // [ is an alias for test
+        reg.register("[", programs::prog_test); // [ is an alias for test
         reg.register("expr", programs::prog_expr);
         reg.register("which", programs::prog_which);
         reg.register("type", programs::prog_type);
@@ -274,7 +275,8 @@ impl Executor {
     /// Sync WASM runner state with shell state
     #[cfg(target_arch = "wasm32")]
     fn sync_wasm_runner(&mut self) {
-        self.wasm_runner.set_cwd(&self.state.cwd.display().to_string());
+        self.wasm_runner
+            .set_cwd(&self.state.cwd.display().to_string());
         // Sync environment variables
         let mut env = HashMap::new();
         for (k, v) in &self.state.env {
@@ -351,9 +353,11 @@ impl Executor {
 
         // Command not found
         self.state.last_status = 127;
-        Some(ExecResult::success()
-            .with_error(format!("{}: command not found", cmd.program))
-            .with_code(127))
+        Some(
+            ExecResult::success()
+                .with_error(format!("{}: command not found", cmd.program))
+                .with_code(127),
+        )
     }
 
     /// List available WASM commands
@@ -407,9 +411,9 @@ impl Executor {
         // Execute remaining pipelines based on logical operators
         for (op, pipeline) in &cmd_list.rest {
             let should_execute = match op {
-                LogicalOp::Sequence => true, // Always execute
+                LogicalOp::Sequence => true,        // Always execute
                 LogicalOp::And => result.code == 0, // Execute if previous succeeded
-                LogicalOp::Or => result.code != 0, // Execute if previous failed
+                LogicalOp::Or => result.code != 0,  // Execute if previous failed
             };
 
             if should_execute {
@@ -644,13 +648,12 @@ impl Executor {
             let is_last = i == commands.len() - 1;
 
             // Handle input redirection on first command
-            if is_first
-                && let Some(ref redir) = cmd.stdin {
-                    match self.read_file(&redir.path) {
-                        Ok(content) => pipe_input = content,
-                        Err(e) => return ExecResult::success().with_error(e),
-                    }
+            if is_first && let Some(ref redir) = cmd.stdin {
+                match self.read_file(&redir.path) {
+                    Ok(content) => pipe_input = content,
+                    Err(e) => return ExecResult::success().with_error(e),
                 }
+            }
 
             // Execute the command
             let mut stdout = String::new();
@@ -791,9 +794,7 @@ impl Executor {
                 self.state.last_status = code;
                 ExecResult::exit(code)
             }
-            BuiltinResult::Cd(path) => {
-                self.change_directory(&path)
-            }
+            BuiltinResult::Cd(path) => self.change_directory(&path),
             BuiltinResult::Export(pairs) => {
                 for (name, value) in pairs {
                     self.state.set_env(&name, &value);
@@ -849,7 +850,8 @@ impl Executor {
             }
             Ok(false) => {
                 self.state.last_status = 1;
-                ExecResult::success().with_error(format!("cd: {}: No such file or directory", path_str))
+                ExecResult::success()
+                    .with_error(format!("cd: {}: No such file or directory", path_str))
             }
             Err(e) => {
                 self.state.last_status = 1;
@@ -900,11 +902,9 @@ impl Executor {
             syscall::OpenFlags::WRITE
         };
 
-        let fd = syscall::open(&full_path, flags)
-            .map_err(|e| format!("{}: {}", path, e))?;
+        let fd = syscall::open(&full_path, flags).map_err(|e| format!("{}: {}", path, e))?;
 
-        syscall::write(fd, content.as_bytes())
-            .map_err(|e| format!("{}: {}", path, e))?;
+        syscall::write(fd, content.as_bytes()).map_err(|e| format!("{}: {}", path, e))?;
 
         syscall::close(fd).map_err(|e| format!("{}: {}", path, e))?;
 
@@ -984,7 +984,10 @@ impl Executor {
     }
 
     /// Extract content from nested parentheses, handling nesting
-    fn extract_nested_paren(&self, chars: &mut std::iter::Peekable<std::str::Chars>) -> Option<String> {
+    fn extract_nested_paren(
+        &self,
+        chars: &mut std::iter::Peekable<std::str::Chars>,
+    ) -> Option<String> {
         let mut content = String::new();
         let mut depth = 1;
 
@@ -1103,7 +1106,10 @@ fn is_glob_pattern(s: &str) -> bool {
 
 /// Match a pattern against a filename (not full path)
 fn glob_match(pattern: &str, name: &str) -> bool {
-    glob_match_chars(&mut pattern.chars().peekable(), &mut name.chars().peekable())
+    glob_match_chars(
+        &mut pattern.chars().peekable(),
+        &mut name.chars().peekable(),
+    )
 }
 
 fn glob_match_chars(
@@ -1280,9 +1286,10 @@ fn expand_glob_segments(dir: &str, segments: &[&str], results: &mut Vec<String>)
             } else {
                 // Check if it's a directory for further matching
                 if let Ok(meta) = syscall::metadata(&path)
-                    && meta.is_dir {
-                        expand_glob_segments(&path, remaining, results);
-                    }
+                    && meta.is_dir
+                {
+                    expand_glob_segments(&path, remaining, results);
+                }
             }
         }
     }
@@ -1293,7 +1300,11 @@ fn expand_glob_recursive(base: &str, pattern: &str, results: &mut Vec<String>) {
     // Split on ** to get prefix and suffix
     let parts: Vec<&str> = pattern.splitn(2, "**").collect();
     let prefix = parts[0].trim_end_matches('/');
-    let suffix = if parts.len() > 1 { parts[1].trim_start_matches('/') } else { "" };
+    let suffix = if parts.len() > 1 {
+        parts[1].trim_start_matches('/')
+    } else {
+        ""
+    };
 
     // Start directory
     let start_dir = if prefix.is_empty() {
@@ -1330,17 +1341,19 @@ fn expand_glob_traverse(dir: &str, suffix: &str, results: &mut Vec<String>) {
             if glob_match(segments[0], &entry) {
                 // Check if remaining segments match
                 if let Ok(meta) = syscall::metadata(&path)
-                    && meta.is_dir {
-                        expand_glob_segments(&path, &segments[1..], results);
-                    }
+                    && meta.is_dir
+                {
+                    expand_glob_segments(&path, &segments[1..], results);
+                }
             }
         }
 
         // Recurse into directories
         if let Ok(meta) = syscall::metadata(&path)
-            && meta.is_dir {
-                expand_glob_traverse(&path, suffix, results);
-            }
+            && meta.is_dir
+        {
+            expand_glob_traverse(&path, suffix, results);
+        }
     }
 }
 
@@ -1352,12 +1365,12 @@ impl Default for Executor {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::programs;
+    use super::*;
 
     fn setup_kernel() {
         use crate::kernel::syscall::{KERNEL, Kernel};
-        use crate::kernel::users::{Uid, Gid};
+        use crate::kernel::users::{Gid, Uid};
         KERNEL.with(|k| {
             *k.borrow_mut() = Kernel::new();
             let pid = k.borrow_mut().spawn_process("shell", None);
@@ -1458,8 +1471,16 @@ mod tests {
         // ls with current directory (relative path)
         let result = exec.execute_line("ls .");
         assert_eq!(result.code, 0, "ls . failed: {}", result.error);
-        assert!(result.output.contains("file1.txt"), "ls output missing file1.txt: {}", result.output);
-        assert!(result.output.contains("file2.txt"), "ls output missing file2.txt: {}", result.output);
+        assert!(
+            result.output.contains("file1.txt"),
+            "ls output missing file1.txt: {}",
+            result.output
+        );
+        assert!(
+            result.output.contains("file2.txt"),
+            "ls output missing file2.txt: {}",
+            result.output
+        );
     }
 
     #[test]
@@ -1475,7 +1496,11 @@ mod tests {
         // ls without arguments should list current directory
         let result = exec.execute_line("ls");
         assert_eq!(result.code, 0, "ls failed: {}", result.error);
-        assert!(result.output.contains("myfile.txt"), "ls output missing myfile.txt: {}", result.output);
+        assert!(
+            result.output.contains("myfile.txt"),
+            "ls output missing myfile.txt: {}",
+            result.output
+        );
     }
 
     #[test]
@@ -1491,7 +1516,11 @@ mod tests {
         // cat with relative path
         let result = exec.execute_line("cat greeting.txt");
         assert_eq!(result.code, 0, "cat failed: {}", result.error);
-        assert!(result.output.contains("hello world"), "cat output wrong: {}", result.output);
+        assert!(
+            result.output.contains("hello world"),
+            "cat output wrong: {}",
+            result.output
+        );
     }
 
     #[test]
@@ -1547,8 +1576,16 @@ mod tests {
         // Strip ANSI codes for easier checking
         let plain = strip_ansi(&stdout);
         assert!(plain.contains("apple"), "stdout missing apple: {:?}", plain);
-        assert!(plain.contains("apricot"), "stdout missing apricot: {:?}", plain);
-        assert!(!plain.contains("banana"), "stdout should not have banana: {:?}", plain);
+        assert!(
+            plain.contains("apricot"),
+            "stdout missing apricot: {:?}",
+            plain
+        );
+        assert!(
+            !plain.contains("banana"),
+            "stdout should not have banana: {:?}",
+            plain
+        );
     }
 
     /// Strip ANSI escape codes from a string
@@ -1726,8 +1763,16 @@ mod tests {
         // Verify both lines exist
         let result = exec.execute_line("cat /tmp/test_append.txt");
         assert_eq!(result.code, 0, "cat failed: {}", result.error);
-        assert!(result.output.contains("line1"), "missing line1 in: {:?}", result.output);
-        assert!(result.output.contains("line2"), "missing line2 in: {:?}", result.output);
+        assert!(
+            result.output.contains("line1"),
+            "missing line1 in: {:?}",
+            result.output
+        );
+        assert!(
+            result.output.contains("line2"),
+            "missing line2 in: {:?}",
+            result.output
+        );
     }
 
     #[test]
@@ -1753,7 +1798,8 @@ mod tests {
         exec.execute_line("echo banana >> /tmp/test_pipe_src.txt");
 
         // Pipeline with final output redirect
-        let result = exec.execute_line("cat /tmp/test_pipe_src.txt | sort > /tmp/test_pipe_dst.txt");
+        let result =
+            exec.execute_line("cat /tmp/test_pipe_src.txt | sort > /tmp/test_pipe_dst.txt");
         assert_eq!(result.code, 0);
 
         // Verify sorted output

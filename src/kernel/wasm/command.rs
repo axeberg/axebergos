@@ -104,10 +104,11 @@ impl WasmCommandRunner {
     fn is_valid_wasm(&self, path: &str) -> bool {
         // Check file exists and is a regular file
         if let Ok(meta) = syscall::metadata(path)
-            && meta.is_file {
-                // Optionally check WASM magic number
-                return true;
-            }
+            && meta.is_file
+        {
+            // Optionally check WASM magic number
+            return true;
+        }
         false
     }
 
@@ -251,10 +252,9 @@ impl WasmCommandRunner {
                     } else if !entry.contains('.') {
                         // File without extension might also be WASM
                         let full_path = format!("{}/{}", dir, entry);
-                        if self.is_valid_wasm(&full_path)
-                            && !commands.contains(&entry) {
-                                commands.push(entry);
-                            }
+                        if self.is_valid_wasm(&full_path) && !commands.contains(&entry) {
+                            commands.push(entry);
+                        }
                     }
                 }
             }

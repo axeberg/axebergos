@@ -195,7 +195,6 @@ fn test_alias_basic() {
     assert_eq!(stdout.trim(), "hello");
 }
 
-
 // ============================================================================
 // File Operations
 // ============================================================================
@@ -355,7 +354,10 @@ fn test_logical_with_file_ops() {
     let mut exec = init_test();
 
     // Create file only if directory creation succeeds
-    run_cmd(&mut exec, "mkdir /tmp/i_logic && touch /tmp/i_logic/file.txt");
+    run_cmd(
+        &mut exec,
+        "mkdir /tmp/i_logic && touch /tmp/i_logic/file.txt",
+    );
 
     let (stdout, _, code) = run_cmd(&mut exec, "ls /tmp/i_logic");
     assert_eq!(code, 0);

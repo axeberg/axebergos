@@ -6,7 +6,10 @@ use crate::kernel::syscall;
 pub fn prog_pkg(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(&args, "Usage: pkg <command> [args]\n\nPackage manager for axeberg.\n\nCommands:\n  install <name> <script>   Install a package (script content)\n  remove <name>             Remove a package\n  list                      List installed packages\n  run <name> [args]         Run an installed package\n  info <name>               Show package info\n\nPackages are stored in /var/packages/") {
+    if let Some(help) = check_help(
+        &args,
+        "Usage: pkg <command> [args]\n\nPackage manager for axeberg.\n\nCommands:\n  install <name> <script>   Install a package (script content)\n  remove <name>             Remove a package\n  list                      List installed packages\n  run <name> [args]         Run an installed package\n  info <name>               Show package info\n\nPackages are stored in /var/packages/",
+    ) {
         stdout.push_str(&help);
         return 0;
     }
@@ -51,7 +54,10 @@ pub fn prog_pkg(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mu
                     0
                 }
                 Err(e) => {
-                    stderr.push_str(&format!("pkg install: failed to install '{}': {:?}\n", name, e));
+                    stderr.push_str(&format!(
+                        "pkg install: failed to install '{}': {:?}\n",
+                        name, e
+                    ));
                     1
                 }
             }
@@ -75,25 +81,23 @@ pub fn prog_pkg(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mu
                 }
             }
         }
-        "list" | "ls" => {
-            match syscall::readdir("/var/packages") {
-                Ok(entries) => {
-                    if entries.is_empty() {
-                        stdout.push_str("No packages installed.\n");
-                    } else {
-                        stdout.push_str("Installed packages:\n");
-                        for entry in entries {
-                            stdout.push_str(&format!("  {}\n", entry));
-                        }
-                    }
-                    0
-                }
-                Err(_) => {
+        "list" | "ls" => match syscall::readdir("/var/packages") {
+            Ok(entries) => {
+                if entries.is_empty() {
                     stdout.push_str("No packages installed.\n");
-                    0
+                } else {
+                    stdout.push_str("Installed packages:\n");
+                    for entry in entries {
+                        stdout.push_str(&format!("  {}\n", entry));
+                    }
                 }
+                0
             }
-        }
+            Err(_) => {
+                stdout.push_str("No packages installed.\n");
+                0
+            }
+        },
         "run" | "exec" => {
             if args.len() < 2 {
                 stderr.push_str("pkg run: usage: pkg run <name> [args]\n");
@@ -124,7 +128,10 @@ pub fn prog_pkg(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mu
                         }
                         Err(e) => {
                             let _ = syscall::close(fd);
-                            stderr.push_str(&format!("pkg run: failed to read '{}': {:?}\n", name, e));
+                            stderr.push_str(&format!(
+                                "pkg run: failed to read '{}': {:?}\n",
+                                name, e
+                            ));
                             1
                         }
                     }
@@ -231,7 +238,11 @@ mod tests {
 
     #[test]
     fn test_pkg_install_invalid_name() {
-        let args = vec!["install".to_string(), "bad/name".to_string(), "echo test".to_string()];
+        let args = vec![
+            "install".to_string(),
+            "bad/name".to_string(),
+            "echo test".to_string(),
+        ];
         let mut stdout = String::new();
         let mut stderr = String::new();
         let result = prog_pkg(&args, "", &mut stdout, &mut stderr);

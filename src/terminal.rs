@@ -18,8 +18,8 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
+use wasm_bindgen::prelude::*;
 
 use crate::kernel::syscall;
 use crate::shell;
@@ -276,7 +276,10 @@ fn word_end(buffer: &str, pos: usize) -> usize {
 fn complete(buffer: &str, cursor: usize) -> Option<(String, usize)> {
     // Find the word being completed
     let before_cursor = &buffer[..cursor];
-    let word_start = before_cursor.rfind(|c: char| c.is_whitespace()).map(|i| i + 1).unwrap_or(0);
+    let word_start = before_cursor
+        .rfind(|c: char| c.is_whitespace())
+        .map(|i| i + 1)
+        .unwrap_or(0);
     let prefix = &before_cursor[word_start..];
 
     if prefix.is_empty() {
@@ -293,9 +296,18 @@ fn complete(buffer: &str, cursor: usize) -> Option<(String, usize)> {
     }
 }
 
-fn complete_path(prefix: &str, buffer: &str, cursor: usize, word_start: usize) -> Option<(String, usize)> {
+fn complete_path(
+    prefix: &str,
+    buffer: &str,
+    cursor: usize,
+    word_start: usize,
+) -> Option<(String, usize)> {
     let (dir, file_prefix) = if let Some(last_slash) = prefix.rfind('/') {
-        let dir = if last_slash == 0 { "/" } else { &prefix[..last_slash] };
+        let dir = if last_slash == 0 {
+            "/"
+        } else {
+            &prefix[..last_slash]
+        };
         (dir.to_string(), &prefix[last_slash + 1..])
     } else {
         (".".to_string(), prefix)
@@ -327,7 +339,11 @@ fn complete_path(prefix: &str, buffer: &str, cursor: usize, word_start: usize) -
         let stat_path = if full_path.starts_with('/') {
             full_path.clone()
         } else {
-            format!("{}/{}", syscall::getcwd().unwrap_or_default().display(), full_path)
+            format!(
+                "{}/{}",
+                syscall::getcwd().unwrap_or_default().display(),
+                full_path
+            )
         };
         let is_dir = syscall::stat(&stat_path).map(|s| s.is_dir).unwrap_or(false);
         let suffix = if is_dir { "/" } else { " " };
@@ -366,12 +382,17 @@ fn complete_path(prefix: &str, buffer: &str, cursor: usize, word_start: usize) -
     }
 }
 
-fn complete_command(prefix: &str, buffer: &str, cursor: usize, word_start: usize) -> Option<(String, usize)> {
+fn complete_command(
+    prefix: &str,
+    buffer: &str,
+    cursor: usize,
+    word_start: usize,
+) -> Option<(String, usize)> {
     // Built-in commands
     let builtins = [
-        "cd", "pwd", "exit", "echo", "export", "unset", "env", "true", "false", "help",
-        "ls", "cat", "mkdir", "touch", "rm", "cp", "mv", "grep", "head", "tail",
-        "sort", "uniq", "wc", "tee", "clear", "history", "edit", "tree", "ln", "readlink",
+        "cd", "pwd", "exit", "echo", "export", "unset", "env", "true", "false", "help", "ls",
+        "cat", "mkdir", "touch", "rm", "cp", "mv", "grep", "head", "tail", "sort", "uniq", "wc",
+        "tee", "clear", "history", "edit", "tree", "ln", "readlink",
     ];
 
     let matches: Vec<_> = builtins.iter().filter(|c| c.starts_with(prefix)).collect();
@@ -392,12 +413,7 @@ fn complete_command(prefix: &str, buffer: &str, cursor: usize, word_start: usize
     } else {
         let common = common_prefix_str(&matches);
         if common.len() > prefix.len() {
-            let new_buffer = format!(
-                "{}{}{}",
-                &buffer[..word_start],
-                common,
-                &buffer[cursor..]
-            );
+            let new_buffer = format!("{}{}{}", &buffer[..word_start], common, &buffer[cursor..]);
             let new_cursor = word_start + common.len();
             Some((new_buffer, new_cursor))
         } else {
@@ -672,9 +688,14 @@ fn setup_keyboard_handler(term: Rc<XTerm>) {
                                     if query_str.is_empty() {
                                         SEARCH_RESULT_IDX.with(|idx| *idx.borrow_mut() = None);
                                         show_search_prompt(&term_for_closure, "", None);
-                                    } else if let Some((i, cmd)) = search_history(&query_str, None) {
+                                    } else if let Some((i, cmd)) = search_history(&query_str, None)
+                                    {
                                         SEARCH_RESULT_IDX.with(|idx| *idx.borrow_mut() = Some(i));
-                                        show_search_prompt(&term_for_closure, &query_str, Some(&cmd));
+                                        show_search_prompt(
+                                            &term_for_closure,
+                                            &query_str,
+                                            Some(&cmd),
+                                        );
                                     } else {
                                         show_search_prompt(&term_for_closure, &query_str, None);
                                     }
@@ -692,8 +713,13 @@ fn setup_keyboard_handler(term: Rc<XTerm>) {
                                         let query_str = query.clone();
                                         drop(query);
                                         if let Some((i, cmd)) = search_history(&query_str, None) {
-                                            SEARCH_RESULT_IDX.with(|idx| *idx.borrow_mut() = Some(i));
-                                            show_search_prompt(&term_for_closure, &query_str, Some(&cmd));
+                                            SEARCH_RESULT_IDX
+                                                .with(|idx| *idx.borrow_mut() = Some(i));
+                                            show_search_prompt(
+                                                &term_for_closure,
+                                                &query_str,
+                                                Some(&cmd),
+                                            );
                                         } else {
                                             show_search_prompt(&term_for_closure, &query_str, None);
                                         }
@@ -835,7 +861,12 @@ fn setup_keyboard_handler(term: Rc<XTerm>) {
                                     if *hist_pos > 0 {
                                         *hist_pos -= 1;
                                         let cmd = &history[*hist_pos];
-                                        replace_line(&term_for_closure, &mut buffer, &mut cursor, cmd);
+                                        replace_line(
+                                            &term_for_closure,
+                                            &mut buffer,
+                                            &mut cursor,
+                                            cmd,
+                                        );
                                     }
                                 });
                             });
@@ -853,10 +884,20 @@ fn setup_keyboard_handler(term: Rc<XTerm>) {
                                         *hist_pos += 1;
                                         if *hist_pos == history.len() {
                                             let saved = s.borrow().clone();
-                                            replace_line(&term_for_closure, &mut buffer, &mut cursor, &saved);
+                                            replace_line(
+                                                &term_for_closure,
+                                                &mut buffer,
+                                                &mut cursor,
+                                                &saved,
+                                            );
                                         } else {
                                             let cmd = &history[*hist_pos];
-                                            replace_line(&term_for_closure, &mut buffer, &mut cursor, cmd);
+                                            replace_line(
+                                                &term_for_closure,
+                                                &mut buffer,
+                                                &mut cursor,
+                                                cmd,
+                                            );
                                         }
                                     }
                                 });
@@ -945,10 +986,20 @@ fn setup_keyboard_handler(term: Rc<XTerm>) {
                                         *hist_pos += 1;
                                         if *hist_pos == history.len() {
                                             let saved = s.borrow().clone();
-                                            replace_line(&term_for_closure, &mut buffer, &mut cursor, &saved);
+                                            replace_line(
+                                                &term_for_closure,
+                                                &mut buffer,
+                                                &mut cursor,
+                                                &saved,
+                                            );
                                         } else {
                                             let cmd = &history[*hist_pos];
-                                            replace_line(&term_for_closure, &mut buffer, &mut cursor, cmd);
+                                            replace_line(
+                                                &term_for_closure,
+                                                &mut buffer,
+                                                &mut cursor,
+                                                cmd,
+                                            );
                                         }
                                     }
                                 });
@@ -974,7 +1025,12 @@ fn setup_keyboard_handler(term: Rc<XTerm>) {
                                     if *hist_pos > 0 {
                                         *hist_pos -= 1;
                                         let cmd = &history[*hist_pos];
-                                        replace_line(&term_for_closure, &mut buffer, &mut cursor, cmd);
+                                        replace_line(
+                                            &term_for_closure,
+                                            &mut buffer,
+                                            &mut cursor,
+                                            cmd,
+                                        );
                                     }
                                 });
                             });
@@ -1160,10 +1216,8 @@ fn setup_resize_handler(fit_addon: Rc<XTermFitAddon>) {
     }) as Box<dyn FnMut()>);
 
     if let Some(window) = web_sys::window() {
-        let _ = window.add_event_listener_with_callback(
-            "resize",
-            callback.as_ref().unchecked_ref(),
-        );
+        let _ =
+            window.add_event_listener_with_callback("resize", callback.as_ref().unchecked_ref());
     }
     callback.forget();
 }

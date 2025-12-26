@@ -225,10 +225,7 @@ impl Read for PipeObject {
             if self.write_closed {
                 return Ok(0); // EOF
             }
-            return Err(io::Error::new(
-                io::ErrorKind::WouldBlock,
-                "pipe empty",
-            ));
+            return Err(io::Error::new(io::ErrorKind::WouldBlock, "pipe empty"));
         }
 
         let to_read = buf.len().min(self.buffer.len());
@@ -257,10 +254,7 @@ impl Write for PipeObject {
 
         let available = self.capacity - self.buffer.len();
         if available == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::WouldBlock,
-                "pipe full",
-            ));
+            return Err(io::Error::new(io::ErrorKind::WouldBlock, "pipe full"));
         }
 
         let to_write = buf.len().min(available);
@@ -496,10 +490,7 @@ impl ObjectTable {
 
     /// Get the current reference count for a handle
     pub fn refcount(&self, handle: Handle) -> usize {
-        self.objects
-            .get(&handle)
-            .map(|e| e.refcount)
-            .unwrap_or(0)
+        self.objects.get(&handle).map(|e| e.refcount).unwrap_or(0)
     }
 
     /// Get an object by handle
@@ -540,12 +531,7 @@ mod tests {
 
     #[test]
     fn test_file_read_write() {
-        let mut file = FileObject::new(
-            PathBuf::from("/test.txt"),
-            Vec::new(),
-            true,
-            true,
-        );
+        let mut file = FileObject::new(PathBuf::from("/test.txt"), Vec::new(), true, true);
 
         // Write
         let written = file.write(b"Hello, World!").unwrap();

@@ -252,7 +252,12 @@ impl ProcessMemory {
     }
 
     /// Allocate a new memory region
-    pub fn allocate(&mut self, id: RegionId, size: usize, prot: Protection) -> Result<(), MemoryError> {
+    pub fn allocate(
+        &mut self,
+        id: RegionId,
+        size: usize,
+        prot: Protection,
+    ) -> Result<(), MemoryError> {
         if size == 0 {
             return Err(MemoryError::InvalidSize);
         }
@@ -309,7 +314,11 @@ impl ProcessMemory {
     }
 
     /// Attach a shared memory segment
-    pub fn attach_shm(&mut self, shm_id: ShmId, region: MemoryRegion) -> Result<RegionId, MemoryError> {
+    pub fn attach_shm(
+        &mut self,
+        shm_id: ShmId,
+        region: MemoryRegion,
+    ) -> Result<RegionId, MemoryError> {
         if self.attached_shm.contains_key(&shm_id) {
             return Err(MemoryError::AlreadyAttached);
         }
@@ -330,7 +339,10 @@ impl ProcessMemory {
 
     /// Detach a shared memory segment
     pub fn detach_shm(&mut self, shm_id: ShmId) -> Result<(), MemoryError> {
-        let region_id = self.attached_shm.remove(&shm_id).ok_or(MemoryError::NotAttached)?;
+        let region_id = self
+            .attached_shm
+            .remove(&shm_id)
+            .ok_or(MemoryError::NotAttached)?;
 
         if let Some(region) = self.regions.remove(&region_id) {
             self.allocated = self.allocated.saturating_sub(region.size);
@@ -527,7 +539,10 @@ impl MemoryManager {
         // Allocate region ID first to avoid borrow conflict
         let region_id = self.alloc_region_id();
 
-        let shm = self.shared_segments.get_mut(&shm_id).ok_or(MemoryError::ShmNotFound)?;
+        let shm = self
+            .shared_segments
+            .get_mut(&shm_id)
+            .ok_or(MemoryError::ShmNotFound)?;
 
         // Attach the process
         shm.attach(pid);
@@ -543,21 +558,26 @@ impl MemoryManager {
 
     /// Detach from a shared memory segment
     pub fn shmdt(&mut self, shm_id: ShmId, pid: Pid) -> Result<bool, MemoryError> {
-        let shm = self.shared_segments.get_mut(&shm_id).ok_or(MemoryError::ShmNotFound)?;
+        let shm = self
+            .shared_segments
+            .get_mut(&shm_id)
+            .ok_or(MemoryError::ShmNotFound)?;
 
         let should_remove = shm.detach(pid);
 
-        if should_remove
-            && let Some(removed) = self.shared_segments.remove(&shm_id) {
-                self.total_allocated = self.total_allocated.saturating_sub(removed.size);
-            }
+        if should_remove && let Some(removed) = self.shared_segments.remove(&shm_id) {
+            self.total_allocated = self.total_allocated.saturating_sub(removed.size);
+        }
 
         Ok(should_remove)
     }
 
     /// Sync shared memory (write local changes back to shared segment)
     pub fn shm_sync(&mut self, shm_id: ShmId, data: &[u8]) -> Result<(), MemoryError> {
-        let shm = self.shared_segments.get_mut(&shm_id).ok_or(MemoryError::ShmNotFound)?;
+        let shm = self
+            .shared_segments
+            .get_mut(&shm_id)
+            .ok_or(MemoryError::ShmNotFound)?;
 
         if data.len() != shm.size {
             return Err(MemoryError::InvalidSize);
@@ -569,13 +589,19 @@ impl MemoryManager {
 
     /// Get shared memory data (for reading latest)
     pub fn shm_read(&self, shm_id: ShmId) -> Result<&[u8], MemoryError> {
-        let shm = self.shared_segments.get(&shm_id).ok_or(MemoryError::ShmNotFound)?;
+        let shm = self
+            .shared_segments
+            .get(&shm_id)
+            .ok_or(MemoryError::ShmNotFound)?;
         Ok(shm.data())
     }
 
     /// Get shared memory info
     pub fn shm_info(&self, shm_id: ShmId) -> Result<ShmInfo, MemoryError> {
-        let shm = self.shared_segments.get(&shm_id).ok_or(MemoryError::ShmNotFound)?;
+        let shm = self
+            .shared_segments
+            .get(&shm_id)
+            .ok_or(MemoryError::ShmNotFound)?;
         Ok(ShmInfo {
             id: shm_id,
             size: shm.size,
@@ -669,10 +695,7 @@ mod tests {
         assert!(region.read(0, &mut buf).is_ok());
 
         // Cannot write
-        assert_eq!(
-            region.write(0, b"test"),
-            Err(MemoryError::PermissionDenied)
-        );
+        assert_eq!(region.write(0, b"test"), Err(MemoryError::PermissionDenied));
     }
 
     #[test]
@@ -715,11 +738,13 @@ mod tests {
         let mut mem = ProcessMemory::with_limit(1000);
 
         // Allocate within limit
-        mem.allocate(RegionId(1), 500, Protection::READ_WRITE).unwrap();
+        mem.allocate(RegionId(1), 500, Protection::READ_WRITE)
+            .unwrap();
         assert_eq!(mem.allocated(), 500);
 
         // Allocate more within limit
-        mem.allocate(RegionId(2), 400, Protection::READ_WRITE).unwrap();
+        mem.allocate(RegionId(2), 400, Protection::READ_WRITE)
+            .unwrap();
         assert_eq!(mem.allocated(), 900);
 
         // Exceed limit
@@ -730,7 +755,8 @@ mod tests {
 
         // Free and allocate again
         mem.free(RegionId(1)).unwrap();
-        mem.allocate(RegionId(3), 200, Protection::READ_WRITE).unwrap();
+        mem.allocate(RegionId(3), 200, Protection::READ_WRITE)
+            .unwrap();
         assert_eq!(mem.allocated(), 600);
     }
 
@@ -738,8 +764,10 @@ mod tests {
     fn test_process_memory_peak() {
         let mut mem = ProcessMemory::new();
 
-        mem.allocate(RegionId(1), 1000, Protection::READ_WRITE).unwrap();
-        mem.allocate(RegionId(2), 500, Protection::READ_WRITE).unwrap();
+        mem.allocate(RegionId(1), 1000, Protection::READ_WRITE)
+            .unwrap();
+        mem.allocate(RegionId(2), 500, Protection::READ_WRITE)
+            .unwrap();
         assert_eq!(mem.peak(), 1500);
 
         mem.free(RegionId(1)).unwrap();
@@ -750,8 +778,10 @@ mod tests {
     #[test]
     fn test_process_memory_stats() {
         let mut mem = ProcessMemory::with_limit(5000);
-        mem.allocate(RegionId(1), 1000, Protection::READ_WRITE).unwrap();
-        mem.allocate(RegionId(2), 2000, Protection::READ_WRITE).unwrap();
+        mem.allocate(RegionId(1), 1000, Protection::READ_WRITE)
+            .unwrap();
+        mem.allocate(RegionId(2), 2000, Protection::READ_WRITE)
+            .unwrap();
 
         let stats = mem.stats();
         assert_eq!(stats.allocated, 3000);
@@ -910,6 +940,9 @@ mod tests {
 
         // Try to attach again
         let region2 = mgr.shmat(shm_id, pid, Protection::READ_WRITE).unwrap();
-        assert_eq!(mem.attach_shm(shm_id, region2), Err(MemoryError::AlreadyAttached));
+        assert_eq!(
+            mem.attach_shm(shm_id, region2),
+            Err(MemoryError::AlreadyAttached)
+        );
     }
 }

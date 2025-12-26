@@ -86,7 +86,7 @@ impl Default for Metadata {
             is_file: true,
             is_symlink: false,
             symlink_target: None,
-            uid: 1000,  // Default to regular user
+            uid: 1000, // Default to regular user
             gid: 1000,
             mode: 0o644, // rw-r--r--
         }

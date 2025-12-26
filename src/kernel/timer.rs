@@ -55,7 +55,12 @@ impl Timer {
     }
 
     /// Create a repeating interval timer
-    pub fn interval(id: TimerId, deadline: f64, interval_ms: f64, wake_task: Option<TaskId>) -> Self {
+    pub fn interval(
+        id: TimerId,
+        deadline: f64,
+        interval_ms: f64,
+        wake_task: Option<TaskId>,
+    ) -> Self {
         Self {
             id,
             deadline,
@@ -121,7 +126,10 @@ impl PartialOrd for TimerEntry {
 impl Ord for TimerEntry {
     fn cmp(&self, other: &Self) -> Ordering {
         // Reverse ordering for min-heap (smallest deadline first)
-        other.deadline.partial_cmp(&self.deadline).unwrap_or(Ordering::Equal)
+        other
+            .deadline
+            .partial_cmp(&self.deadline)
+            .unwrap_or(Ordering::Equal)
     }
 }
 
@@ -209,17 +217,19 @@ impl TimerQueue {
             let entry = self.heap.pop().unwrap();
 
             if let Some(timer) = self.timers.get_mut(&entry.id)
-                && timer.state == TimerState::Pending && timer.is_expired(now) {
-                    // Fire the timer
-                    if let Some(task_id) = timer.fire() {
-                        tasks_to_wake.push(task_id);
-                    }
-
-                    // Check if it's an interval timer
-                    if timer.reset_interval(now) {
-                        to_reschedule.push((timer.id, timer.deadline));
-                    }
+                && timer.state == TimerState::Pending
+                && timer.is_expired(now)
+            {
+                // Fire the timer
+                if let Some(task_id) = timer.fire() {
+                    tasks_to_wake.push(task_id);
                 }
+
+                // Check if it's an interval timer
+                if timer.reset_interval(now) {
+                    to_reschedule.push((timer.id, timer.deadline));
+                }
+            }
         }
 
         // Reschedule interval timers
@@ -235,12 +245,17 @@ impl TimerQueue {
 
     /// Get time until next timer fires (for sleep optimization)
     pub fn time_until_next(&self, now: f64) -> Option<f64> {
-        self.heap.peek().map(|entry| (entry.deadline - now).max(0.0))
+        self.heap
+            .peek()
+            .map(|entry| (entry.deadline - now).max(0.0))
     }
 
     /// Number of pending timers
     pub fn pending_count(&self) -> usize {
-        self.timers.values().filter(|t| t.state == TimerState::Pending).count()
+        self.timers
+            .values()
+            .filter(|t| t.state == TimerState::Pending)
+            .count()
     }
 
     /// Get timer info
@@ -250,7 +265,10 @@ impl TimerQueue {
 
     /// Check if a timer exists and is pending
     pub fn is_pending(&self, id: TimerId) -> bool {
-        self.timers.get(&id).map(|t| t.state == TimerState::Pending).unwrap_or(false)
+        self.timers
+            .get(&id)
+            .map(|t| t.state == TimerState::Pending)
+            .unwrap_or(false)
     }
 }
 

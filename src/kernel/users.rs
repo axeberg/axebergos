@@ -58,9 +58,9 @@ impl FileMode {
     pub const S_ISVTX: u16 = 0o1000; // Sticky bit
 
     // Common combinations
-    pub const FILE_DEFAULT: FileMode = FileMode(0o644);   // rw-r--r--
-    pub const DIR_DEFAULT: FileMode = FileMode(0o755);    // rwxr-xr-x
-    pub const EXEC_DEFAULT: FileMode = FileMode(0o755);   // rwxr-xr-x
+    pub const FILE_DEFAULT: FileMode = FileMode(0o644); // rw-r--r--
+    pub const DIR_DEFAULT: FileMode = FileMode(0o755); // rwxr-xr-x
+    pub const EXEC_DEFAULT: FileMode = FileMode(0o755); // rwxr-xr-x
 
     pub fn new(mode: u16) -> Self {
         FileMode(mode & 0o7777) // Mask to valid bits
@@ -128,12 +128,20 @@ impl FileMode {
         s.push(if self.owner_write() { 'w' } else { '-' });
         s.push(if self.is_setuid() {
             if self.owner_exec() { 's' } else { 'S' }
-        } else if self.owner_exec() { 'x' } else { '-' });
+        } else if self.owner_exec() {
+            'x'
+        } else {
+            '-'
+        });
         s.push(if self.group_read() { 'r' } else { '-' });
         s.push(if self.group_write() { 'w' } else { '-' });
         s.push(if self.is_setgid() {
             if self.group_exec() { 's' } else { 'S' }
-        } else if self.group_exec() { 'x' } else { '-' });
+        } else if self.group_exec() {
+            'x'
+        } else {
+            '-'
+        });
         s.push(if self.other_read() { 'r' } else { '-' });
         s.push(if self.other_write() { 'w' } else { '-' });
         s.push(if self.other_exec() { 'x' } else { '-' });
@@ -157,10 +165,10 @@ impl std::fmt::Display for FileMode {
 pub struct User {
     pub name: String,
     pub uid: Uid,
-    pub gid: Gid,           // Primary group
-    pub gecos: String,      // Full name/comment
-    pub home: String,       // Home directory
-    pub shell: String,      // Login shell
+    pub gid: Gid,                      // Primary group
+    pub gecos: String,                 // Full name/comment
+    pub home: String,                  // Home directory
+    pub shell: String,                 // Login shell
     pub password_hash: Option<String>, // None = no password
 }
 
@@ -309,13 +317,17 @@ impl UserDb {
         let mut lines: Vec<_> = self.users.values().collect();
         lines.sort_by_key(|u| u.uid.0);
 
-        lines.iter()
-            .map(|u| format!(
-                "{}:x:{}:{}:{}:{}:{}",
-                u.name, u.uid.0, u.gid.0, u.gecos, u.home, u.shell
-            ))
+        lines
+            .iter()
+            .map(|u| {
+                format!(
+                    "{}:x:{}:{}:{}:{}:{}",
+                    u.name, u.uid.0, u.gid.0, u.gecos, u.home, u.shell
+                )
+            })
             .collect::<Vec<_>>()
-            .join("\n") + "\n"
+            .join("\n")
+            + "\n"
     }
 
     /// Parse /etc/passwd content
@@ -362,13 +374,15 @@ impl UserDb {
         let mut lines: Vec<_> = self.users.values().collect();
         lines.sort_by_key(|u| u.uid.0);
 
-        lines.iter()
+        lines
+            .iter()
             .map(|u| {
                 let hash = u.password_hash.as_deref().unwrap_or("!");
                 format!("{}:{}:19000:0:99999:7:::", u.name, hash)
             })
             .collect::<Vec<_>>()
-            .join("\n") + "\n"
+            .join("\n")
+            + "\n"
     }
 
     /// Parse /etc/shadow content
@@ -403,13 +417,12 @@ impl UserDb {
         let mut lines: Vec<_> = self.groups.values().collect();
         lines.sort_by_key(|g| g.gid.0);
 
-        lines.iter()
-            .map(|g| format!(
-                "{}:x:{}:{}",
-                g.name, g.gid.0, g.members.join(",")
-            ))
+        lines
+            .iter()
+            .map(|g| format!("{}:x:{}:{}", g.name, g.gid.0, g.members.join(",")))
             .collect::<Vec<_>>()
-            .join("\n") + "\n"
+            .join("\n")
+            + "\n"
     }
 
     /// Parse /etc/group content
@@ -435,9 +448,7 @@ impl UserDb {
 
                 let mut group = Group::new(name, gid);
                 if !members_str.is_empty() {
-                    group.members = members_str.split(',')
-                        .map(|s| s.to_string())
-                        .collect();
+                    group.members = members_str.split(',').map(|s| s.to_string()).collect();
                 }
 
                 self.groups.insert(gid, group);
@@ -495,7 +506,9 @@ impl UserDb {
 
     /// Look up user by name
     pub fn get_user_by_name(&self, name: &str) -> Option<&User> {
-        self.users_by_name.get(name).and_then(|uid| self.users.get(uid))
+        self.users_by_name
+            .get(name)
+            .and_then(|uid| self.users.get(uid))
     }
 
     /// Look up user mutably by UID
@@ -516,7 +529,9 @@ impl UserDb {
 
     /// Look up group by name
     pub fn get_group_by_name(&self, name: &str) -> Option<&Group> {
-        self.groups_by_name.get(name).and_then(|gid| self.groups.get(gid))
+        self.groups_by_name
+            .get(name)
+            .and_then(|gid| self.groups.get(gid))
     }
 
     /// Look up group mutably by GID
@@ -597,13 +612,25 @@ pub fn check_permission(
     // Determine which permission bits to check
     let (r, w, x) = if user_uid == file_uid {
         // Owner permissions
-        (file_mode.owner_read(), file_mode.owner_write(), file_mode.owner_exec())
+        (
+            file_mode.owner_read(),
+            file_mode.owner_write(),
+            file_mode.owner_exec(),
+        )
     } else if user_gid == file_gid || user_groups.contains(&file_gid) {
         // Group permissions
-        (file_mode.group_read(), file_mode.group_write(), file_mode.group_exec())
+        (
+            file_mode.group_read(),
+            file_mode.group_write(),
+            file_mode.group_exec(),
+        )
     } else {
         // Other permissions
-        (file_mode.other_read(), file_mode.other_write(), file_mode.other_exec())
+        (
+            file_mode.other_read(),
+            file_mode.other_write(),
+            file_mode.other_exec(),
+        )
     };
 
     // Check requested permissions
@@ -669,17 +696,77 @@ mod tests {
         let file_gid = Gid(1000);
 
         // Owner
-        assert!(check_permission(file_uid, file_gid, mode, Uid(1000), Gid(1000), &[], true, false, false));
-        assert!(check_permission(file_uid, file_gid, mode, Uid(1000), Gid(1000), &[], true, true, false));
+        assert!(check_permission(
+            file_uid,
+            file_gid,
+            mode,
+            Uid(1000),
+            Gid(1000),
+            &[],
+            true,
+            false,
+            false
+        ));
+        assert!(check_permission(
+            file_uid,
+            file_gid,
+            mode,
+            Uid(1000),
+            Gid(1000),
+            &[],
+            true,
+            true,
+            false
+        ));
 
         // Group member
-        assert!(check_permission(file_uid, file_gid, mode, Uid(1001), Gid(1000), &[], true, false, false));
-        assert!(!check_permission(file_uid, file_gid, mode, Uid(1001), Gid(1000), &[], true, true, false));
+        assert!(check_permission(
+            file_uid,
+            file_gid,
+            mode,
+            Uid(1001),
+            Gid(1000),
+            &[],
+            true,
+            false,
+            false
+        ));
+        assert!(!check_permission(
+            file_uid,
+            file_gid,
+            mode,
+            Uid(1001),
+            Gid(1000),
+            &[],
+            true,
+            true,
+            false
+        ));
 
         // Other
-        assert!(!check_permission(file_uid, file_gid, mode, Uid(1001), Gid(1001), &[], true, false, false));
+        assert!(!check_permission(
+            file_uid,
+            file_gid,
+            mode,
+            Uid(1001),
+            Gid(1001),
+            &[],
+            true,
+            false,
+            false
+        ));
 
         // Root can do anything
-        assert!(check_permission(file_uid, file_gid, mode, Uid::ROOT, Gid::ROOT, &[], true, true, true));
+        assert!(check_permission(
+            file_uid,
+            file_gid,
+            mode,
+            Uid::ROOT,
+            Gid::ROOT,
+            &[],
+            true,
+            true,
+            true
+        ));
     }
 }
