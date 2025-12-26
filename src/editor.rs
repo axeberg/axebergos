@@ -172,8 +172,6 @@ pub fn handle_paste(text: &str) {
 }
 
 // ANSI escape sequences
-#[allow(dead_code)]
-const CLEAR_SCREEN: &str = "\x1b[2J";
 const CURSOR_HOME: &str = "\x1b[H";
 const CLEAR_LINE: &str = "\x1b[K";
 const CURSOR_HIDE: &str = "\x1b[?25l";
@@ -380,9 +378,6 @@ pub struct Editor {
     prompt_mode: PromptMode,
     /// Copied row for paste
     copied_row: Option<String>,
-    /// Search direction (true = forward)
-    #[allow(dead_code)]
-    search_forward: bool,
     /// Last search match position
     last_match: Option<(usize, usize)>,
 }
@@ -403,7 +398,6 @@ impl Editor {
             quit_times: 2,
             prompt_mode: PromptMode::None,
             copied_row: None,
-            search_forward: true,
             last_match: None,
         }
     }
