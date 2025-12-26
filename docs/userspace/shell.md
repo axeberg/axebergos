@@ -79,8 +79,6 @@ Programs run via the executor with full pipe/redirect support:
 | `mv <src> <dst>` | Move/rename file |
 | `ln [-s] <target> <link>` | Create hard/symbolic link |
 | `readlink <link>` | Print symlink target |
-| `stat <path>` | Display file status |
-| `file <path>` | Determine file type |
 
 ### Text Processing
 
@@ -94,8 +92,6 @@ Programs run via the executor with full pipe/redirect support:
 | `uniq [-c] [-d] [file]` | Remove duplicate adjacent lines |
 | `cut -d<delim> -f<fields> [file]` | Extract fields |
 | `tr <set1> <set2>` | Translate characters |
-| `sed <script> [file]` | Stream editor |
-| `awk <program> [file]` | Pattern scanning |
 | `diff <file1> <file2>` | Compare files |
 | `comm <file1> <file2>` | Compare sorted files |
 
@@ -319,7 +315,7 @@ impl Executor {
 
 Programs are simple functions:
 ```rust
-type Program = fn(args: &[String], stdout: &mut String, stderr: &mut String) -> i32;
+type ProgramFn = fn(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32;
 ```
 
 ## Terminal
@@ -376,21 +372,7 @@ $ cat greeting.txt | wc
       1       2      16
 
 $ help
-Built-in commands:
-  cd <path>     - Change directory
-  pwd           - Print working directory
-  exit [code]   - Exit shell
-  export VAR=val - Set environment variable
-  ...
-
-Programs:
-  File: cat, ls, mkdir, touch, rm, cp, mv, ln, stat
-  Text: head, tail, wc, grep, sort, uniq, cut, tr, sed, awk
-  System: ps, kill, mount, df, free, uname, uptime
-  User: id, whoami, groups, su, sudo, chmod, chown
-  Service: systemctl, reboot, poweroff
-  IPC: mkfifo, ipcs, ipcrm
-  TTY: tty, stty
+(lists available commands - see man pages for details)
 ```
 
 ## Related Documentation

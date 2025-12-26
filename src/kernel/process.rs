@@ -373,47 +373,38 @@ impl Process {
         }
     }
 
-    /// Check if this process is the session leader
     pub fn is_session_leader(&self) -> bool {
         self.is_session_leader && self.sid.0 == self.pid.0
     }
 
-    /// Get session ID
     pub fn getsid(&self) -> Sid {
         self.sid
     }
 
-    /// Get an environment variable
     pub fn getenv(&self, name: &str) -> Option<&str> {
         self.environ.get(name).map(|s| s.as_str())
     }
 
-    /// Set an environment variable
     pub fn setenv(&mut self, name: &str, value: &str) {
         self.environ.insert(name.to_string(), value.to_string());
     }
 
-    /// Remove an environment variable
     pub fn unsetenv(&mut self, name: &str) -> bool {
         self.environ.remove(name).is_some()
     }
 
-    /// Get all environment variables
     pub fn environ(&self) -> &HashMap<String, String> {
         &self.environ
     }
 
-    /// Check if process is alive (not a zombie)
     pub fn is_alive(&self) -> bool {
         !matches!(self.state, ProcessState::Zombie(_))
     }
 
-    /// Check if process is stopped
     pub fn is_stopped(&self) -> bool {
         matches!(self.state, ProcessState::Stopped)
     }
 
-    /// Check if process can run (not stopped, not zombie)
     pub fn can_run(&self) -> bool {
         matches!(self.state, ProcessState::Running | ProcessState::Sleeping)
     }
@@ -435,7 +426,6 @@ impl FileTable {
         }
     }
 
-    /// Allocate a new file descriptor
     pub fn alloc(&mut self, handle: Handle) -> Fd {
         let fd = Fd(self.next_fd);
         self.next_fd += 1;
@@ -443,22 +433,18 @@ impl FileTable {
         fd
     }
 
-    /// Insert at a specific fd (for stdin/stdout/stderr)
     pub fn insert(&mut self, fd: Fd, handle: Handle) {
         self.table.insert(fd, handle);
     }
 
-    /// Get a handle by fd
     pub fn get(&self, fd: Fd) -> Option<Handle> {
         self.table.get(&fd).copied()
     }
 
-    /// Remove a file descriptor
     pub fn remove(&mut self, fd: Fd) -> Option<Handle> {
         self.table.remove(&fd)
     }
 
-    /// Check if fd exists
     pub fn contains(&self, fd: Fd) -> bool {
         self.table.contains_key(&fd)
     }

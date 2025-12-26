@@ -449,9 +449,7 @@ pub struct Kernel {
 /// In WASM environments, this uses the Web Crypto API (crypto.getRandomValues).
 fn generate_random_bytes(len: usize) -> Vec<u8> {
     let mut buf = vec![0u8; len];
-    // getrandom uses crypto.getRandomValues in WASM (via js feature)
-    // This is cryptographically secure, unlike the previous xorshift64 implementation
-    getrandom::getrandom(&mut buf).expect("getrandom failed - crypto API unavailable");
+    getrandom::fill(&mut buf).expect("getrandom failed - crypto API unavailable");
     buf
 }
 
@@ -503,12 +501,10 @@ impl Kernel {
         kernel
     }
 
-    /// Get a reference to the VFS
     pub fn vfs(&self) -> &MemoryFs {
         &self.vfs
     }
 
-    /// Get a mutable reference to the VFS
     pub fn vfs_mut(&mut self) -> &mut MemoryFs {
         &mut self.vfs
     }
@@ -518,77 +514,62 @@ impl Kernel {
         self.vfs = vfs;
     }
 
-    /// Get a reference to the init system
     pub fn init(&self) -> &InitSystem {
         &self.init
     }
 
-    /// Get a mutable reference to the init system
     pub fn init_mut(&mut self) -> &mut InitSystem {
         &mut self.init
     }
 
-    /// Get reference to FIFO registry
     pub fn fifos(&self) -> &FifoRegistry {
         &self.fifos
     }
 
-    /// Get mutable reference to FIFO registry
     pub fn fifos_mut(&mut self) -> &mut FifoRegistry {
         &mut self.fifos
     }
 
-    /// Get reference to message queue manager
     pub fn msgqueues(&self) -> &MsgQueueManager {
         &self.msgqueues
     }
 
-    /// Get mutable reference to message queue manager
     pub fn msgqueues_mut(&mut self) -> &mut MsgQueueManager {
         &mut self.msgqueues
     }
 
-    /// Get reference to semaphore manager
     pub fn semaphores(&self) -> &SemaphoreManager {
         &self.semaphores
     }
 
-    /// Get mutable reference to semaphore manager
     pub fn semaphores_mut(&mut self) -> &mut SemaphoreManager {
         &mut self.semaphores
     }
 
-    /// Get reference to mount table
     pub fn mounts(&self) -> &MountTable {
         &self.mounts
     }
 
-    /// Get mutable reference to mount table
     pub fn mounts_mut(&mut self) -> &mut MountTable {
         &mut self.mounts
     }
 
-    /// Get reference to TTY manager
     pub fn ttys(&self) -> &TtyManager {
         &self.ttys
     }
 
-    /// Get mutable reference to TTY manager
     pub fn ttys_mut(&mut self) -> &mut TtyManager {
         &mut self.ttys
     }
 
-    /// Get the currently running process
     pub fn current_process(&self) -> Option<&Process> {
         self.current.and_then(|pid| self.processes.get(&pid))
     }
 
-    /// Get the currently running process mutably
     pub fn current_process_mut(&mut self) -> Option<&mut Process> {
         self.current.and_then(|pid| self.processes.get_mut(&pid))
     }
 
-    /// Set the current process
     pub fn set_current(&mut self, pid: Pid) {
         self.current = Some(pid);
     }
@@ -700,17 +681,14 @@ impl Kernel {
         Ok(process.sid.0)
     }
 
-    /// Get a process by PID
     pub fn get_process(&self, pid: Pid) -> Option<&Process> {
         self.processes.get(&pid)
     }
 
-    /// Get a process mutably
     pub fn get_process_mut(&mut self, pid: Pid) -> Option<&mut Process> {
         self.processes.get_mut(&pid)
     }
 
-    /// Get the console for input/output
     pub fn console(&mut self) -> Option<&mut ConsoleObject> {
         match self.objects.get_mut(self.console_handle) {
             Some(KernelObject::Console(c)) => Some(c),
@@ -720,54 +698,44 @@ impl Kernel {
 
     // ========== TIMER/TICK ==========
 
-    /// Process a kernel tick - updates timers and returns tasks to wake
-    ///
+    /// Process a kernel tick - updates timers and returns tasks to wake.
     /// Call this each frame with the current monotonic time (e.g., performance.now()).
-    /// Returns a list of task IDs that should be woken (timers expired).
     pub fn tick(&mut self, now: f64) -> Vec<TaskId> {
         self.now = now;
         self.timers.tick(now)
     }
 
-    /// Get the current kernel time
     pub fn now(&self) -> f64 {
         self.now
     }
 
     // ========== TRACING ==========
 
-    /// Enable tracing
     pub fn trace_enable(&mut self) {
         self.tracer.enable();
         self.tracer.set_start_time(self.now);
     }
 
-    /// Disable tracing
     pub fn trace_disable(&mut self) {
         self.tracer.disable();
     }
 
-    /// Check if tracing is enabled
     pub fn trace_enabled(&self) -> bool {
         self.tracer.is_enabled()
     }
 
-    /// Get trace summary
     pub fn trace_summary(&self) -> TraceSummary {
         self.tracer.summary(self.now)
     }
 
-    /// Get the tracer (for detailed access)
     pub fn tracer(&self) -> &Tracer {
         &self.tracer
     }
 
-    /// Get the tracer mutably
     pub fn tracer_mut(&mut self) -> &mut Tracer {
         &mut self.tracer
     }
 
-    /// Reset trace data
     pub fn trace_reset(&mut self) {
         self.tracer.reset();
     }
@@ -2217,12 +2185,10 @@ impl Kernel {
         Ok(())
     }
 
-    /// Get user database reference
     pub fn users(&self) -> &UserDb {
         &self.users
     }
 
-    /// Get mutable user database reference
     pub fn users_mut(&mut self) -> &mut UserDb {
         &mut self.users
     }
@@ -2277,22 +2243,18 @@ impl Kernel {
         loaded
     }
 
-    /// Lookup user by name
     pub fn get_user_by_name(&self, name: &str) -> Option<&User> {
         self.users.get_user_by_name(name)
     }
 
-    /// Lookup user by uid
     pub fn get_user_by_uid(&self, uid: Uid) -> Option<&User> {
         self.users.get_user(uid)
     }
 
-    /// Lookup group by name
     pub fn get_group_by_name(&self, name: &str) -> Option<&Group> {
         self.users.get_group_by_name(name)
     }
 
-    /// Lookup group by gid
     pub fn get_group_by_gid(&self, gid: Gid) -> Option<&Group> {
         self.users.get_group(gid)
     }

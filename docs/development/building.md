@@ -109,14 +109,6 @@ cargo run --bin serve
 cargo test
 ```
 
-Currently runs 99 tests covering:
-- Executor scheduling
-- Process management
-- Memory allocation
-- File operations
-- IPC channels
-- Object lifecycle
-
 ### Running Specific Tests
 
 ```bash
