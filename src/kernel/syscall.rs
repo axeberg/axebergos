@@ -449,9 +449,9 @@ pub struct Kernel {
 /// In WASM environments, this uses the Web Crypto API (crypto.getRandomValues).
 fn generate_random_bytes(len: usize) -> Vec<u8> {
     let mut buf = vec![0u8; len];
-    // getrandom uses crypto.getRandomValues in WASM (via js feature)
+    // getrandom uses crypto.getRandomValues in WASM (via wasm_js feature)
     // This is cryptographically secure, unlike the previous xorshift64 implementation
-    getrandom::getrandom(&mut buf).expect("getrandom failed - crypto API unavailable");
+    getrandom::fill(&mut buf).expect("getrandom failed - crypto API unavailable");
     buf
 }
 
