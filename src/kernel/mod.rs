@@ -64,8 +64,8 @@ pub use trace::{TraceCategory, TraceEvent, TraceSummary, Tracer};
 pub use tty::{Termios, Tty, TtyManager};
 pub use users::{FileMode, Gid, Group, Uid, User, UserDb};
 pub use work_stealing::{
-    Config as WorkStealingConfig, Injector, StealResult, Stealer, TaskHandle,
-    WorkStealingExecutor, Worker,
+    Config as WorkStealingConfig, Injector, StealResult, Stealer, TaskHandle, WorkStealingExecutor,
+    Worker,
 };
 
 use std::cell::RefCell;

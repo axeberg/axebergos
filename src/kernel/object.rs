@@ -552,7 +552,7 @@ mod tests {
         let mut pipe = PipeObject::new(1024);
 
         // Write
-        pipe.write(b"test data").unwrap();
+        assert_eq!(pipe.write(b"test data").unwrap(), 9);
 
         // Read
         let mut buf = [0u8; 20];
@@ -573,7 +573,7 @@ mod tests {
         let mut console = ConsoleObject::new();
 
         // Write output
-        console.write(b"Hello\n").unwrap();
+        assert_eq!(console.write(b"Hello\n").unwrap(), 6);
         assert_eq!(console.peek_output(), b"Hello\n");
 
         // Push input

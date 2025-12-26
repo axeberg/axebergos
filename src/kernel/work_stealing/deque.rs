@@ -17,8 +17,8 @@
 
 use std::cell::UnsafeCell;
 use std::mem::MaybeUninit;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Result of a pop or steal operation
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -185,9 +185,10 @@ impl<T: Send> Worker<T> {
 
         // Make the task visible to stealers
         // SeqCst ensures the write above is visible before bottom is incremented
-        self.inner
-            .bottom
-            .store(Inner::<T>::pack_bottom(bottom.wrapping_add(1)), Ordering::SeqCst);
+        self.inner.bottom.store(
+            Inner::<T>::pack_bottom(bottom.wrapping_add(1)),
+            Ordering::SeqCst,
+        );
 
         Ok(())
     }
@@ -222,24 +223,32 @@ impl<T: Send> Worker<T> {
         if size == 1 {
             // Last element - race with stealers
             // Try to claim it by incrementing top
-            let new_packed_top = Inner::<T>::pack_top(generation.wrapping_add(1), top.wrapping_add(1));
+            let new_packed_top =
+                Inner::<T>::pack_top(generation.wrapping_add(1), top.wrapping_add(1));
 
             if self
                 .inner
                 .top
-                .compare_exchange(packed_top, new_packed_top, Ordering::SeqCst, Ordering::Relaxed)
+                .compare_exchange(
+                    packed_top,
+                    new_packed_top,
+                    Ordering::SeqCst,
+                    Ordering::Relaxed,
+                )
                 .is_ok()
             {
                 // We won the race
-                self.inner
-                    .bottom
-                    .store(Inner::<T>::pack_bottom(top.wrapping_add(1)), Ordering::SeqCst);
+                self.inner.bottom.store(
+                    Inner::<T>::pack_bottom(top.wrapping_add(1)),
+                    Ordering::SeqCst,
+                );
                 StealResult::Success(task)
             } else {
                 // A stealer took it, restore bottom
-                self.inner
-                    .bottom
-                    .store(Inner::<T>::pack_bottom(top.wrapping_add(1)), Ordering::SeqCst);
+                self.inner.bottom.store(
+                    Inner::<T>::pack_bottom(top.wrapping_add(1)),
+                    Ordering::SeqCst,
+                );
                 // Note: we already read the task, but the stealer invalidated it
                 // This shouldn't happen in practice as we'd have lost the CAS
                 // The task value is already moved out, stealer got nothing
@@ -321,19 +330,20 @@ impl<T: Send> Stealer<T> {
         let bottom = Inner::<T>::unpack_bottom(self.inner.bottom.load(Ordering::Acquire));
         bottom.wrapping_sub(top) == 0
     }
-
-    /// Clone this stealer handle
-    pub fn clone(&self) -> Stealer<T> {
-        Stealer {
-            inner: self.inner.clone(),
-        }
-    }
 }
 
 // Safety: We ensure thread safety through atomics
 unsafe impl<T: Send> Send for Worker<T> {}
 unsafe impl<T: Send> Send for Stealer<T> {}
 unsafe impl<T: Send> Sync for Stealer<T> {}
+
+impl<T: Send> Clone for Stealer<T> {
+    fn clone(&self) -> Self {
+        Stealer {
+            inner: self.inner.clone(),
+        }
+    }
+}
 
 // Note: Worker is intentionally NOT Sync - only one thread should own it
 

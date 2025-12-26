@@ -91,18 +91,19 @@ impl<T> Injector<T> {
         let queue = self.inner.queue.lock().unwrap();
         queue.len()
     }
-
-    /// Clone this injector handle
-    pub fn clone(&self) -> Self {
-        Injector {
-            inner: self.inner.clone(),
-        }
-    }
 }
 
 impl<T> Default for Injector<T> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl<T> Clone for Injector<T> {
+    fn clone(&self) -> Self {
+        Injector {
+            inner: self.inner.clone(),
+        }
     }
 }
 

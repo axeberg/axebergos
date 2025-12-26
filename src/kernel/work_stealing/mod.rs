@@ -53,8 +53,8 @@ mod injector;
 pub use deque::{StealResult, Stealer, Worker};
 pub use injector::{InjectResult, Injector};
 
-use super::task::{BoxFuture, TaskId};
 use super::Priority;
+use super::task::{BoxFuture, TaskId};
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -233,7 +233,7 @@ impl WorkerState {
                         self.steal_rng = (victim + 1) % num_workers;
                         return Some(task);
                     }
-                    StealResult::Empty => break, // Try next victim
+                    StealResult::Empty => break,    // Try next victim
                     StealResult::Retry => continue, // Retry same victim
                 }
             }
@@ -250,10 +250,7 @@ impl WorkerState {
 
         let guard = self.shared.park_mutex.lock().unwrap();
         // Double-check there's no work before parking
-        if !self.shared.is_shutdown()
-            && self.local.is_empty()
-            && self.shared.injector.is_empty()
-        {
+        if !self.shared.is_shutdown() && self.local.is_empty() && self.shared.injector.is_empty() {
             let _guard = self.shared.park_condvar.wait(guard);
         }
 
