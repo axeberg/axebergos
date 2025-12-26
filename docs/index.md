@@ -110,7 +110,6 @@ User-facing components that run on top of the kernel.
 | [Examples & Tutorials](../examples/README.md) | Step-by-step learning guides |
 | [Architecture Diagrams](../ARCHITECTURE.md) | Visual system overview |
 | [Decision Records](decisions/README.md) | Why we made certain choices (ADRs) |
-| [AI Development Process](../prompts/README.md) | How axeberg was built with Claude |
 
 ## Quick Start
 
