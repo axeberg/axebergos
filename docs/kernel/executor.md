@@ -261,12 +261,74 @@ fn test_priority_order() {
 }
 ```
 
-## Limitations
+## Limitations (Single-Threaded Executor)
 
 1. **No preemption**: Long-running sync code blocks everything
 2. **Single-threaded**: No parallelism
 3. **No deadlock detection**: Circular waits hang forever
 4. **Trust required**: Tasks must yield cooperatively
+
+## Work Stealing Executor
+
+For native/multi-threaded contexts, axeberg provides a lock-free work stealing
+executor in `kernel::work_stealing`:
+
+```rust
+use axeberg::kernel::{WorkStealingExecutor, WorkStealingConfig, Priority};
+
+// Configure with 4 worker threads
+let config = WorkStealingConfig::default().num_workers(4);
+let mut executor = WorkStealingExecutor::new(config);
+
+// Spawn tasks (distributed across workers)
+for i in 0..100 {
+    executor.spawn(async move {
+        println!("Task {} running!", i);
+    });
+}
+
+// Run until all complete
+executor.run();
+```
+
+### Architecture
+
+```text
+                   ┌─────────────────┐
+                   │ Global Injector │  ← External spawns
+                   │   (MPMC Queue)  │
+                   └────────┬────────┘
+                            │
+         ┌──────────────────┼──────────────────┐
+         ▼                  ▼                  ▼
+  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+  │  Worker 0   │    │  Worker 1   │    │  Worker 2   │
+  │ Local Deque │◄──►│ Local Deque │◄──►│ Local Deque │
+  │  (LIFO/FIFO)│    │  (LIFO/FIFO)│    │  (LIFO/FIFO)│
+  └─────────────┘    └─────────────┘    └─────────────┘
+        │                  │                  │
+        └──────────────────┴──────────────────┘
+                     Work Stealing
+                    (FIFO from top)
+```
+
+### Key Properties (TLA+ Verified)
+
+The implementation is formally verified in `specs/tla/WorkStealing.tla`:
+
+- **W1: No Lost Tasks** - Every spawned task is eventually executed
+- **W2: No Double Execution** - Each task executes exactly once
+- **W3: LIFO Local / FIFO Steal** - Owner pops newest, thieves steal oldest
+- **W4: Linearizability** - All operations appear atomic
+- **W5: Progress** - System makes progress under fair scheduling
+
+### Lock-Free Data Structures
+
+The Chase-Lev work stealing deque provides:
+- **O(1) push/pop** for the owner thread (LIFO)
+- **O(1) steal** for thief threads (FIFO)
+- **Lock-free**: No thread blocks another indefinitely
+- **ABA-safe**: Generation counters prevent ABA problems
 
 ## Related Documentation
 

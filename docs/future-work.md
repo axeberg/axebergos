@@ -12,14 +12,17 @@ Consolidated list of planned features and enhancements for axeberg.
 
 ## Executor
 
-| Feature | Description | Complexity |
-|---------|-------------|------------|
-| Task cancellation | Cancel running tasks by ID | Low |
-| Timeouts | Automatic timeout for blocking operations | Medium |
-| Work stealing | Multi-threaded executor for parallelism | High |
-| Task groups | Hierarchical task management | Medium |
+| Feature | Description | Complexity | Status |
+|---------|-------------|------------|--------|
+| Task cancellation | Cancel running tasks by ID | Low | Planned |
+| Timeouts | Automatic timeout for blocking operations | Medium | Planned |
+| Work stealing | Multi-threaded executor for parallelism | High | ✅ Done |
+| Task groups | Hierarchical task management | Medium | Planned |
 
 *Source: [docs/kernel/executor.md](kernel/executor.md)*
+
+> **Work Stealing Implemented**: Lock-free Chase-Lev deque with TLA+ verification.
+> See `src/kernel/work_stealing/` and `specs/tla/WorkStealing.tla`.
 
 ## WASM Modules
 
