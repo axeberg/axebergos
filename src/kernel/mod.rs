@@ -21,6 +21,7 @@ pub mod memory;
 pub mod mount;
 pub mod msgqueue;
 pub mod object;
+pub mod pkg;
 pub mod process;
 pub mod procfs;
 pub mod semaphore;
@@ -66,6 +67,11 @@ pub use users::{FileMode, Gid, Group, Uid, User, UserDb};
 pub use work_stealing::{
     Config as WorkStealingConfig, Injector, StealResult, Stealer, TaskHandle, WorkStealingExecutor,
     Worker,
+};
+pub use pkg::{
+    Checksum, Dependency, InstalledPackage, PackageDatabase, PackageId, PackageInstaller,
+    PackageManifest, PackageManager, PackageRegistry, PkgError, PkgResult, RegistryEntry,
+    ResolvedPackage, Version, VersionReq,
 };
 
 use std::cell::RefCell;

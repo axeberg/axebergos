@@ -26,13 +26,17 @@ Consolidated list of planned features and enhancements for axeberg.
 
 ## WASM Modules
 
-| Feature | Description | Complexity |
-|---------|-------------|------------|
-| Port commands to WASM | Convert builtin commands to standalone `.wasm` modules | Medium |
-| Package manager | Install commands from external sources | High |
-| WASI preview2 | Broader compatibility with WASI ecosystem | Medium |
+| Feature | Description | Complexity | Status |
+|---------|-------------|------------|--------|
+| Port commands to WASM | Convert builtin commands to standalone `.wasm` modules | Medium | Planned |
+| Package manager | Install commands from external sources | High | ✅ Done |
+| WASI preview2 | Broader compatibility with WASI ecosystem | Medium | Planned |
 
 *Source: [docs/kernel/wasm-modules.md](kernel/wasm-modules.md)*
+
+> **Package Manager Implemented**: Full-featured WASM package manager with semantic versioning,
+> dependency resolution, checksums, and CLI interface.
+> See `src/kernel/pkg/` and use `pkg --help` for usage.
 
 ## Memory
 
@@ -80,7 +84,7 @@ The compositor itself is not yet implemented. Once implemented, these enhancemen
 3. Port commands to WASM
 
 ### Major Features
-1. Work stealing executor
+1. ~~Work stealing executor~~ ✅ Done
 2. Copy-on-write memory
-3. Package manager
+3. ~~Package manager~~ ✅ Done
 4. Compositor implementation

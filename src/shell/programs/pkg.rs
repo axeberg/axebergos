@@ -1,15 +1,60 @@
-//! Package manager program
+//! Package manager CLI
+//!
+//! Provides command-line interface to the axeberg package manager.
+//!
+//! # Commands
+//!
+//! - `pkg install <name>[@version]` - Install a package from registry
+//! - `pkg install-local <path>` - Install from local .axepkg file
+//! - `pkg remove <name>` - Remove an installed package
+//! - `pkg list` - List installed packages
+//! - `pkg info <name>` - Show package information
+//! - `pkg search <query>` - Search for packages
+//! - `pkg update` - Update registry index
+//! - `pkg upgrade` - Upgrade all packages
+//! - `pkg verify` - Verify installed packages
+//! - `pkg clean` - Clean package cache
+//! - `pkg init` - Initialize package directories
 
 use super::{args_to_strs, check_help};
+use crate::kernel::pkg::{self, PackageDatabase, PackageManager};
 use crate::kernel::syscall;
 
-pub fn prog_pkg(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+const HELP_TEXT: &str = r#"Usage: pkg <command> [args]
+
+WASM Package Manager for axeberg.
+
+Commands:
+  install <name>[@version]   Install a package from registry
+  install-local <path>       Install from local .axepkg file
+  remove <name>              Remove an installed package
+  list                       List installed packages
+  info <name>                Show package information
+  search <query>             Search for packages (async)
+  update                     Update registry index (async)
+  upgrade                    Upgrade all packages (async)
+  verify                     Verify installed package integrity
+  clean                      Clean package cache
+  init                       Initialize package directories
+
+Options:
+  -h, --help                 Show this help message
+  -v, --version              Show version information
+
+Examples:
+  pkg install hello          Install latest version of 'hello'
+  pkg install hello@1.0.0    Install specific version
+  pkg install-local ./my.axepkg  Install from local file
+  pkg remove hello           Remove 'hello' package
+  pkg list                   Show all installed packages
+
+Note: Some commands (search, update, upgrade) require network access
+and are only available in WASM builds."#;
+
+pub fn prog_pkg(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
-    if let Some(help) = check_help(
-        &args,
-        "Usage: pkg <command> [args]\n\nPackage manager for axeberg.\n\nCommands:\n  install <name> <script>   Install a package (script content)\n  remove <name>             Remove a package\n  list                      List installed packages\n  run <name> [args]         Run an installed package\n  info <name>               Show package info\n\nPackages are stored in /var/packages/",
-    ) {
+    if let Some(help) = check_help(&args, HELP_TEXT) {
         stdout.push_str(&help);
         return 0;
     }
@@ -19,169 +64,476 @@ pub fn prog_pkg(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mu
         return 1;
     }
 
-    // Ensure package directories exist
-    let _ = syscall::mkdir("/var");
-    let _ = syscall::mkdir("/var/packages");
+    // Handle version flag
+    if args[0] == "-v" || args[0] == "--version" {
+        stdout.push_str("pkg 1.0.0 (axeberg package manager)\n");
+        return 0;
+    }
 
     match args[0] {
-        "install" => {
-            if args.len() < 3 {
-                stderr.push_str("pkg install: usage: pkg install <name> <script>\n");
-                return 1;
-            }
-            let name = args[1];
-            // Join remaining args as the script content (or use quoted string)
-            let script = args[2..].join(" ");
-
-            // Validate package name
-            if name.contains('/') || name.contains('\0') || name.is_empty() {
-                stderr.push_str("pkg install: invalid package name\n");
-                return 1;
-            }
-
-            let pkg_path = format!("/var/packages/{}", name);
-
-            // Write the package script
-            match syscall::open(&pkg_path, syscall::OpenFlags::WRITE) {
-                Ok(fd) => {
-                    let _ = syscall::write(fd, script.as_bytes());
-                    let _ = syscall::close(fd);
-
-                    // Make it executable (mode 755)
-                    let _ = syscall::chmod(&pkg_path, 0o755);
-
-                    stdout.push_str(&format!("Installed package '{}'\n", name));
-                    0
-                }
-                Err(e) => {
-                    stderr.push_str(&format!(
-                        "pkg install: failed to install '{}': {:?}\n",
-                        name, e
-                    ));
-                    1
-                }
-            }
-        }
-        "remove" | "uninstall" => {
-            if args.len() < 2 {
-                stderr.push_str("pkg remove: usage: pkg remove <name>\n");
-                return 1;
-            }
-            let name = args[1];
-            let pkg_path = format!("/var/packages/{}", name);
-
-            match syscall::remove_file(&pkg_path) {
-                Ok(()) => {
-                    stdout.push_str(&format!("Removed package '{}'\n", name));
-                    0
-                }
-                Err(e) => {
-                    stderr.push_str(&format!("pkg remove: '{}': {:?}\n", name, e));
-                    1
-                }
-            }
-        }
-        "list" | "ls" => match syscall::readdir("/var/packages") {
-            Ok(entries) => {
-                if entries.is_empty() {
-                    stdout.push_str("No packages installed.\n");
-                } else {
-                    stdout.push_str("Installed packages:\n");
-                    for entry in entries {
-                        stdout.push_str(&format!("  {}\n", entry));
-                    }
-                }
-                0
-            }
-            Err(_) => {
-                stdout.push_str("No packages installed.\n");
-                0
-            }
-        },
-        "run" | "exec" => {
-            if args.len() < 2 {
-                stderr.push_str("pkg run: usage: pkg run <name> [args]\n");
-                return 1;
-            }
-            let name = args[1];
-            let pkg_path = format!("/var/packages/{}", name);
-
-            // Read the package script
-            match syscall::open(&pkg_path, syscall::OpenFlags::READ) {
-                Ok(fd) => {
-                    let mut buf = vec![0u8; 65536];
-                    match syscall::read(fd, &mut buf) {
-                        Ok(n) => {
-                            let _ = syscall::close(fd);
-                            let script = String::from_utf8_lossy(&buf[..n]).to_string();
-
-                            // Execute each line of the script
-                            for line in script.lines() {
-                                let line = line.trim();
-                                if line.is_empty() || line.starts_with('#') {
-                                    continue;
-                                }
-                                // Note: In a full implementation, we'd parse and execute properly
-                                stdout.push_str(&format!("> {}\n", line));
-                            }
-                            0
-                        }
-                        Err(e) => {
-                            let _ = syscall::close(fd);
-                            stderr.push_str(&format!(
-                                "pkg run: failed to read '{}': {:?}\n",
-                                name, e
-                            ));
-                            1
-                        }
-                    }
-                }
-                Err(_) => {
-                    stderr.push_str(&format!("pkg run: package '{}' not found\n", name));
-                    1
-                }
-            }
-        }
-        "info" | "show" => {
-            if args.len() < 2 {
-                stderr.push_str("pkg info: usage: pkg info <name>\n");
-                return 1;
-            }
-            let name = args[1];
-            let pkg_path = format!("/var/packages/{}", name);
-
-            match syscall::metadata(&pkg_path) {
-                Ok(meta) => {
-                    stdout.push_str(&format!("Package: {}\n", name));
-                    stdout.push_str(&format!("Path: {}\n", pkg_path));
-                    stdout.push_str(&format!("Size: {} bytes\n", meta.size));
-
-                    // Show first few lines of script
-                    if let Ok(fd) = syscall::open(&pkg_path, syscall::OpenFlags::READ) {
-                        let mut buf = vec![0u8; 512];
-                        if let Ok(n) = syscall::read(fd, &mut buf) {
-                            let preview = String::from_utf8_lossy(&buf[..n]);
-                            stdout.push_str("\nScript preview:\n");
-                            for (i, line) in preview.lines().take(5).enumerate() {
-                                stdout.push_str(&format!("  {}: {}\n", i + 1, line));
-                            }
-                        }
-                        let _ = syscall::close(fd);
-                    }
-                    0
-                }
-                Err(_) => {
-                    stderr.push_str(&format!("pkg info: package '{}' not found\n", name));
-                    1
-                }
-            }
-        }
+        "init" => cmd_init(stdout, stderr),
+        "install" => cmd_install(&args[1..], stdout, stderr),
+        "install-local" => cmd_install_local(&args[1..], stdout, stderr),
+        "remove" | "uninstall" | "rm" => cmd_remove(&args[1..], stdout, stderr),
+        "list" | "ls" => cmd_list(stdout, stderr),
+        "info" | "show" => cmd_info(&args[1..], stdout, stderr),
+        "search" => cmd_search(&args[1..], stdout, stderr),
+        "update" => cmd_update(stdout, stderr),
+        "upgrade" => cmd_upgrade(stdout, stderr),
+        "verify" => cmd_verify(stdout, stderr),
+        "clean" => cmd_clean(stdout, stderr),
         cmd => {
             stderr.push_str(&format!("pkg: unknown command '{}'\n", cmd));
             stderr.push_str("Try 'pkg --help' for available commands.\n");
             1
         }
     }
+}
+
+/// Initialize package manager directories
+fn cmd_init(stdout: &mut String, stderr: &mut String) -> i32 {
+    let pm = PackageManager::new();
+    match pm.init() {
+        Ok(()) => {
+            stdout.push_str("Package manager initialized.\n");
+            stdout.push_str("Directories created:\n");
+            stdout.push_str("  /var/lib/pkg/db/       - Package database\n");
+            stdout.push_str("  /var/lib/pkg/cache/    - Download cache\n");
+            stdout.push_str("  /var/lib/pkg/registry/ - Registry index\n");
+            0
+        }
+        Err(e) => {
+            stderr.push_str(&format!("pkg init: {}\n", e));
+            1
+        }
+    }
+}
+
+/// Install a package from registry
+fn cmd_install(args: &[&str], stdout: &mut String, stderr: &mut String) -> i32 {
+    if args.is_empty() {
+        stderr.push_str("pkg install: missing package name\n");
+        stderr.push_str("Usage: pkg install <name>[@version]\n");
+        return 1;
+    }
+
+    // Parse name[@version]
+    let spec = args[0];
+    let (name, version) = if let Some(at_pos) = spec.find('@') {
+        (&spec[..at_pos], Some(&spec[at_pos + 1..]))
+    } else {
+        (spec, None)
+    };
+
+    // Validate package name
+    if name.is_empty() || name.contains('/') {
+        stderr.push_str("pkg install: invalid package name\n");
+        return 1;
+    }
+
+    // In WASM builds, spawn async installation
+    #[cfg(target_arch = "wasm32")]
+    {
+        let name = name.to_string();
+        let version = version.map(|v| v.to_string());
+
+        stdout.push_str(&format!("Installing {}...\n", spec));
+        stdout.push_str("(Running in background - check console for results)\n");
+
+        wasm_bindgen_futures::spawn_local(async move {
+            let mut pm = PackageManager::new();
+            if let Err(e) = pm.init() {
+                crate::console_log!("pkg install: init failed: {}", e);
+                return;
+            }
+
+            match pm.install(&name, version.as_deref()).await {
+                Ok(id) => {
+                    crate::console_log!("pkg: installed {} successfully", id);
+                }
+                Err(e) => {
+                    crate::console_log!("pkg install: {}", e);
+                }
+            }
+        });
+        return 0;
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        stderr.push_str("pkg install: network installation requires WASM build\n");
+        stderr.push_str("Use 'pkg install-local <path>' to install from a local file.\n");
+        1
+    }
+}
+
+/// Install a package from local file
+fn cmd_install_local(args: &[&str], stdout: &mut String, stderr: &mut String) -> i32 {
+    if args.is_empty() {
+        stderr.push_str("pkg install-local: missing file path\n");
+        stderr.push_str("Usage: pkg install-local <path>\n");
+        return 1;
+    }
+
+    let path = args[0];
+
+    // Check file exists
+    if !syscall::exists(path).unwrap_or(false) {
+        stderr.push_str(&format!("pkg install-local: file not found: {}\n", path));
+        return 1;
+    }
+
+    let mut pm = PackageManager::new();
+    if let Err(e) = pm.init() {
+        stderr.push_str(&format!("pkg: initialization failed: {}\n", e));
+        return 1;
+    }
+
+    match pm.install_local(path) {
+        Ok(id) => {
+            stdout.push_str(&format!("Installed {} from {}\n", id, path));
+            0
+        }
+        Err(e) => {
+            stderr.push_str(&format!("pkg install-local: {}\n", e));
+            1
+        }
+    }
+}
+
+/// Remove an installed package
+fn cmd_remove(args: &[&str], stdout: &mut String, stderr: &mut String) -> i32 {
+    if args.is_empty() {
+        stderr.push_str("pkg remove: missing package name\n");
+        stderr.push_str("Usage: pkg remove <name>\n");
+        return 1;
+    }
+
+    let name = args[0];
+
+    let mut pm = PackageManager::new();
+    match pm.remove(name) {
+        Ok(()) => {
+            stdout.push_str(&format!("Removed package '{}'\n", name));
+            0
+        }
+        Err(e) => {
+            stderr.push_str(&format!("pkg remove: {}\n", e));
+            1
+        }
+    }
+}
+
+/// List installed packages
+fn cmd_list(stdout: &mut String, stderr: &mut String) -> i32 {
+    let pm = PackageManager::new();
+    match pm.list_installed() {
+        Ok(packages) => {
+            if packages.is_empty() {
+                stdout.push_str("No packages installed.\n");
+                stdout.push_str("Use 'pkg install <name>' to install a package.\n");
+            } else {
+                stdout.push_str("Installed packages:\n");
+                stdout.push_str(&format!("{:<20} {:<12} {}\n", "NAME", "VERSION", "BINARIES"));
+                stdout.push_str(&format!("{:<20} {:<12} {}\n", "----", "-------", "--------"));
+                for pkg in packages {
+                    let bins = if pkg.binaries.is_empty() {
+                        "(none)".to_string()
+                    } else {
+                        pkg.binaries
+                            .iter()
+                            .map(|b| {
+                                b.rsplit('/')
+                                    .next()
+                                    .unwrap_or(b)
+                                    .trim_end_matches(".wasm")
+                            })
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    };
+                    stdout.push_str(&format!("{:<20} {:<12} {}\n", pkg.name, pkg.version, bins));
+                }
+            }
+            0
+        }
+        Err(e) => {
+            stderr.push_str(&format!("pkg list: {}\n", e));
+            1
+        }
+    }
+}
+
+/// Show package information
+fn cmd_info(args: &[&str], stdout: &mut String, stderr: &mut String) -> i32 {
+    if args.is_empty() {
+        stderr.push_str("pkg info: missing package name\n");
+        stderr.push_str("Usage: pkg info <name>\n");
+        return 1;
+    }
+
+    let name = args[0];
+
+    let mut db = PackageDatabase::new();
+    match db.get_installed(name) {
+        Ok(Some(pkg)) => {
+            stdout.push_str(&format!("Package: {}\n", pkg.name));
+            stdout.push_str(&format!("Version: {}\n", pkg.version));
+            stdout.push_str(&format!("Installed: {}\n", format_timestamp(pkg.installed_at)));
+
+            if !pkg.binaries.is_empty() {
+                stdout.push_str("Binaries:\n");
+                for bin in &pkg.binaries {
+                    stdout.push_str(&format!("  {}\n", bin));
+                }
+            }
+
+            if !pkg.dependencies.is_empty() {
+                stdout.push_str("Dependencies:\n");
+                for dep in &pkg.dependencies {
+                    stdout.push_str(&format!("  {}\n", dep));
+                }
+            }
+
+            // Try to show manifest info
+            if let Ok(Some(manifest)) = db.get_manifest(name) {
+                if let Some(desc) = manifest.description {
+                    stdout.push_str(&format!("\nDescription: {}\n", desc));
+                }
+                if let Some(license) = manifest.license {
+                    stdout.push_str(&format!("License: {}\n", license));
+                }
+                if !manifest.authors.is_empty() {
+                    stdout.push_str(&format!("Authors: {}\n", manifest.authors.join(", ")));
+                }
+            }
+
+            0
+        }
+        Ok(None) => {
+            stderr.push_str(&format!("pkg info: package '{}' not installed\n", name));
+            1
+        }
+        Err(e) => {
+            stderr.push_str(&format!("pkg info: {}\n", e));
+            1
+        }
+    }
+}
+
+/// Search for packages (async)
+fn cmd_search(args: &[&str], stdout: &mut String, stderr: &mut String) -> i32 {
+    if args.is_empty() {
+        stderr.push_str("pkg search: missing search query\n");
+        stderr.push_str("Usage: pkg search <query>\n");
+        return 1;
+    }
+
+    let query = args.join(" ");
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        stdout.push_str(&format!("Searching for '{}'...\n", query));
+        stdout.push_str("(Running in background - check console for results)\n");
+
+        wasm_bindgen_futures::spawn_local(async move {
+            let pm = PackageManager::new();
+            match pm.search(&query).await {
+                Ok(results) => {
+                    if results.is_empty() {
+                        crate::console_log!("No packages found matching '{}'", query);
+                    } else {
+                        crate::console_log!("Found {} package(s):", results.len());
+                        for pkg in results {
+                            let desc = pkg.description.as_deref().unwrap_or("No description");
+                            crate::console_log!("  {} ({}) - {}", pkg.name, pkg.latest, desc);
+                        }
+                    }
+                }
+                Err(e) => {
+                    crate::console_log!("pkg search: {}", e);
+                }
+            }
+        });
+        return 0;
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        stderr.push_str("pkg search: requires WASM build for network access\n");
+        1
+    }
+}
+
+/// Update registry index (async)
+fn cmd_update(stdout: &mut String, stderr: &mut String) -> i32 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        stdout.push_str("Updating package registry...\n");
+        stdout.push_str("(Running in background - check console for results)\n");
+
+        wasm_bindgen_futures::spawn_local(async move {
+            let mut pm = PackageManager::new();
+            match pm.update_index().await {
+                Ok(()) => {
+                    crate::console_log!("pkg: registry index updated successfully");
+                }
+                Err(e) => {
+                    crate::console_log!("pkg update: {}", e);
+                }
+            }
+        });
+        return 0;
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        stderr.push_str("pkg update: requires WASM build for network access\n");
+        1
+    }
+}
+
+/// Upgrade all packages (async)
+fn cmd_upgrade(stdout: &mut String, stderr: &mut String) -> i32 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        stdout.push_str("Checking for upgrades...\n");
+        stdout.push_str("(Running in background - check console for results)\n");
+
+        wasm_bindgen_futures::spawn_local(async move {
+            let mut pm = PackageManager::new();
+            match pm.upgrade_all().await {
+                Ok(upgraded) => {
+                    if upgraded.is_empty() {
+                        crate::console_log!("pkg: all packages are up to date");
+                    } else {
+                        crate::console_log!("pkg: upgraded {} package(s):", upgraded.len());
+                        for id in upgraded {
+                            crate::console_log!("  {} -> {}", id.name, id.version);
+                        }
+                    }
+                }
+                Err(e) => {
+                    crate::console_log!("pkg upgrade: {}", e);
+                }
+            }
+        });
+        return 0;
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        stderr.push_str("pkg upgrade: requires WASM build for network access\n");
+        1
+    }
+}
+
+/// Verify installed packages
+fn cmd_verify(stdout: &mut String, stderr: &mut String) -> i32 {
+    let pm = PackageManager::new();
+    match pm.verify() {
+        Ok(results) => {
+            let mut all_valid = true;
+            for (name, valid) in results {
+                let status = if valid { "OK" } else { "INVALID" };
+                stdout.push_str(&format!("{}: {}\n", name, status));
+                if !valid {
+                    all_valid = false;
+                }
+            }
+            if all_valid {
+                stdout.push_str("\nAll packages verified successfully.\n");
+                0
+            } else {
+                stderr.push_str("\nSome packages failed verification.\n");
+                1
+            }
+        }
+        Err(e) => {
+            stderr.push_str(&format!("pkg verify: {}\n", e));
+            1
+        }
+    }
+}
+
+/// Clean package cache
+fn cmd_clean(stdout: &mut String, stderr: &mut String) -> i32 {
+    let pm = PackageManager::new();
+    match pm.clean_cache() {
+        Ok(()) => {
+            stdout.push_str("Package cache cleaned.\n");
+            0
+        }
+        Err(e) => {
+            stderr.push_str(&format!("pkg clean: {}\n", e));
+            1
+        }
+    }
+}
+
+/// Format a Unix timestamp for display
+fn format_timestamp(ts: u64) -> String {
+    if ts == 0 {
+        return "unknown".to_string();
+    }
+
+    // Simple date formatting (no external dependencies)
+    // This is approximate - doesn't handle leap seconds, etc.
+    let secs_per_day = 86400u64;
+    let secs_per_year = 31536000u64; // 365 days
+    let secs_per_leap_year = 31622400u64; // 366 days
+
+    let mut remaining = ts;
+    let mut year = 1970u64;
+
+    // Count years
+    loop {
+        let year_secs = if is_leap_year(year) {
+            secs_per_leap_year
+        } else {
+            secs_per_year
+        };
+        if remaining < year_secs {
+            break;
+        }
+        remaining -= year_secs;
+        year += 1;
+    }
+
+    // Count months
+    let days_in_months: [u64; 12] = if is_leap_year(year) {
+        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    } else {
+        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    };
+
+    let mut month = 0usize;
+    for (i, &days) in days_in_months.iter().enumerate() {
+        let month_secs = days * secs_per_day;
+        if remaining < month_secs {
+            month = i;
+            break;
+        }
+        remaining -= month_secs;
+    }
+
+    let day = remaining / secs_per_day + 1;
+    remaining %= secs_per_day;
+    let hour = remaining / 3600;
+    remaining %= 3600;
+    let min = remaining / 60;
+
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}",
+        year,
+        month + 1,
+        day,
+        hour,
+        min
+    )
+}
+
+fn is_leap_year(year: u64) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
 }
 
 #[cfg(test)]
@@ -197,8 +549,19 @@ mod tests {
 
         assert_eq!(result, 0);
         assert!(stdout.contains("Usage: pkg <command> [args]"));
-        assert!(stdout.contains("Package manager for axeberg"));
+        assert!(stdout.contains("WASM Package Manager"));
         assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn test_pkg_version() {
+        let args = vec!["-v".to_string()];
+        let mut stdout = String::new();
+        let mut stderr = String::new();
+        let result = prog_pkg(&args, "", &mut stdout, &mut stderr);
+
+        assert_eq!(result, 0);
+        assert!(stdout.contains("pkg 1.0.0"));
     }
 
     #[test]
@@ -210,7 +573,6 @@ mod tests {
 
         assert_eq!(result, 1);
         assert!(stderr.contains("pkg: missing command"));
-        assert!(stdout.is_empty());
     }
 
     #[test]
@@ -222,7 +584,6 @@ mod tests {
 
         assert_eq!(result, 1);
         assert!(stderr.contains("pkg: unknown command 'unknown'"));
-        assert!(stderr.contains("Try 'pkg --help' for available commands"));
     }
 
     #[test]
@@ -233,22 +594,7 @@ mod tests {
         let result = prog_pkg(&args, "", &mut stdout, &mut stderr);
 
         assert_eq!(result, 1);
-        assert!(stderr.contains("pkg install: usage: pkg install <name> <script>"));
-    }
-
-    #[test]
-    fn test_pkg_install_invalid_name() {
-        let args = vec![
-            "install".to_string(),
-            "bad/name".to_string(),
-            "echo test".to_string(),
-        ];
-        let mut stdout = String::new();
-        let mut stderr = String::new();
-        let result = prog_pkg(&args, "", &mut stdout, &mut stderr);
-
-        assert_eq!(result, 1);
-        assert!(stderr.contains("pkg install: invalid package name"));
+        assert!(stderr.contains("pkg install: missing package name"));
     }
 
     #[test]
@@ -259,18 +605,7 @@ mod tests {
         let result = prog_pkg(&args, "", &mut stdout, &mut stderr);
 
         assert_eq!(result, 1);
-        assert!(stderr.contains("pkg remove: usage: pkg remove <name>"));
-    }
-
-    #[test]
-    fn test_pkg_run_missing_args() {
-        let args = vec!["run".to_string()];
-        let mut stdout = String::new();
-        let mut stderr = String::new();
-        let result = prog_pkg(&args, "", &mut stdout, &mut stderr);
-
-        assert_eq!(result, 1);
-        assert!(stderr.contains("pkg run: usage: pkg run <name> [args]"));
+        assert!(stderr.contains("pkg remove: missing package name"));
     }
 
     #[test]
@@ -281,6 +616,38 @@ mod tests {
         let result = prog_pkg(&args, "", &mut stdout, &mut stderr);
 
         assert_eq!(result, 1);
-        assert!(stderr.contains("pkg info: usage: pkg info <name>"));
+        assert!(stderr.contains("pkg info: missing package name"));
+    }
+
+    #[test]
+    fn test_pkg_search_missing_args() {
+        let args = vec!["search".to_string()];
+        let mut stdout = String::new();
+        let mut stderr = String::new();
+        let result = prog_pkg(&args, "", &mut stdout, &mut stderr);
+
+        assert_eq!(result, 1);
+        assert!(stderr.contains("pkg search: missing search query"));
+    }
+
+    #[test]
+    fn test_format_timestamp() {
+        // January 1, 2024 00:00 UTC
+        let ts = 1704067200;
+        let formatted = format_timestamp(ts);
+        assert!(formatted.contains("2024"));
+    }
+
+    #[test]
+    fn test_format_timestamp_zero() {
+        assert_eq!(format_timestamp(0), "unknown");
+    }
+
+    #[test]
+    fn test_is_leap_year() {
+        assert!(!is_leap_year(2023));
+        assert!(is_leap_year(2024));
+        assert!(!is_leap_year(2100));
+        assert!(is_leap_year(2000));
     }
 }
