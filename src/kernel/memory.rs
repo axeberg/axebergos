@@ -109,7 +109,6 @@ impl MemoryRegion {
         }
     }
 
-    /// Read from the region
     pub fn read(&self, offset: usize, buf: &mut [u8]) -> Result<usize, MemoryError> {
         if !self.protection.read {
             return Err(MemoryError::PermissionDenied);
@@ -125,7 +124,6 @@ impl MemoryRegion {
         Ok(to_read)
     }
 
-    /// Write to the region
     pub fn write(&mut self, offset: usize, buf: &[u8]) -> Result<usize, MemoryError> {
         if !self.protection.write {
             return Err(MemoryError::PermissionDenied);
@@ -141,12 +139,10 @@ impl MemoryRegion {
         Ok(to_write)
     }
 
-    /// Get a slice of the data (for zero-copy access)
     pub fn as_slice(&self) -> &[u8] {
         &self.data
     }
 
-    /// Get a mutable slice of the data
     pub fn as_mut_slice(&mut self) -> Result<&mut [u8], MemoryError> {
         if !self.protection.write {
             return Err(MemoryError::PermissionDenied);
@@ -154,12 +150,10 @@ impl MemoryRegion {
         Ok(&mut self.data)
     }
 
-    /// Check if this region is shared
     pub fn is_shared(&self) -> bool {
         self.shared.is_some()
     }
 
-    /// Get the shared memory ID if this is a shared region
     pub fn shm_id(&self) -> Option<ShmId> {
         self.shared
     }
@@ -219,7 +213,6 @@ pub struct ProcessMemory {
 }
 
 impl ProcessMemory {
-    /// Create new process memory tracker
     pub fn new() -> Self {
         Self {
             regions: HashMap::new(),
@@ -230,7 +223,6 @@ impl ProcessMemory {
         }
     }
 
-    /// Create with a memory limit
     pub fn with_limit(limit: usize) -> Self {
         Self {
             regions: HashMap::new(),
@@ -246,12 +238,10 @@ impl ProcessMemory {
         self.limit = limit;
     }
 
-    /// Get current memory limit
     pub fn limit(&self) -> usize {
         self.limit
     }
 
-    /// Allocate a new memory region
     pub fn allocate(
         &mut self,
         id: RegionId,
@@ -275,7 +265,6 @@ impl ProcessMemory {
         Ok(())
     }
 
-    /// Free a memory region
     pub fn free(&mut self, id: RegionId) -> Result<(), MemoryError> {
         let region = self.regions.remove(&id).ok_or(MemoryError::InvalidRegion)?;
 
@@ -288,32 +277,26 @@ impl ProcessMemory {
         Ok(())
     }
 
-    /// Get a region by ID
     pub fn get(&self, id: RegionId) -> Option<&MemoryRegion> {
         self.regions.get(&id)
     }
 
-    /// Get a mutable region by ID
     pub fn get_mut(&mut self, id: RegionId) -> Option<&mut MemoryRegion> {
         self.regions.get_mut(&id)
     }
 
-    /// Current bytes allocated
     pub fn allocated(&self) -> usize {
         self.allocated
     }
 
-    /// Peak memory usage
     pub fn peak(&self) -> usize {
         self.peak
     }
 
-    /// Number of regions
     pub fn region_count(&self) -> usize {
         self.regions.len()
     }
 
-    /// Attach a shared memory segment
     pub fn attach_shm(
         &mut self,
         shm_id: ShmId,
@@ -337,7 +320,6 @@ impl ProcessMemory {
         Ok(region_id)
     }
 
-    /// Detach a shared memory segment
     pub fn detach_shm(&mut self, shm_id: ShmId) -> Result<(), MemoryError> {
         let region_id = self
             .attached_shm
@@ -351,22 +333,18 @@ impl ProcessMemory {
         Ok(())
     }
 
-    /// Check if attached to a shared memory segment
     pub fn is_attached(&self, shm_id: ShmId) -> bool {
         self.attached_shm.contains_key(&shm_id)
     }
 
-    /// Get region ID for attached shared memory
     pub fn shm_region(&self, shm_id: ShmId) -> Option<RegionId> {
         self.attached_shm.get(&shm_id).copied()
     }
 
-    /// Iterate over all regions
     pub fn regions(&self) -> impl Iterator<Item = &MemoryRegion> {
         self.regions.values()
     }
 
-    /// Get memory stats
     pub fn stats(&self) -> MemoryStats {
         MemoryStats {
             allocated: self.allocated,
@@ -412,20 +390,18 @@ pub struct SharedMemory {
 }
 
 impl SharedMemory {
-    /// Create a new shared memory segment
-    /// Note: Creator is NOT auto-attached; they must call shmat explicitly
+    /// Creator is NOT auto-attached; they must call shmat explicitly
     pub fn new(id: ShmId, size: usize, creator: Pid) -> Self {
         Self {
             id,
             size,
             data: vec![0u8; size],
-            attached: Vec::new(), // Creator must call shmat to attach
+            attached: Vec::new(),
             creator,
-            refcount: 0, // No one attached yet
+            refcount: 0,
         }
     }
 
-    /// Attach a process
     pub fn attach(&mut self, pid: Pid) {
         if !self.attached.contains(&pid) {
             self.attached.push(pid);
@@ -433,7 +409,7 @@ impl SharedMemory {
         }
     }
 
-    /// Detach a process
+    /// Returns true if refcount dropped to 0 (segment should be removed)
     pub fn detach(&mut self, pid: Pid) -> bool {
         if let Some(pos) = self.attached.iter().position(|&p| p == pid) {
             self.attached.remove(pos);
@@ -442,32 +418,26 @@ impl SharedMemory {
         self.refcount == 0
     }
 
-    /// Check if a process is attached
     pub fn is_attached(&self, pid: Pid) -> bool {
         self.attached.contains(&pid)
     }
 
-    /// Get the data slice
     pub fn data(&self) -> &[u8] {
         &self.data
     }
 
-    /// Get mutable data slice
     pub fn data_mut(&mut self) -> &mut [u8] {
         &mut self.data
     }
 
-    /// Clone data for a new attachment
     pub fn clone_data(&self) -> Vec<u8> {
         self.data.clone()
     }
 
-    /// Get reference count
     pub fn refcount(&self) -> usize {
         self.refcount
     }
 
-    /// Get attached process count
     pub fn attached_count(&self) -> usize {
         self.attached.len()
     }
@@ -489,7 +459,6 @@ pub struct MemoryManager {
 }
 
 impl MemoryManager {
-    /// Create a new memory manager
     pub fn new() -> Self {
         Self {
             next_region_id: AtomicU64::new(1),
@@ -500,17 +469,14 @@ impl MemoryManager {
         }
     }
 
-    /// Set system-wide memory limit
     pub fn set_system_limit(&mut self, limit: usize) {
         self.system_limit = limit;
     }
 
-    /// Allocate a region ID
     pub fn alloc_region_id(&self) -> RegionId {
         RegionId(self.next_region_id.fetch_add(1, Ordering::Relaxed))
     }
 
-    /// Create a shared memory segment
     pub fn shmget(&mut self, size: usize, creator: Pid) -> Result<ShmId, MemoryError> {
         if size == 0 {
             return Err(MemoryError::InvalidSize);
@@ -529,14 +495,15 @@ impl MemoryManager {
         Ok(id)
     }
 
-    /// Attach to a shared memory segment
+    /// Attach to a shared memory segment. Creates a region with a copy of the
+    /// shared data - in a real implementation this would share memory, but here
+    /// we simulate it by copying and syncing on access.
     pub fn shmat(
         &mut self,
         shm_id: ShmId,
         pid: Pid,
         prot: Protection,
     ) -> Result<MemoryRegion, MemoryError> {
-        // Allocate region ID first to avoid borrow conflict
         let region_id = self.alloc_region_id();
 
         let shm = self
@@ -544,19 +511,14 @@ impl MemoryManager {
             .get_mut(&shm_id)
             .ok_or(MemoryError::ShmNotFound)?;
 
-        // Attach the process
         shm.attach(pid);
 
-        // Create a region with a copy of the shared data
-        // Note: In a real implementation, this would share memory.
-        // Here we simulate it by copying and syncing on access.
         let data = shm.clone_data();
         let region = MemoryRegion::from_shared(region_id, shm_id, data, prot);
 
         Ok(region)
     }
 
-    /// Detach from a shared memory segment
     pub fn shmdt(&mut self, shm_id: ShmId, pid: Pid) -> Result<bool, MemoryError> {
         let shm = self
             .shared_segments
@@ -572,7 +534,7 @@ impl MemoryManager {
         Ok(should_remove)
     }
 
-    /// Sync shared memory (write local changes back to shared segment)
+    /// Write local changes back to shared segment
     pub fn shm_sync(&mut self, shm_id: ShmId, data: &[u8]) -> Result<(), MemoryError> {
         let shm = self
             .shared_segments
@@ -587,7 +549,6 @@ impl MemoryManager {
         Ok(())
     }
 
-    /// Get shared memory data (for reading latest)
     pub fn shm_read(&self, shm_id: ShmId) -> Result<&[u8], MemoryError> {
         let shm = self
             .shared_segments
@@ -596,7 +557,6 @@ impl MemoryManager {
         Ok(shm.data())
     }
 
-    /// Get shared memory info
     pub fn shm_info(&self, shm_id: ShmId) -> Result<ShmInfo, MemoryError> {
         let shm = self
             .shared_segments
@@ -610,7 +570,6 @@ impl MemoryManager {
         })
     }
 
-    /// List all shared memory segments
     pub fn shm_list(&self) -> Vec<ShmInfo> {
         self.shared_segments
             .values()
@@ -623,12 +582,10 @@ impl MemoryManager {
             .collect()
     }
 
-    /// Get total allocated memory
     pub fn total_allocated(&self) -> usize {
         self.total_allocated
     }
 
-    /// Get system stats
     pub fn system_stats(&self) -> SystemMemoryStats {
         SystemMemoryStats {
             total_allocated: self.total_allocated,
