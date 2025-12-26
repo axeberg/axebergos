@@ -13,7 +13,7 @@ use super::{args_to_strs, check_help};
 use crate::kernel::syscall;
 
 /// save - save filesystem to OPFS
-pub fn prog_save(_args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+pub fn prog_save(_args: &[String], __stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
     // Queue the async save operation
     #[cfg(target_arch = "wasm32")]
     {
@@ -48,7 +48,7 @@ pub fn prog_save(_args: &[String], stdin: &str, stdout: &mut String, _stderr: &m
 }
 
 /// fsload - reload filesystem from OPFS
-pub fn prog_fsload(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+pub fn prog_fsload(args: &[String], __stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
     if let Some(help) = check_help(&args, "Usage: fsload\nReload filesystem from OPFS storage.\nSee 'man fsload' for details.") {
         stdout.push_str(&help);
@@ -90,7 +90,7 @@ pub fn prog_fsload(args: &[String], stdin: &str, stdout: &mut String, _stderr: &
 }
 
 /// fsreset - clear OPFS and reset to fresh filesystem
-pub fn prog_fsreset(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_fsreset(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
     if let Some(help) = check_help(&args, "Usage: fsreset [-f]\nClear OPFS storage and reset filesystem.\n  -f  Force reset without confirmation\nSee 'man fsreset' for details.") {
         stdout.push_str(&help);
@@ -122,7 +122,7 @@ pub fn prog_fsreset(args: &[String], stdin: &str, stdout: &mut String, stderr: &
 }
 
 /// autosave - configure automatic filesystem saving
-pub fn prog_autosave(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_autosave(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
     if let Some(help) = check_help(&args, "Usage: autosave [on|off|status|interval N]\nConfigure automatic filesystem saving.\n  on       Enable auto-save\n  off      Disable auto-save\n  status   Show current settings\n  interval Set commands between saves (default: 10)\nSee 'man autosave' for details.") {
         stdout.push_str(&help);
@@ -182,7 +182,7 @@ pub fn prog_autosave(args: &[String], stdin: &str, stdout: &mut String, stderr: 
 }
 
 /// find - search for files and directories
-pub fn prog_find(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_find(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: find [PATH] [-name PATTERN] [-type TYPE]\nSearch for files.") {
@@ -251,10 +251,10 @@ pub fn prog_find(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut
                         if parts.len() == 2 {
                             let (prefix, suffix) = (parts[0], parts[1]);
                             entry.starts_with(prefix) && entry.ends_with(suffix)
-                        } else if pattern.starts_with('*') {
-                            entry.ends_with(&pattern[1..])
-                        } else if pattern.ends_with('*') {
-                            entry.starts_with(&pattern[..pattern.len()-1])
+                        } else if let Some(suffix) = pattern.strip_prefix('*') {
+                            entry.ends_with(suffix)
+                        } else if let Some(prefix) = pattern.strip_suffix('*') {
+                            entry.starts_with(prefix)
                         } else {
                             entry == pattern
                         }
@@ -297,7 +297,7 @@ pub fn prog_find(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut
 }
 
 /// du - disk usage
-pub fn prog_du(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+pub fn prog_du(args: &[String], __stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: du [-s] [-h] [PATH...]\nEstimate file space usage.") {
@@ -305,11 +305,10 @@ pub fn prog_du(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut 
         return 0;
     }
 
-    let summary_only = args.iter().any(|a| *a == "-s");
-    let human_readable = args.iter().any(|a| *a == "-h");
+    let summary_only = args.contains(&"-s");
+    let human_readable = args.contains(&"-h");
     let paths: Vec<&str> = args.iter()
-        .filter(|a| !a.starts_with('-'))
-        .map(|s| *s)
+        .filter(|a| !a.starts_with('-')).copied()
         .collect();
 
     let paths = if paths.is_empty() { vec!["."] } else { paths };
@@ -326,32 +325,28 @@ pub fn prog_du(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut 
                 format!("{}", size)
             }
         } else {
-            format!("{}", (size + 1023) / 1024) // blocks
+            format!("{}", size.div_ceil(1024)) // blocks
         }
     }
 
     fn du_recursive(path: &str, human: bool, summary: bool, stdout: &mut String) -> u64 {
         let mut total: u64 = 0;
 
-        match syscall::metadata(path) {
-            Ok(meta) => {
-                if meta.is_file {
-                    total = meta.size;
-                } else if meta.is_dir {
-                    if let Ok(entries) = syscall::readdir(path) {
-                        for entry in entries {
-                            let full = if path == "/" {
-                                format!("/{}", entry)
-                            } else {
-                                format!("{}/{}", path, entry)
-                            };
-                            let sub_size = du_recursive(&full, human, true, stdout);
-                            total += sub_size;
-                        }
+        if let Ok(meta) = syscall::metadata(path) {
+            if meta.is_file {
+                total = meta.size;
+            } else if meta.is_dir
+                && let Ok(entries) = syscall::readdir(path) {
+                    for entry in entries {
+                        let full = if path == "/" {
+                            format!("/{}", entry)
+                        } else {
+                            format!("{}/{}", path, entry)
+                        };
+                        let sub_size = du_recursive(&full, human, true, stdout);
+                        total += sub_size;
                     }
                 }
-            }
-            Err(_) => {}
         }
 
         if !summary {
@@ -381,7 +376,7 @@ pub fn prog_du(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut 
 }
 
 /// df - filesystem space
-pub fn prog_df(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+pub fn prog_df(args: &[String], __stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: df [-h]\nShow filesystem disk space usage.") {
@@ -389,7 +384,7 @@ pub fn prog_df(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut 
         return 0;
     }
 
-    let human_readable = args.iter().any(|a| *a == "-h");
+    let human_readable = args.contains(&"-h");
 
     // Calculate total VFS size by walking the filesystem
     fn count_size(path: &str) -> u64 {
@@ -397,8 +392,8 @@ pub fn prog_df(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut 
         if let Ok(meta) = syscall::metadata(path) {
             if meta.is_file {
                 total = meta.size;
-            } else if meta.is_dir {
-                if let Ok(entries) = syscall::readdir(path) {
+            } else if meta.is_dir
+                && let Ok(entries) = syscall::readdir(path) {
                     for entry in entries {
                         let full = if path == "/" {
                             format!("/{}", entry)
@@ -408,7 +403,6 @@ pub fn prog_df(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut 
                         total += count_size(&full);
                     }
                 }
-            }
         }
         total
     }
@@ -430,7 +424,7 @@ pub fn prog_df(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut 
                 format!("{}B", size)
             }
         } else {
-            format!("{}", (size + 1023) / 1024)
+            format!("{}", size.div_ceil(1024))
         }
     }
 

@@ -4,7 +4,7 @@ use super::{args_to_strs, check_help};
 use crate::kernel::syscall;
 
 /// crontab - maintain cron tables for scheduled jobs
-pub fn prog_crontab(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_crontab(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: crontab [-l | -e | -r] [file]\n\nMaintain cron tables for scheduled jobs.\n\nOptions:\n  -l        List current crontab\n  -e        Edit crontab (prints current, use crontab file to set)\n  -r        Remove crontab\n  file      Install crontab from file\n\nCrontab format:\n  minute hour day month weekday command\n  @reboot  Run at startup\n  @hourly  Run every hour (0 * * * *)\n  @daily   Run daily (0 0 * * *)\n\nExamples:\n  */5 * * * * echo 'every 5 min'    Run every 5 minutes\n  0 * * * * date                    Run at the top of every hour\n  @reboot /var/packages/startup     Run at boot") {
@@ -64,7 +64,7 @@ pub fn prog_crontab(args: &[String], stdin: &str, stdout: &mut String, stderr: &
         return 0;
     }
 
-    match &args[0][..] {
+    match args[0] {
         "-e" => {
             // Print current crontab for manual editing
             stdout.push_str("# Edit your crontab below, then save with:\n");
@@ -169,7 +169,7 @@ pub fn prog_crontab(args: &[String], stdin: &str, stdout: &mut String, stderr: &
 }
 
 /// at - schedule a one-time job
-pub fn prog_at(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_at(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: at <time> <command>\n       at -l         List pending jobs\n       at -r <id>    Remove a job\n\nSchedule a command to run at a specific time.\n\nTime formats:\n  +5m    5 minutes from now\n  +1h    1 hour from now\n  +30s   30 seconds from now\n\nExamples:\n  at +5m echo 'Hello'     Run in 5 minutes\n  at +1h date             Run in 1 hour") {
@@ -187,7 +187,7 @@ pub fn prog_at(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut S
         return 1;
     }
 
-    match &args[0][..] {
+    match args[0] {
         "-l" | "list" => {
             // List pending jobs
             match syscall::readdir("/var/spool/at") {
@@ -252,14 +252,13 @@ pub fn prog_at(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut S
             }
 
             // Parse time specification
-            let delay_ms: u64 = if time_spec.starts_with('+') {
-                let spec = &time_spec[1..];
-                if spec.ends_with('s') {
-                    spec[..spec.len()-1].parse::<u64>().unwrap_or(0) * 1000
-                } else if spec.ends_with('m') {
-                    spec[..spec.len()-1].parse::<u64>().unwrap_or(0) * 60 * 1000
-                } else if spec.ends_with('h') {
-                    spec[..spec.len()-1].parse::<u64>().unwrap_or(0) * 60 * 60 * 1000
+            let delay_ms: u64 = if let Some(spec) = time_spec.strip_prefix('+') {
+                if let Some(stripped) = spec.strip_suffix('s') {
+                    stripped.parse::<u64>().unwrap_or(0) * 1000
+                } else if let Some(stripped) = spec.strip_suffix('m') {
+                    stripped.parse::<u64>().unwrap_or(0) * 60 * 1000
+                } else if let Some(stripped) = spec.strip_suffix('h') {
+                    stripped.parse::<u64>().unwrap_or(0) * 60 * 60 * 1000
                 } else {
                     spec.parse::<u64>().unwrap_or(0) * 1000 // default to seconds
                 }

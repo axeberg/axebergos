@@ -236,7 +236,7 @@ impl Terminal {
     pub fn handle_key(&mut self, key: &str, code: &str, ctrl: bool, _alt: bool) -> bool {
         // Handle Ctrl combinations
         if ctrl {
-            match key.as_ref() {
+            match key {
                 "c" => {
                     // Ctrl+C - cancel current input
                     self.print(&format!("{}{}^C", self.prompt, self.input));
@@ -281,7 +281,7 @@ impl Terminal {
         }
 
         // Handle special keys by code
-        match code.as_ref() {
+        match code {
             "Enter" | "NumpadEnter" => {
                 self.submit();
                 return true;
@@ -403,8 +403,8 @@ impl Terminal {
         let cwd = self.executor.state.cwd.display().to_string();
         // Shorten home directory
         let home = self.executor.state.get_env("HOME").unwrap_or("/home");
-        let display = if cwd.starts_with(home) {
-            format!("~{}", &cwd[home.len()..])
+        let display = if let Some(rest) = cwd.strip_prefix(home) {
+            format!("~{}", rest)
         } else {
             cwd
         };
@@ -528,11 +528,10 @@ impl Terminal {
         // Calculate absolute line first to avoid borrow issues
         let abs_line = self.visible_line_to_absolute(line);
 
-        if let Some(ref mut sel) = self.selection {
-            if sel.active {
+        if let Some(ref mut sel) = self.selection
+            && sel.active {
                 sel.end = TermPos::new(abs_line, col);
             }
-        }
     }
 
     /// Finish selection (mouse up)

@@ -12,7 +12,7 @@ use super::{args_to_strs, check_help};
 use crate::kernel::syscall;
 
 /// curl - transfer data from URL
-pub fn prog_curl(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_curl(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
     if let Some(help) = check_help(&args, "Usage: curl [OPTIONS] URL\nTransfer data from URL.\n  -i  Include headers in output\n  -s  Silent mode\n  -X METHOD  Specify request method\n  -H HEADER  Add custom header\nSee 'man curl' for details.") {
         stdout.push_str(&help);
@@ -121,7 +121,7 @@ pub fn prog_curl(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut
 
 /// wget - download file from URL
 #[allow(unused_variables)]
-pub fn prog_wget(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_wget(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
     if let Some(help) = check_help(&args, "Usage: wget [OPTIONS] URL\nDownload file from URL.\n  -O FILE  Save to FILE instead of default\n  -q       Quiet mode\nSee 'man wget' for details.") {
         stdout.push_str(&help);

@@ -658,11 +658,10 @@ impl Kernel {
         }
 
         // Track parent-child relationship
-        if let Some(parent_pid) = parent {
-            if let Some(parent_proc) = self.processes.get_mut(&parent_pid) {
+        if let Some(parent_pid) = parent
+            && let Some(parent_proc) = self.processes.get_mut(&parent_pid) {
                 parent_proc.children.push(pid);
             }
-        }
 
         self.processes.insert(pid, process);
         pid
@@ -1777,12 +1776,11 @@ impl Kernel {
         let process = self.processes.get_mut(&current).ok_or(SyscallError::NoProcess)?;
 
         // Get the region data before detaching
-        if let Some(region_id) = process.memory.shm_region(shm_id) {
-            if let Some(region) = process.memory.get(region_id) {
+        if let Some(region_id) = process.memory.shm_region(shm_id)
+            && let Some(region) = process.memory.get(region_id) {
                 let data = region.as_slice().to_vec();
                 self.memory.shm_sync(shm_id, &data)?;
             }
-        }
 
         // Detach from process memory
         process.memory.detach_shm(shm_id)?;
@@ -2852,11 +2850,10 @@ pub fn add_user(name: &str, gid: Option<Gid>) -> SyscallResult<Uid> {
     KERNEL.with(|k| {
         let mut kernel = k.borrow_mut();
         // Check if caller is root
-        if let Ok(euid) = kernel.sys_geteuid() {
-            if euid != Uid::ROOT {
+        if let Ok(euid) = kernel.sys_geteuid()
+            && euid != Uid::ROOT {
                 return Err(SyscallError::PermissionDenied);
             }
-        }
         kernel
             .users_mut()
             .add_user(name, gid)
@@ -2869,11 +2866,10 @@ pub fn add_group(name: &str) -> SyscallResult<Gid> {
     KERNEL.with(|k| {
         let mut kernel = k.borrow_mut();
         // Check if caller is root
-        if let Ok(euid) = kernel.sys_geteuid() {
-            if euid != Uid::ROOT {
+        if let Ok(euid) = kernel.sys_geteuid()
+            && euid != Uid::ROOT {
                 return Err(SyscallError::PermissionDenied);
             }
-        }
         kernel
             .users_mut()
             .add_group(name)

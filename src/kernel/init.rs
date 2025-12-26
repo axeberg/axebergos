@@ -127,7 +127,7 @@ pub enum Target {
 }
 
 impl Target {
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "rescue" | "rescue.target" => Some(Target::Rescue),
             "multi-user" | "multi-user.target" => Some(Target::MultiUser),
@@ -229,11 +229,10 @@ impl InitSystem {
 
         // Check dependencies (without holding any borrows)
         for dep in &deps {
-            if let Some(dep_svc) = self.services.get(dep) {
-                if dep_svc.state != ServiceState::Running {
+            if let Some(dep_svc) = self.services.get(dep)
+                && dep_svc.state != ServiceState::Running {
                     return Err(format!("Dependency '{}' not running", dep));
                 }
-            }
         }
 
         // Now get the length before borrowing mutably
@@ -448,10 +447,10 @@ mod tests {
 
     #[test]
     fn test_target_parsing() {
-        assert_eq!(Target::from_str("rescue"), Some(Target::Rescue));
-        assert_eq!(Target::from_str("multi-user.target"), Some(Target::MultiUser));
-        assert_eq!(Target::from_str("graphical"), Some(Target::Graphical));
-        assert_eq!(Target::from_str("invalid"), None);
+        assert_eq!(Target::parse("rescue"), Some(Target::Rescue));
+        assert_eq!(Target::parse("multi-user.target"), Some(Target::MultiUser));
+        assert_eq!(Target::parse("graphical"), Some(Target::Graphical));
+        assert_eq!(Target::parse("invalid"), None);
     }
 
     #[test]

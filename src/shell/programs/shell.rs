@@ -23,7 +23,7 @@ pub fn prog_history(args: &[String], _stdin: &str, stdout: &mut String, _stderr:
     let history: Vec<String> = Vec::new();
 
     // Check for -c (clear) flag
-    if args.iter().any(|a| *a == "-c") {
+    if args.contains(&"-c") {
         // Can't clear history from here - would need terminal module support
         stdout.push_str("history: clearing not supported\n");
         return 0;
@@ -50,7 +50,7 @@ pub fn prog_history(args: &[String], _stdin: &str, stdout: &mut String, _stderr:
 
 /// Text editor - opens a file for editing
 #[allow(unused_variables)]
-pub fn prog_edit(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_edit(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: edit [FILE]\nOpen text editor. Ctrl+Q to quit, Ctrl+S to save. See 'man edit' for details.") {
@@ -195,7 +195,7 @@ pub fn prog_printenv(args: &[String], _stdin: &str, stdout: &mut String, stderr:
                 // Print specific variables
                 let env_map: std::collections::HashMap<String, String> = env.into_iter().collect();
                 for name in args {
-                    if let Some(value) = env_map.get(&name.to_string()) {
+                    if let Some(value) = env_map.get(name) {
                         stdout.push_str(&format!("{}\n", value));
                     }
                 }
@@ -290,7 +290,7 @@ pub fn prog_basename(args: &[String], _stdin: &str, stdout: &mut String, stderr:
     }
 
     let path = args[0];
-    let suffix = args.get(1).map(|s| *s);
+    let suffix = args.get(1).copied();
 
     // Get the last component
     let base = path.rsplit('/').next().unwrap_or(path);
@@ -539,7 +539,7 @@ pub fn prog_printf(args: &[String], _stdin: &str, stdout: &mut String, stderr: &
             match chars.next() {
                 Some('s') => {
                     if arg_idx < args.len() {
-                        stdout.push_str(&args[arg_idx]);
+                        stdout.push_str(args[arg_idx]);
                         arg_idx += 1;
                     }
                 }

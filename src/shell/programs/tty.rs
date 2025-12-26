@@ -3,7 +3,7 @@
 use super::{args_to_strs, check_help};
 use crate::kernel::syscall;
 
-pub fn prog_stty(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_stty(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: stty [SETTING]...\n       stty -a\n       stty sane\n       stty raw\n\nChange and print terminal line settings.\n\nSettings:\n  -echo/-icanon/-isig  Toggle flags\n  sane                 Reset to sane defaults\n  raw                  Set raw mode\n  -a                   Print all settings") {
@@ -17,7 +17,7 @@ pub fn prog_stty(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut
         let mut kernel = k.borrow_mut();
 
         // If no args or -a, print current settings
-        if args.is_empty() || args.iter().any(|a| *a == "-a") {
+        if args.is_empty() || args.contains(&"-a") {
             if let Some(tty) = kernel.ttys().current_tty() {
                 stdout.push_str(&format_stty_settings(&tty.termios));
             } else {
@@ -51,7 +51,7 @@ pub fn prog_stty(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut
     })
 }
 
-pub fn prog_tty(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+pub fn prog_tty(args: &[String], __stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: tty\nPrint the file name of the terminal connected to standard input.") {
@@ -59,7 +59,7 @@ pub fn prog_tty(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut
         return 0;
     }
 
-    let silent = args.iter().any(|a| *a == "-s");
+    let silent = args.contains(&"-s");
 
     syscall::KERNEL.with(|k| {
         let kernel = k.borrow();

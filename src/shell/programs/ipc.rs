@@ -3,7 +3,7 @@
 use super::{args_to_strs, check_help};
 use crate::kernel::syscall;
 
-pub fn prog_mkfifo(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_mkfifo(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: mkfifo NAME...\nCreate named pipes (FIFOs).\n\nOptions:\n  -m MODE  Set permission mode (octal)") {
@@ -39,7 +39,7 @@ pub fn prog_mkfifo(args: &[String], stdin: &str, stdout: &mut String, stderr: &m
     exit_code
 }
 
-pub fn prog_ipcs(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+pub fn prog_ipcs(args: &[String], __stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: ipcs [options]\nShow IPC facilities.\n\nOptions:\n  -a  Show all (default)\n  -q  Show message queues\n  -s  Show semaphores\n  -m  Show shared memory") {
@@ -47,10 +47,10 @@ pub fn prog_ipcs(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mu
         return 0;
     }
 
-    let show_all = args.is_empty() || args.iter().any(|a| *a == "-a");
-    let show_queues = show_all || args.iter().any(|a| *a == "-q");
-    let show_sems = show_all || args.iter().any(|a| *a == "-s");
-    let show_shm = show_all || args.iter().any(|a| *a == "-m");
+    let show_all = args.is_empty() || args.contains(&"-a");
+    let show_queues = show_all || args.contains(&"-q");
+    let show_sems = show_all || args.contains(&"-s");
+    let show_shm = show_all || args.contains(&"-m");
 
     syscall::KERNEL.with(|k| {
         let kernel = k.borrow();
@@ -110,13 +110,13 @@ pub fn prog_ipcs(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mu
             }
         }
 
-        stdout.push_str("\n");
+        stdout.push('\n');
     });
 
     0
 }
 
-pub fn prog_ipcrm(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_ipcrm(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: ipcrm [options]\nRemove IPC resources.\n\nOptions:\n  -q ID   Remove message queue with ID\n  -s ID   Remove semaphore set with ID\n  -m ID   Remove shared memory with ID\n  -a      Remove all IPC resources") {
@@ -127,7 +127,7 @@ pub fn prog_ipcrm(args: &[String], stdin: &str, stdout: &mut String, stderr: &mu
     let mut exit_code = 0;
 
     // Check for -a (remove all)
-    if args.iter().any(|a| *a == "-a") {
+    if args.contains(&"-a") {
         syscall::KERNEL.with(|k| {
             let mut kernel = k.borrow_mut();
 
@@ -149,7 +149,7 @@ pub fn prog_ipcrm(args: &[String], stdin: &str, stdout: &mut String, stderr: &mu
 
     let mut i = 0;
     while i < args.len() {
-        let opt = &args[i][..];
+        let opt = args[i];
         match opt {
             "-q" => {
                 if i + 1 >= args.len() {

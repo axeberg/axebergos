@@ -3,7 +3,7 @@
 use super::{args_to_strs, check_help};
 use crate::kernel::syscall;
 
-pub fn prog_pkg(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_pkg(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: pkg <command> [args]\n\nPackage manager for axeberg.\n\nCommands:\n  install <name> <script>   Install a package (script content)\n  remove <name>             Remove a package\n  list                      List installed packages\n  run <name> [args]         Run an installed package\n  info <name>               Show package info\n\nPackages are stored in /var/packages/") {
@@ -20,7 +20,7 @@ pub fn prog_pkg(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut 
     let _ = syscall::mkdir("/var");
     let _ = syscall::mkdir("/var/packages");
 
-    match &args[0][..] {
+    match args[0] {
         "install" => {
             if args.len() < 3 {
                 stderr.push_str("pkg install: usage: pkg install <name> <script>\n");

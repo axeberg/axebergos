@@ -208,8 +208,8 @@ impl TimerQueue {
 
             let entry = self.heap.pop().unwrap();
 
-            if let Some(timer) = self.timers.get_mut(&entry.id) {
-                if timer.state == TimerState::Pending && timer.is_expired(now) {
+            if let Some(timer) = self.timers.get_mut(&entry.id)
+                && timer.state == TimerState::Pending && timer.is_expired(now) {
                     // Fire the timer
                     if let Some(task_id) = timer.fire() {
                         tasks_to_wake.push(task_id);
@@ -220,7 +220,6 @@ impl TimerQueue {
                         to_reschedule.push((timer.id, timer.deadline));
                     }
                 }
-            }
         }
 
         // Reschedule interval timers

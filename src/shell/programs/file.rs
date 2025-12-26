@@ -307,9 +307,9 @@ pub fn prog_ln(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mut 
             symbolic = true;
         } else if *arg == "-f" || *arg == "--force" {
             force = true;
-        } else if arg.starts_with('-') {
+        } else if let Some(flags) = arg.strip_prefix('-') {
             // Handle combined flags like -sf
-            for c in arg[1..].chars() {
+            for c in flags.chars() {
                 match c {
                     's' => symbolic = true,
                     'f' => force = true,

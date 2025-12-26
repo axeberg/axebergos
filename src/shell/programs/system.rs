@@ -4,7 +4,7 @@ use super::{args_to_strs, check_help};
 use crate::kernel::syscall;
 
 /// id - print process and user IDs (uses kernel syscalls)
-pub fn prog_id(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_id(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: id [USER]\nPrint user and group IDs.") {
@@ -92,7 +92,7 @@ pub fn prog_id(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut S
 }
 
 /// whoami - print effective username
-pub fn prog_whoami(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_whoami(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: whoami\nPrint effective username.") {
@@ -127,7 +127,7 @@ pub fn prog_whoami(args: &[String], stdin: &str, stdout: &mut String, stderr: &m
 }
 
 /// groups - print group memberships
-pub fn prog_groups(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_groups(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: groups [USER]\nPrint group memberships.") {
@@ -187,7 +187,7 @@ pub fn prog_groups(args: &[String], stdin: &str, stdout: &mut String, stderr: &m
 }
 
 /// hostname - show or set system hostname
-pub fn prog_hostname(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_hostname(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: hostname [NAME]\nShow or set system hostname.") {
@@ -227,7 +227,7 @@ pub fn prog_hostname(args: &[String], stdin: &str, stdout: &mut String, stderr: 
 }
 
 /// uname - print system information
-pub fn prog_uname(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+pub fn prog_uname(args: &[String], __stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: uname [-amnrsv]\nPrint system information.") {
@@ -245,12 +245,12 @@ pub fn prog_uname(args: &[String], stdin: &str, stdout: &mut String, _stderr: &m
     let kernel_version = "axebergOS";
     let machine = "wasm32";
 
-    let show_all = args.iter().any(|a| *a == "-a");
-    let show_kernel = args.is_empty() || args.iter().any(|a| *a == "-s") || show_all;
-    let show_hostname = args.iter().any(|a| *a == "-n") || show_all;
-    let show_release = args.iter().any(|a| *a == "-r") || show_all;
-    let show_version = args.iter().any(|a| *a == "-v") || show_all;
-    let show_machine = args.iter().any(|a| *a == "-m") || show_all;
+    let show_all = args.contains(&"-a");
+    let show_kernel = args.is_empty() || args.contains(&"-s") || show_all;
+    let show_hostname = args.contains(&"-n") || show_all;
+    let show_release = args.contains(&"-r") || show_all;
+    let show_version = args.contains(&"-v") || show_all;
+    let show_machine = args.contains(&"-m") || show_all;
 
     let mut parts = Vec::new();
     if show_kernel {
@@ -279,7 +279,7 @@ pub fn prog_uname(args: &[String], stdin: &str, stdout: &mut String, _stderr: &m
 }
 
 /// ps - process status
-pub fn prog_ps(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+pub fn prog_ps(args: &[String], __stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: ps [-a] [-l]\nReport process status.") {
@@ -287,7 +287,7 @@ pub fn prog_ps(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut 
         return 0;
     }
 
-    let long_format = args.iter().any(|a| *a == "-l");
+    let long_format = args.contains(&"-l");
 
     let processes = syscall::list_processes();
 
@@ -322,7 +322,7 @@ pub fn prog_ps(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut 
 }
 
 /// time - time command execution
-pub fn prog_time(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_time(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: time COMMAND [ARGS...]\nTime command execution.") {
@@ -355,7 +355,7 @@ pub fn prog_time(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut
 }
 
 /// date - print current date and time
-pub fn prog_date(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+pub fn prog_date(args: &[String], __stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: date [+FORMAT]\nPrint current date and time.") {
@@ -379,7 +379,7 @@ pub fn prog_date(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mu
 }
 
 /// uptime - show how long system has been running
-pub fn prog_uptime(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+pub fn prog_uptime(args: &[String], __stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: uptime\nShow how long the system has been running.") {
@@ -419,7 +419,7 @@ pub fn prog_uptime(args: &[String], stdin: &str, stdout: &mut String, _stderr: &
 }
 
 /// free - display amount of free and used memory
-pub fn prog_free(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+pub fn prog_free(args: &[String], __stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
     let human = args.iter().any(|a| *a == "-h" || *a == "--human");
 

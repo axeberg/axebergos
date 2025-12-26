@@ -476,15 +476,11 @@ pub fn format_stty_settings(termios: &Termios) -> String {
 
     // Speed
     output.push_str(&format!("speed {} baud; ", termios.ospeed));
-    output.push_str(&format!("rows 24; columns 80;\n"));
+    output.push_str("rows 24; columns 80;\n");
 
     // Control characters
-    output.push_str(&format!(
-        "intr = ^C; quit = ^\\; erase = ^?; kill = ^U; eof = ^D;\n"
-    ));
-    output.push_str(&format!(
-        "susp = ^Z; start = ^Q; stop = ^S;\n"
-    ));
+    output.push_str("intr = ^C; quit = ^\\; erase = ^?; kill = ^U; eof = ^D;\n");
+    output.push_str("susp = ^Z; start = ^Q; stop = ^S;\n");
 
     // Input flags
     let mut iflags = Vec::new();

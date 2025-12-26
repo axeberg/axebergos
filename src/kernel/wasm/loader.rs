@@ -122,6 +122,7 @@ fn read_leb128(bytes: &[u8]) -> WasmResult<(u32, usize)> {
 }
 
 /// Parse export section, returns Vec<(name, kind, index)>
+#[allow(clippy::type_complexity)]
 fn parse_export_section(data: &[u8]) -> WasmResult<(Vec<(String, u8, u32)>, usize)> {
     let mut exports = Vec::new();
     let mut offset = 0;

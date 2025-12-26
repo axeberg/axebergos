@@ -13,7 +13,7 @@ use super::programs;
 use crate::kernel::syscall;
 use crate::kernel::wasm::WasmCommandRunner;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::Path;
 
 /// Result of executing a pipeline
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -644,14 +644,13 @@ impl Executor {
             let is_last = i == commands.len() - 1;
 
             // Handle input redirection on first command
-            if is_first {
-                if let Some(ref redir) = cmd.stdin {
+            if is_first
+                && let Some(ref redir) = cmd.stdin {
                     match self.read_file(&redir.path) {
                         Ok(content) => pipe_input = content,
                         Err(e) => return ExecResult::success().with_error(e),
                     }
                 }
-            }
 
             // Execute the command
             let mut stdout = String::new();
@@ -827,7 +826,7 @@ impl Executor {
     }
 
     /// Change directory and update state
-    fn change_directory(&mut self, path: &PathBuf) -> ExecResult {
+    fn change_directory(&mut self, path: &Path) -> ExecResult {
         // Verify the directory exists
         let path_str = path.display().to_string();
         match syscall::exists(&path_str) {
@@ -843,7 +842,7 @@ impl Executor {
                 }
 
                 // Change directory in shell state
-                self.state.cwd = path.clone();
+                self.state.cwd = path.to_path_buf();
                 self.state.set_env("PWD", &path_str);
                 self.state.last_status = 0;
                 ExecResult::success()
@@ -989,7 +988,7 @@ impl Executor {
         let mut content = String::new();
         let mut depth = 1;
 
-        while let Some(c) = chars.next() {
+        for c in chars.by_ref() {
             match c {
                 '(' => {
                     depth += 1;
@@ -1213,7 +1212,7 @@ fn expand_glob(pattern: &str, cwd: &str) -> Vec<String> {
     // Determine base path and pattern
     let (base, pat) = if pattern.starts_with('/') {
         // Absolute path
-        let parts: Vec<&str> = pattern.splitn(2, |c| c == '*' || c == '?' || c == '[').collect();
+        let parts: Vec<&str> = pattern.splitn(2, ['*', '?', '[']).collect();
         if parts.len() == 1 {
             // No glob chars - just return if exists
             if syscall::exists(pattern).unwrap_or(false) {
@@ -1280,11 +1279,10 @@ fn expand_glob_segments(dir: &str, segments: &[&str], results: &mut Vec<String>)
                 results.push(path);
             } else {
                 // Check if it's a directory for further matching
-                if let Ok(meta) = syscall::metadata(&path) {
-                    if meta.is_dir {
+                if let Ok(meta) = syscall::metadata(&path)
+                    && meta.is_dir {
                         expand_glob_segments(&path, remaining, results);
                     }
-                }
             }
         }
     }
@@ -1331,20 +1329,18 @@ fn expand_glob_traverse(dir: &str, suffix: &str, results: &mut Vec<String>) {
             let segments: Vec<&str> = suffix.split('/').collect();
             if glob_match(segments[0], &entry) {
                 // Check if remaining segments match
-                if let Ok(meta) = syscall::metadata(&path) {
-                    if meta.is_dir {
+                if let Ok(meta) = syscall::metadata(&path)
+                    && meta.is_dir {
                         expand_glob_segments(&path, &segments[1..], results);
                     }
-                }
             }
         }
 
         // Recurse into directories
-        if let Ok(meta) = syscall::metadata(&path) {
-            if meta.is_dir {
+        if let Ok(meta) = syscall::metadata(&path)
+            && meta.is_dir {
                 expand_glob_traverse(&path, suffix, results);
             }
-        }
     }
 }
 

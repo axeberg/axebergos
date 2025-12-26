@@ -4,7 +4,7 @@ use super::args_to_strs;
 use crate::kernel::syscall;
 
 /// chmod - change file permissions
-pub fn prog_chmod(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_chmod(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if args.len() < 2 || args.first().map(|s| s.as_ref()) == Some("--help") {
@@ -39,7 +39,7 @@ pub fn prog_chmod(args: &[String], stdin: &str, stdout: &mut String, stderr: &mu
 }
 
 /// chown - change file owner
-pub fn prog_chown(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_chown(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if args.len() < 2 || args.first().map(|s| s.as_ref()) == Some("--help") {
@@ -106,7 +106,7 @@ pub fn prog_chown(args: &[String], stdin: &str, stdout: &mut String, stderr: &mu
 }
 
 /// chgrp - change file group
-pub fn prog_chgrp(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_chgrp(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if args.len() < 2 || args.first().map(|s| s.as_ref()) == Some("--help") {

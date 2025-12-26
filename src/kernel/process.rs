@@ -244,6 +244,7 @@ impl Process {
     }
 
     /// Create a process with inherited environment and credentials
+    #[allow(clippy::too_many_arguments)]
     pub fn with_environ(
         pid: Pid,
         name: String,
@@ -319,6 +320,7 @@ impl Process {
     }
 
     /// Create a login shell process for a user (like what login(1) does)
+    #[allow(clippy::too_many_arguments)]
     pub fn new_login_shell(
         pid: Pid,
         name: String,

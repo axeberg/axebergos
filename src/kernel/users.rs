@@ -128,16 +128,12 @@ impl FileMode {
         s.push(if self.owner_write() { 'w' } else { '-' });
         s.push(if self.is_setuid() {
             if self.owner_exec() { 's' } else { 'S' }
-        } else {
-            if self.owner_exec() { 'x' } else { '-' }
-        });
+        } else if self.owner_exec() { 'x' } else { '-' });
         s.push(if self.group_read() { 'r' } else { '-' });
         s.push(if self.group_write() { 'w' } else { '-' });
         s.push(if self.is_setgid() {
             if self.group_exec() { 's' } else { 'S' }
-        } else {
-            if self.group_exec() { 'x' } else { '-' }
-        });
+        } else if self.group_exec() { 'x' } else { '-' });
         s.push(if self.other_read() { 'r' } else { '-' });
         s.push(if self.other_write() { 'w' } else { '-' });
         s.push(if self.other_exec() { 'x' } else { '-' });
@@ -581,6 +577,7 @@ fn simple_hash(password: &str) -> String {
 }
 
 /// Check if a user can access a file with given permissions
+#[allow(clippy::too_many_arguments)]
 pub fn check_permission(
     file_uid: Uid,
     file_gid: Gid,

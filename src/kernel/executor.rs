@@ -17,20 +17,17 @@ use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
 /// Task priority levels
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Default)]
 pub enum Priority {
     /// System-critical tasks (compositor, input handling)
     Critical = 0,
     /// Normal application tasks
+    #[default]
     Normal = 1,
     /// Background tasks (can be starved)
     Background = 2,
 }
 
-impl Default for Priority {
-    fn default() -> Self {
-        Priority::Normal
-    }
-}
 
 /// A managed task with metadata
 struct ManagedTask {

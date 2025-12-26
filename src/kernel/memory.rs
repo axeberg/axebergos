@@ -547,11 +547,10 @@ impl MemoryManager {
 
         let should_remove = shm.detach(pid);
 
-        if should_remove {
-            if let Some(removed) = self.shared_segments.remove(&shm_id) {
+        if should_remove
+            && let Some(removed) = self.shared_segments.remove(&shm_id) {
                 self.total_allocated = self.total_allocated.saturating_sub(removed.size);
             }
-        }
 
         Ok(should_remove)
     }

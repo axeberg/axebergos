@@ -42,8 +42,8 @@ impl ProcFs {
             Some(entries)
         } else if let Some(pid_str) = path.strip_prefix("/proc/") {
             // Check if it's a PID directory
-            if let Ok(pid) = pid_str.parse::<u32>() {
-                if pids.contains(&pid) {
+            if let Ok(pid) = pid_str.parse::<u32>()
+                && pids.contains(&pid) {
                     return Some(vec![
                         "cmdline".to_string(),
                         "cwd".to_string(),
@@ -55,14 +55,12 @@ impl ProcFs {
                         "maps".to_string(),
                     ]);
                 }
-            }
             // Check for /proc/[pid]/fd
-            if let Some(rest) = pid_str.strip_suffix("/fd") {
-                if let Ok(_pid) = rest.parse::<u32>() {
+            if let Some(rest) = pid_str.strip_suffix("/fd")
+                && let Ok(_pid) = rest.parse::<u32>() {
                     // Would list file descriptors here
                     return Some(vec!["0".to_string(), "1".to_string(), "2".to_string()]);
                 }
-            }
             None
         } else {
             None

@@ -4,7 +4,7 @@ use super::{args_to_strs, check_help};
 use crate::kernel::syscall;
 
 /// su - switch user (simulated)
-pub fn prog_su(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_su(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: su [-] [USER]\nSwitch user. Defaults to root.") {
@@ -70,7 +70,7 @@ pub fn prog_su(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut S
 }
 
 /// sudo - run command as root (simulated)
-pub fn prog_sudo(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_sudo(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if args.is_empty() || args.first().map(|s| s.as_ref()) == Some("--help") {
@@ -116,7 +116,7 @@ pub fn prog_sudo(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut
 }
 
 /// useradd - create a new user
-pub fn prog_useradd(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_useradd(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if args.is_empty() || args.first().map(|s| s.as_ref()) == Some("--help") {
@@ -188,7 +188,7 @@ pub fn prog_useradd(args: &[String], stdin: &str, stdout: &mut String, stderr: &
 }
 
 /// groupadd - create a new group
-pub fn prog_groupadd(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_groupadd(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if args.is_empty() || args.first().map(|s| s.as_ref()) == Some("--help") {
@@ -227,7 +227,7 @@ pub fn prog_groupadd(args: &[String], stdin: &str, stdout: &mut String, stderr: 
 }
 
 /// passwd - change password
-pub fn prog_passwd(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_passwd(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: passwd [USER] [PASSWORD]\n\nChange user password.\n\nExamples:\n  passwd mypassword          Set your own password\n  passwd root newpass        Set root's password (requires root)\n  passwd user                Clear user's password (requires root)") {
@@ -248,7 +248,7 @@ pub fn prog_passwd(args: &[String], stdin: &str, stdout: &mut String, stderr: &m
             .unwrap_or_else(|| "user".to_string());
 
         // If argument looks like a username that exists, treat it as clearing password
-        if euid.0 == 0 && syscall::get_user_by_name(&args[0]).is_some() {
+        if euid.0 == 0 && syscall::get_user_by_name(args[0]).is_some() {
             (args[0].to_string(), None)
         } else {
             // Treat as password for current user
@@ -263,7 +263,7 @@ pub fn prog_passwd(args: &[String], stdin: &str, stdout: &mut String, stderr: &m
         if euid.0 != 0 {
             let current_user = syscall::get_user_by_uid(euid)
                 .map(|u| u.name.clone())
-                .unwrap_or_else(|| "".to_string());
+                .unwrap_or_default();
             if username != current_user {
                 stderr.push_str("passwd: permission denied (must be root to change other users' passwords)\n");
                 return 1;
@@ -313,7 +313,7 @@ pub fn prog_passwd(args: &[String], stdin: &str, stdout: &mut String, stderr: &m
 /// login - log in as a user with password authentication
 /// This behaves like real Linux login(1): it spawns a NEW shell process
 /// as the target user with proper session management.
-pub fn prog_login(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_login(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: login <username> [password]\n\nLog in as a user with password authentication.\n\nThis command spawns a new login shell as the specified user,\ncreating a proper session like Linux login(1).\n\nIf no password is provided, allows login for users without passwords.\nUse 'logout' to end the current session.\nUse 'passwd' to change your password.\n\nDefault users:\n  root     - password: root (uid 0)\n  user     - no password (uid 1000)\n  nobody   - no password (uid 65534)") {
@@ -423,7 +423,7 @@ pub fn prog_login(args: &[String], stdin: &str, stdout: &mut String, stderr: &mu
 /// logout - log out current user
 /// In a real Linux system, this would exit the login shell and return to getty.
 /// Here we terminate the current session and switch back to the init/parent process.
-pub fn prog_logout(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+pub fn prog_logout(args: &[String], __stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: logout\n\nEnd the current login session and return to the parent process.\nThis terminates the login shell that was spawned by 'login'.") {
@@ -479,7 +479,7 @@ pub fn prog_logout(args: &[String], stdin: &str, stdout: &mut String, _stderr: &
 }
 
 /// who - show who is logged in
-pub fn prog_who(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+pub fn prog_who(args: &[String], __stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: who\n\nShow who is logged in.") {
@@ -502,7 +502,7 @@ pub fn prog_who(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut
                         if parts.len() >= 3 {
                             let username = parts[0];
                             let login_time = parts[2].parse::<u64>().unwrap_or(0);
-                            let secs = (login_time / 1000) as u64;
+                            let secs = login_time / 1000;
                             let hours = (secs / 3600) % 24;
                             let mins = (secs / 60) % 60;
                             stdout.push_str(&format!(
@@ -539,7 +539,7 @@ pub fn prog_who(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut
 }
 
 /// w - show who is logged in and what they are doing
-pub fn prog_w(args: &[String], stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+pub fn prog_w(args: &[String], __stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: w\n\nShow who is logged in and what they are doing.") {

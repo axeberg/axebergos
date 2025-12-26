@@ -178,14 +178,13 @@ impl MemoryFs {
 
     /// Ensure parent directories exist
     fn ensure_parent(&mut self, path: &str) -> io::Result<()> {
-        if let Some(parent) = Self::parent_path(path) {
-            if !self.nodes.contains_key(&parent) {
+        if let Some(parent) = Self::parent_path(path)
+            && !self.nodes.contains_key(&parent) {
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
                     format!("Parent directory not found: {}", parent),
                 ));
             }
-        }
         Ok(())
     }
 }
@@ -776,7 +775,7 @@ impl FileSystem for MemoryFs {
             return Err(io::Error::new(io::ErrorKind::NotFound, "Path not found"));
         }
 
-        let meta = self.meta.entry(path).or_insert_with(NodeMeta::default);
+        let meta = self.meta.entry(path).or_default();
 
         if let Some(new_uid) = uid {
             meta.uid = new_uid;

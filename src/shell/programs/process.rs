@@ -4,7 +4,7 @@ use super::{args_to_strs, check_help};
 use crate::kernel::syscall;
 
 /// sleep - pause for specified seconds
-pub fn prog_sleep(args: &[String], _stdin: &str, _stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_sleep(args: &[String], __stdin: &str, _stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if args.is_empty() {
@@ -38,7 +38,7 @@ pub fn prog_sleep(args: &[String], _stdin: &str, _stdout: &mut String, stderr: &
 }
 
 /// jobs - list background jobs
-pub fn prog_jobs(args: &[String], _stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+pub fn prog_jobs(args: &[String], __stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: jobs [-l]\nList background jobs.") {
@@ -46,7 +46,7 @@ pub fn prog_jobs(args: &[String], _stdin: &str, stdout: &mut String, _stderr: &m
         return 0;
     }
 
-    let long_format = args.iter().any(|a| *a == "-l");
+    let long_format = args.contains(&"-l");
 
     // Get list of processes from kernel
     let processes = syscall::list_processes();
@@ -87,7 +87,7 @@ pub fn prog_jobs(args: &[String], _stdin: &str, stdout: &mut String, _stderr: &m
 }
 
 /// fg - bring job to foreground
-pub fn prog_fg(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_fg(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: fg [%JOB]\nBring job to foreground.") {
@@ -131,12 +131,11 @@ pub fn prog_fg(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mut 
 
     if let Some((pid, name, state)) = target {
         // If stopped, send SIGCONT
-        if matches!(state, syscall::ProcessState::Stopped) {
-            if let Err(e) = syscall::kill(*pid, crate::kernel::signal::Signal::SIGCONT) {
+        if matches!(state, syscall::ProcessState::Stopped)
+            && let Err(e) = syscall::kill(*pid, crate::kernel::signal::Signal::SIGCONT) {
                 stderr.push_str(&format!("fg: {}\n", e));
                 return 1;
             }
-        }
         stdout.push_str(&format!("{}\n", name));
         0
     } else {
@@ -146,7 +145,7 @@ pub fn prog_fg(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mut 
 }
 
 /// bg - continue job in background
-pub fn prog_bg(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_bg(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: bg [%JOB]\nContinue job in background.") {
@@ -203,7 +202,7 @@ pub fn prog_bg(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mut 
 }
 
 /// strace - trace system calls
-pub fn prog_strace(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_strace(args: &[String], __stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: strace [-c] COMMAND [ARGS...]\nTrace system calls.") {
@@ -216,10 +215,9 @@ pub fn prog_strace(args: &[String], _stdin: &str, stdout: &mut String, stderr: &
         return 1;
     }
 
-    let count_mode = args.iter().any(|a| *a == "-c");
+    let count_mode = args.contains(&"-c");
     let cmd_args: Vec<_> = args.iter()
-        .filter(|a| !a.starts_with('-'))
-        .map(|s| *s)
+        .filter(|a| !a.starts_with('-')).copied()
         .collect();
 
     if cmd_args.is_empty() {
@@ -264,7 +262,7 @@ pub fn prog_strace(args: &[String], _stdin: &str, stdout: &mut String, stderr: &
 }
 
 /// kill - send signal to process
-pub fn prog_kill(args: &[String], _stdin: &str, _stdout: &mut String, stderr: &mut String) -> i32 {
+pub fn prog_kill(args: &[String], __stdin: &str, _stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: kill [-s SIGNAL] PID...\nSend signal to processes.") {

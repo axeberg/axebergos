@@ -24,7 +24,7 @@ pub enum FsType {
 }
 
 impl FsType {
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "proc" => FsType::Proc,
             "sysfs" => FsType::Sysfs,
@@ -91,9 +91,10 @@ impl MountOptions {
         }
         opts
     }
+}
 
-    /// Convert to string representation
-    pub fn to_string(&self) -> String {
+impl std::fmt::Display for MountOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut parts = Vec::new();
         if self.read_only {
             parts.push("ro");
@@ -113,9 +114,9 @@ impl MountOptions {
             parts.push("nodev");
         }
         if self.size_limit > 0 {
-            return format!("{},size={}", parts.join(","), self.size_limit);
+            return write!(f, "{},size={}", parts.join(","), self.size_limit);
         }
-        parts.join(",")
+        write!(f, "{}", parts.join(","))
     }
 }
 
@@ -205,7 +206,7 @@ impl FstabEntry {
         Some(FstabEntry {
             source: parts[0].to_string(),
             target: parts[1].to_string(),
-            fstype: FsType::from_str(parts[2]),
+            fstype: FsType::parse(parts[2]),
             options: parts[3].to_string(),
             dump: parts.get(4).and_then(|s| s.parse().ok()).unwrap_or(0),
             pass: parts.get(5).and_then(|s| s.parse().ok()).unwrap_or(0),
@@ -384,7 +385,7 @@ impl MountTable {
                 entry.source,
                 entry.target,
                 entry.fstype.as_str(),
-                entry.options.to_string()
+                entry.options
             ));
         }
         lines.join("\n")
@@ -476,10 +477,10 @@ mod tests {
 
     #[test]
     fn test_fstype_parse() {
-        assert_eq!(FsType::from_str("proc"), FsType::Proc);
-        assert_eq!(FsType::from_str("SYSFS"), FsType::Sysfs);
-        assert_eq!(FsType::from_str("tmpfs"), FsType::Tmpfs);
-        assert_eq!(FsType::from_str("ext4"), FsType::Other("ext4".to_string()));
+        assert_eq!(FsType::parse("proc"), FsType::Proc);
+        assert_eq!(FsType::parse("SYSFS"), FsType::Sysfs);
+        assert_eq!(FsType::parse("tmpfs"), FsType::Tmpfs);
+        assert_eq!(FsType::parse("ext4"), FsType::Other("ext4".to_string()));
     }
 
     #[test]
