@@ -79,29 +79,6 @@ drwxr-xr-x 3 root root 4096 Dec 26 12:00 ..
 
 Fields: permissions, links, owner, group, size, date, name.
 
-### File type
-
-```bash
-$ file hello.txt
-hello.txt: ASCII text
-
-$ file /bin
-/bin: directory
-```
-
-### File stats
-
-```bash
-$ stat hello.txt
-  File: hello.txt
-  Size: 13        Blocks: 1     IO Block: 4096  regular file
-  Inode: 12345   Links: 1
-Access: (0644/-rw-r--r--)  Uid: (0/root)   Gid: (0/root)
-Access: 2024-12-26 12:00:00
-Modify: 2024-12-26 12:00:00
-Change: 2024-12-26 12:00:00
-```
-
 ## Searching Files
 
 ### Find by name
@@ -230,14 +207,7 @@ line only in 1
         another common
 ```
 
-## Binary Files
-
-### Hex dump
-
-```bash
-$ hexdump -C binary.dat | head
-00000000  89 50 4e 47 0d 0a 1a 0a  00 00 00 0d 49 48 44 52  |.PNG........IHDR|
-```
+## Encoding
 
 ### Base64
 
@@ -246,38 +216,11 @@ $ base64 file.bin > file.b64
 $ base64 -d file.b64 > file.bin
 ```
 
-### Checksums
+### Hex dump (xxd)
 
 ```bash
-$ md5sum file.txt
-d41d8cd98f00b204e9800998ecf8427e  file.txt
-
-$ sha1sum file.txt
-da39a3ee5e6b4b0d3255bfef95601890afd80709  file.txt
-```
-
-## Archives
-
-### Create tar
-
-```bash
-$ tar -cvf archive.tar dir/
-dir/
-dir/file1.txt
-dir/file2.txt
-```
-
-### Extract tar
-
-```bash
-$ tar -xvf archive.tar
-```
-
-### Zip files
-
-```bash
-$ zip backup.zip file1.txt file2.txt
-$ unzip backup.zip
+$ xxd file.bin | head
+00000000: 4865 6c6c 6f20 576f 726c 640a            Hello World.
 ```
 
 ## Exercises

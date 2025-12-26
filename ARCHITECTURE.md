@@ -146,13 +146,10 @@ How `cat file.txt | grep pattern | wc -l` executes:
 
 ## Process States
 
+Based on `ProcessState` enum in `src/kernel/process.rs`:
+
 ```
                           spawn()
-                             │
-                             ▼
-                      ┌─────────────┐
-                      │   Created   │
-                      └──────┬──────┘
                              │
                              ▼
      ┌───────────────────────────────────────────────┐
@@ -177,19 +174,14 @@ How `cat file.txt | grep pattern | wc -l` executes:
      │                     │                         │
      └─────────────────────┘                         │
                                                      │
+     Also: Blocked(Pid) - waiting on another process │
+                                                     │
                           exit() or signal           │
                              │                       │
                              ▼                       │
                       ┌─────────────┐                │
-                      │   Zombie    │ (waiting for   │
-                      └──────┬──────┘  parent wait)  │
-                             │                       │
-                        wait()                       │
-                             │                       │
-                             ▼                       │
-                      ┌─────────────┐                │
-                      │   Reaped    │────────────────┘
-                      └─────────────┘
+                      │ Zombie(i32) │ (exit code,    │
+                      └─────────────┘  awaiting wait)│
 ```
 
 ## Session & TTY Model

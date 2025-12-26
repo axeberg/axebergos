@@ -8,7 +8,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- `prompts/` directory documenting the AI development process
 - `ARCHITECTURE.md` with visual system diagrams
 - `examples/` directory with learning tutorials
 - `docs/decisions/` with Architecture Decision Records (ADRs)
@@ -55,12 +54,12 @@ Initial release of axeberg - a mini-OS in Rust running in WebAssembly.
 - **Background Jobs**: `command &` with job control (`fg`, `bg`, `jobs`)
 - **Quoting**: Single and double quote support
 
-### Commands (98 total)
-- **File Operations**: `cat`, `ls`, `mkdir`, `touch`, `rm`, `cp`, `mv`, `ln`, `find`, `tar`, `zip`
-- **Text Processing**: `grep`, `sort`, `uniq`, `cut`, `tr`, `sed`, `awk`, `diff`
-- **User Management**: `login`, `logout`, `useradd`, `passwd`, `id`, `whoami`, `sudo`
+### Commands (96 programs + 12 builtins)
+- **File Operations**: `cat`, `ls`, `mkdir`, `touch`, `rm`, `cp`, `mv`, `ln`, `find`, `tree`
+- **Text Processing**: `grep`, `sort`, `uniq`, `cut`, `tr`, `diff`, `head`, `tail`, `wc`
+- **User Management**: `login`, `logout`, `useradd`, `passwd`, `id`, `whoami`, `sudo`, `su`
 - **System**: `ps`, `kill`, `uptime`, `free`, `df`, `du`, `uname`, `date`
-- **Networking**: `curl`, `wget`, `nc` (WebSocket-based)
+- **Networking**: `curl`, `wget`
 - **Package Manager**: `pkg install`, `pkg list`, `pkg remove`
 
 ### Signals
@@ -71,7 +70,7 @@ Initial release of axeberg - a mini-OS in Rust running in WebAssembly.
 - Full kernel documentation in `docs/kernel/`
 - Shell guide in `docs/userspace/shell.md`
 - Building and testing guides in `docs/development/`
-- 89 Unix-style man pages
+- 61 Unix-style man pages
 
 ### Testing
 - 646 unit tests across all kernel modules

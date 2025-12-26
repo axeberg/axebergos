@@ -60,14 +60,13 @@ Password updated for alice
 # Password hashes stored in /etc/shadow (restricted)
 ```
 
-### Add to group
+### Create a group
 
 ```bash
 $ groupadd developers
-$ usermod -a -G developers alice
 
-$ groups alice
-alice : alice developers
+$ cat /etc/group | grep developers
+developers:x:1001:
 ```
 
 ## Sessions and Login
@@ -206,11 +205,9 @@ cat: restricted/data.txt: Permission denied
 
 ### Running as root
 
-If a user is in the `sudo` group:
+Use `sudo` to run commands as root:
 
 ```bash
-$ usermod -a -G sudo alice
-
 $ su alice
 $ sudo cat /etc/shadow
 [sudo] password for alice:
@@ -245,14 +242,11 @@ $ umask 077    # More restrictive
 ```bash
 # As root
 $ groupadd project
-$ usermod -a -G project alice
-$ usermod -a -G project bob
-
 $ mkdir /shared/project
 $ chown root:project /shared/project
 $ chmod 775 /shared/project
 
-# Now alice and bob can both create files there
+# Users in the project group can create files there
 ```
 
 ### Private home directory
@@ -277,10 +271,10 @@ Hello from script!
 ## Exercises
 
 ### Exercise 1: User Setup
-1. Create users `alice` and `bob`
-2. Create a group `team`
-3. Add both users to `team`
-4. Verify with `groups`
+1. Create users `alice` and `bob` with `useradd`
+2. Set passwords with `passwd`
+3. Create a group `team` with `groupadd`
+4. View the user and group databases
 
 ### Exercise 2: Permission Practice
 1. Create a file readable only by owner
@@ -288,10 +282,10 @@ Hello from script!
 3. Create a directory only accessible by owner
 
 ### Exercise 3: Collaboration
-1. Create `/shared/docs`
-2. Make it writable by `team` group
+1. Create `/shared/docs` with `mkdir`
+2. Make it world-writable with `chmod 777`
 3. Login as `alice`, create a file
-4. Login as `bob`, verify you can edit it
+4. Login as `bob`, verify you can see and edit it
 
 ## Security Notes
 
