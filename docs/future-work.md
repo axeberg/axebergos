@@ -102,24 +102,33 @@ The core compositor is now implemented. These enhancements are planned:
 
 *Source: [docs/plans/compositor.md](plans/compositor.md)*
 
-## Priority Recommendations
+## Summary
 
-### Quick Wins (Low Complexity)
-1. ~~Task cancellation~~ ✅ Done
-2. ~~Bounded channels~~ ✅ Done
-3. ~~OPFS persistence for memory~~ ✅ Done
+### Completed ✅
+| Feature | Category |
+|---------|----------|
+| Task cancellation | Executor |
+| Work stealing executor | Executor |
+| Bounded channels | IPC |
+| OPFS persistence | Memory |
+| Copy-on-write memory | Memory |
+| Layered filesystem | VFS |
+| Package manager | WASM |
+| WebGPU compositor | Compositor |
 
-### Medium Impact
-1. ~~Layered filesystem~~ ✅ Done
-2. Timeouts for executor
-3. Memory-mapped files
-4. Port commands to WASM
-5. Waker-based async for IPC
+### Remaining Work
 
-### Major Features
-1. ~~Work stealing executor~~ ✅ Done
-2. ~~Copy-on-write memory~~ ✅ Done
-3. ~~Package manager~~ ✅ Done
-4. ~~Compositor implementation~~ ✅ Done (WebGPU)
-5. Task groups for hierarchical task management
-6. Text rendering for compositor
+| Category | Feature | Complexity |
+|----------|---------|------------|
+| **Executor** | Timeouts | Medium |
+| **Executor** | Task groups | Medium |
+| **WASM** | Port commands to WASM | Medium |
+| **WASM** | WASI Preview2 | Medium |
+| **Memory** | Memory-mapped files | Medium |
+| **Memory** | Memory pools | Medium |
+| **IPC** | Waker-based async | Medium |
+| **Compositor** | Text rendering | Medium |
+| **Compositor** | Window decorations | Medium |
+| **Compositor** | Animations | Medium |
+| **Compositor** | Themes | Low |
+| **Registry** | Package registry | High (📝 RFD) |
