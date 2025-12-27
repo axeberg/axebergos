@@ -157,7 +157,11 @@ mod wasm_impl {
             let entries = dir.entries();
 
             loop {
-                let next_result = JsFuture::from(entries.next())
+                let next_promise = entries
+                    .next()
+                    .map_err(|e| format!("Failed to get next: {:?}", e))?;
+
+                let next_result = JsFuture::from(next_promise)
                     .await
                     .map_err(|e| format!("Failed to iterate: {:?}", e))?;
 
@@ -218,15 +222,11 @@ mod wasm_impl {
 
         /// Clear all stored memory data
         pub async fn clear() -> Result<(), String> {
-            let root = Self::get_opfs_root().await?;
-
-            // Remove the entire memory directory
-            let opts = web_sys::FileSystemRemoveOptions::new();
-            opts.set_recursive(true);
-            JsFuture::from(root.remove_entry_with_options(MEMORY_DIR, &opts))
-                .await
-                .ok(); // Ignore errors (directory might not exist)
-
+            // List all entries and delete them one by one
+            let names = Self::list().await?;
+            for name in names {
+                Self::delete(&name).await.ok();
+            }
             Ok(())
         }
 
