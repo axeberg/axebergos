@@ -25,7 +25,6 @@
 use super::checksum::Checksum;
 use super::error::{PkgError, PkgResult};
 use super::version::{Version, VersionReq};
-use std::collections::HashMap;
 
 /// Package manifest (parsed from package.toml)
 #[derive(Debug, Clone)]

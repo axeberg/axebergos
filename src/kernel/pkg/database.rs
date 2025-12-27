@@ -4,7 +4,7 @@
 
 use super::checksum::Checksum;
 use super::error::{PkgError, PkgResult};
-use super::manifest::{BinaryEntry, PackageManifest};
+use super::manifest::PackageManifest;
 use super::paths;
 use super::version::Version;
 use super::PackageId;
@@ -265,8 +265,8 @@ impl PackageDatabase {
                     dependencies: Vec::new(),
                     manifest_checksum: None,
                 });
-            } else if let Some(ref mut pkg) = current_pkg {
-                if let Some(pos) = line.find('=') {
+            } else if let Some(ref mut pkg) = current_pkg
+                && let Some(pos) = line.find('=') {
                     let key = line[..pos].trim();
                     let value = line[pos + 1..].trim().trim_matches('"');
 
@@ -290,7 +290,6 @@ impl PackageDatabase {
                         _ => {}
                     }
                 }
-            }
         }
 
         if let Some(pkg) = current_pkg {

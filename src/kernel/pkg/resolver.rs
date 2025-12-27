@@ -25,7 +25,7 @@ use super::manifest::PackageManifest;
 use super::registry::PackageRegistry;
 use super::version::{Version, VersionReq};
 use super::PackageId;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 
 /// A resolved package ready for installation
 #[derive(Debug, Clone)]
@@ -222,6 +222,7 @@ impl DependencyResolver {
     }
 
     /// Add a version constraint and check for conflicts
+    #[allow(dead_code)]
     fn add_constraint(&mut self, name: &str, req: &VersionReq) -> PkgResult<()> {
         let constraints = self.constraints.entry(name.to_string()).or_default();
 
@@ -265,6 +266,7 @@ impl DependencyResolver {
     }
 
     /// Perform topological sort on resolved packages
+    #[allow(dead_code)]
     fn topological_sort(&self) -> PkgResult<Vec<ResolvedPackage>> {
         let mut result = Vec::new();
         let mut visited = HashSet::new();
@@ -336,11 +338,13 @@ impl Default for DependencyResolver {
 }
 
 /// Simple dependency resolution for local packages (without network)
+#[allow(dead_code)]
 pub struct LocalResolver {
     /// Available packages (from local database)
     available: HashMap<String, Vec<Version>>,
 }
 
+#[allow(dead_code)]
 impl LocalResolver {
     pub fn new() -> Self {
         Self {

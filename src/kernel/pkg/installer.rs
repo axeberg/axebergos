@@ -124,11 +124,10 @@ impl PackageInstaller {
                 if bin_name.ends_with(".wasm") {
                     // Find matching binary entry in manifest
                     for bin_entry in &archive.manifest.binaries {
-                        if bin_entry.path.ends_with(bin_name) {
-                            if let Some(ref expected) = bin_entry.checksum {
+                        if bin_entry.path.ends_with(bin_name)
+                            && let Some(ref expected) = bin_entry.checksum {
                                 verify_checksum(bin_data, expected)?;
                             }
-                        }
                     }
                 }
             }
@@ -284,6 +283,7 @@ impl PackageInstaller {
     }
 
     /// Cache an archive to disk
+    #[allow(dead_code)]
     fn cache_archive(&self, id: &PackageId, data: &[u8]) -> PkgResult<()> {
         let cache_path = format!("{}/{}.axepkg", paths::PKG_CACHE, id.dir_name());
 
@@ -373,6 +373,7 @@ struct PackageArchive {
 }
 
 /// Create a package archive from a manifest and files
+#[allow(dead_code)]
 pub fn create_archive(manifest: &PackageManifest, files: &[(String, Vec<u8>)]) -> Vec<u8> {
     let mut archive = Vec::new();
 

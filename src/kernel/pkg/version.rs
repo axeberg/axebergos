@@ -32,9 +32,10 @@
 use super::error::{PkgError, PkgResult};
 use std::cmp::Ordering;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 
 /// A semantic version (MAJOR.MINOR.PATCH)
-#[derive(Debug, Clone, Eq, Hash)]
+#[derive(Debug, Clone, Eq)]
 pub struct Version {
     pub major: u32,
     pub minor: u32,
@@ -149,6 +150,16 @@ impl PartialEq for Version {
             && self.minor == other.minor
             && self.patch == other.patch
             && self.prerelease == other.prerelease
+    }
+}
+
+impl Hash for Version {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // Build metadata is ignored for hashing (must match PartialEq)
+        self.major.hash(state);
+        self.minor.hash(state);
+        self.patch.hash(state);
+        self.prerelease.hash(state);
     }
 }
 

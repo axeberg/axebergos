@@ -17,7 +17,7 @@
 //! - `pkg init` - Initialize package directories
 
 use super::{args_to_strs, check_help};
-use crate::kernel::pkg::{self, PackageDatabase, PackageManager};
+use crate::kernel::pkg::{PackageDatabase, PackageManager};
 use crate::kernel::syscall;
 
 const HELP_TEXT: &str = r#"Usage: pkg <command> [args]
@@ -110,7 +110,7 @@ fn cmd_init(stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// Install a package from registry
-fn cmd_install(args: &[&str], stdout: &mut String, stderr: &mut String) -> i32 {
+fn cmd_install(args: &[&str], _stdout: &mut String, stderr: &mut String) -> i32 {
     if args.is_empty() {
         stderr.push_str("pkg install: missing package name\n");
         stderr.push_str("Usage: pkg install <name>[@version]\n");
@@ -119,7 +119,7 @@ fn cmd_install(args: &[&str], stdout: &mut String, stderr: &mut String) -> i32 {
 
     // Parse name[@version]
     let spec = args[0];
-    let (name, version) = if let Some(at_pos) = spec.find('@') {
+    let (name, _version) = if let Some(at_pos) = spec.find('@') {
         (&spec[..at_pos], Some(&spec[at_pos + 1..]))
     } else {
         (spec, None)
@@ -321,26 +321,26 @@ fn cmd_info(args: &[&str], stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// Search for packages (async)
-fn cmd_search(args: &[&str], stdout: &mut String, stderr: &mut String) -> i32 {
+fn cmd_search(args: &[&str], _stdout: &mut String, stderr: &mut String) -> i32 {
     if args.is_empty() {
         stderr.push_str("pkg search: missing search query\n");
         stderr.push_str("Usage: pkg search <query>\n");
         return 1;
     }
 
-    let query = args.join(" ");
+    let _query = args.join(" ");
 
     #[cfg(target_arch = "wasm32")]
     {
-        stdout.push_str(&format!("Searching for '{}'...\n", query));
-        stdout.push_str("(Running in background - check console for results)\n");
+        _stdout.push_str(&format!("Searching for '{}'...\n", _query));
+        _stdout.push_str("(Running in background - check console for results)\n");
 
         wasm_bindgen_futures::spawn_local(async move {
             let pm = PackageManager::new();
-            match pm.search(&query).await {
+            match pm.search(&_query).await {
                 Ok(results) => {
                     if results.is_empty() {
-                        crate::console_log!("No packages found matching '{}'", query);
+                        crate::console_log!("No packages found matching '{}'", _query);
                     } else {
                         crate::console_log!("Found {} package(s):", results.len());
                         for pkg in results {
@@ -365,11 +365,11 @@ fn cmd_search(args: &[&str], stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// Update registry index (async)
-fn cmd_update(stdout: &mut String, stderr: &mut String) -> i32 {
+fn cmd_update(_stdout: &mut String, stderr: &mut String) -> i32 {
     #[cfg(target_arch = "wasm32")]
     {
-        stdout.push_str("Updating package registry...\n");
-        stdout.push_str("(Running in background - check console for results)\n");
+        _stdout.push_str("Updating package registry...\n");
+        _stdout.push_str("(Running in background - check console for results)\n");
 
         wasm_bindgen_futures::spawn_local(async move {
             let mut pm = PackageManager::new();
@@ -393,11 +393,11 @@ fn cmd_update(stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// Upgrade all packages (async)
-fn cmd_upgrade(stdout: &mut String, stderr: &mut String) -> i32 {
+fn cmd_upgrade(_stdout: &mut String, stderr: &mut String) -> i32 {
     #[cfg(target_arch = "wasm32")]
     {
-        stdout.push_str("Checking for upgrades...\n");
-        stdout.push_str("(Running in background - check console for results)\n");
+        _stdout.push_str("Checking for upgrades...\n");
+        _stdout.push_str("(Running in background - check console for results)\n");
 
         wasm_bindgen_futures::spawn_local(async move {
             let mut pm = PackageManager::new();
@@ -533,7 +533,7 @@ fn format_timestamp(ts: u64) -> String {
 }
 
 fn is_leap_year(year: u64) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+    (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
 }
 
 #[cfg(test)]

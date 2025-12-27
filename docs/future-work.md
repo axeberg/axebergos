@@ -30,6 +30,7 @@ Consolidated list of planned features and enhancements for axeberg.
 |---------|-------------|------------|--------|
 | Port commands to WASM | Convert builtin commands to standalone `.wasm` modules | Medium | Planned |
 | Package manager | Install commands from external sources | High | ✅ Done |
+| Package registry | Server infrastructure to host packages | High | 📝 RFD |
 | WASI preview2 | Broader compatibility with WASI ecosystem | Medium | Planned |
 
 *Source: [docs/kernel/wasm-modules.md](kernel/wasm-modules.md)*
@@ -37,6 +38,10 @@ Consolidated list of planned features and enhancements for axeberg.
 > **Package Manager Implemented**: Full-featured WASM package manager with semantic versioning,
 > dependency resolution, checksums, and CLI interface.
 > See `src/kernel/pkg/` and use `pkg --help` for usage.
+>
+> **Package Registry RFD**: Design document for the registry server infrastructure.
+> See [RFD 0001](../rfd/0001-package-registry.md) for the proposed design based on
+> Cargo's sparse index protocol with OIDC trusted publishing.
 
 ## Memory
 
