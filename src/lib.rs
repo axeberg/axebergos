@@ -19,7 +19,8 @@ pub mod platform;
 pub mod shell;
 pub mod vfs;
 
-#[cfg(target_arch = "wasm32")]
+// Compositor is available on wasm32 for production and on any target for tests
+#[cfg(any(target_arch = "wasm32", test))]
 pub mod compositor;
 
 #[cfg(target_arch = "wasm32")]

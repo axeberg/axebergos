@@ -6,19 +6,23 @@
 //! Provides both unbounded and bounded channels:
 //! - `channel<T>()` - unbounded, grows without limit
 //! - `bounded_channel<T>(cap)` - bounded, provides back-pressure
+//!
+//! Both channel types support waker-based async for efficient wake-up
+//! instead of busy-polling.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
-use std::task::{Context, Poll};
+use std::task::{Context, Poll, Waker};
 
 /// Create a new unbounded channel pair
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
     let inner = Rc::new(RefCell::new(ChannelInner {
         queue: VecDeque::new(),
         closed: false,
+        recv_wakers: Vec::new(),
     }));
 
     (
@@ -40,6 +44,8 @@ pub fn bounded_channel<T>(capacity: usize) -> (BoundedSender<T>, BoundedReceiver
         queue: VecDeque::with_capacity(capacity),
         capacity,
         closed: false,
+        send_wakers: Vec::new(),
+        recv_wakers: Vec::new(),
     }));
 
     (
@@ -53,12 +59,18 @@ pub fn bounded_channel<T>(capacity: usize) -> (BoundedSender<T>, BoundedReceiver
 struct ChannelInner<T> {
     queue: VecDeque<T>,
     closed: bool,
+    /// Wakers for tasks waiting to receive
+    recv_wakers: Vec<Waker>,
 }
 
 struct BoundedChannelInner<T> {
     queue: VecDeque<T>,
     capacity: usize,
     closed: bool,
+    /// Wakers for tasks waiting to send (channel full)
+    send_wakers: Vec<Waker>,
+    /// Wakers for tasks waiting to receive (channel empty)
+    recv_wakers: Vec<Waker>,
 }
 
 /// Sending half of a channel
@@ -74,12 +86,24 @@ impl<T> Sender<T> {
             return Err(SendError(value));
         }
         inner.queue.push_back(value);
+
+        // Wake all waiting receivers
+        for waker in inner.recv_wakers.drain(..) {
+            waker.wake();
+        }
+
         Ok(())
     }
 
     /// Close the sending side
     pub fn close(&self) {
-        self.inner.borrow_mut().closed = true;
+        let mut inner = self.inner.borrow_mut();
+        inner.closed = true;
+
+        // Wake all waiting receivers so they can see the channel is closed
+        for waker in inner.recv_wakers.drain(..) {
+            waker.wake();
+        }
     }
 }
 
@@ -121,13 +145,19 @@ pub struct RecvFuture<'a, T> {
 impl<T> Future for RecvFuture<'_, T> {
     type Output = Option<T>;
 
-    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match self.receiver.try_recv() {
-            Ok(value) => Poll::Ready(Some(value)),
-            Err(TryRecvError::Closed) => Poll::Ready(None),
-            Err(TryRecvError::Empty) => {
-                // In a real system, we'd register the waker here
-                // For now, we yield and let the executor re-poll
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut inner = self.receiver.inner.borrow_mut();
+
+        match inner.queue.pop_front() {
+            Some(value) => Poll::Ready(Some(value)),
+            None if inner.closed => Poll::Ready(None),
+            None => {
+                // Register waker for notification when data arrives
+                let waker = cx.waker().clone();
+                // Avoid duplicate wakers
+                if !inner.recv_wakers.iter().any(|w| w.will_wake(&waker)) {
+                    inner.recv_wakers.push(waker);
+                }
                 Poll::Pending
             }
         }
@@ -167,6 +197,12 @@ impl<T> BoundedSender<T> {
             return Err(TrySendError::Full(value));
         }
         inner.queue.push_back(value);
+
+        // Wake all waiting receivers
+        for waker in inner.recv_wakers.drain(..) {
+            waker.wake();
+        }
+
         Ok(())
     }
 
@@ -182,7 +218,13 @@ impl<T> BoundedSender<T> {
 
     /// Close the sending side
     pub fn close(&self) {
-        self.inner.borrow_mut().closed = true;
+        let mut inner = self.inner.borrow_mut();
+        inner.closed = true;
+
+        // Wake all waiting receivers so they can see the channel is closed
+        for waker in inner.recv_wakers.drain(..) {
+            waker.wake();
+        }
     }
 
     /// Check if the channel is full
@@ -226,19 +268,35 @@ impl<T> Unpin for BoundedSendFuture<'_, T> {}
 impl<T> Future for BoundedSendFuture<'_, T> {
     type Output = Result<(), SendError<T>>;
 
-    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
         let value = this.value.take().expect("polled after completion");
 
-        match this.sender.try_send(value) {
-            Ok(()) => Poll::Ready(Ok(())),
-            Err(TrySendError::Closed(v)) => Poll::Ready(Err(SendError(v))),
-            Err(TrySendError::Full(v)) => {
-                // Put the value back and yield
-                this.value = Some(v);
-                Poll::Pending
-            }
+        let mut inner = this.sender.inner.borrow_mut();
+
+        if inner.closed {
+            return Poll::Ready(Err(SendError(value)));
         }
+
+        if inner.queue.len() < inner.capacity {
+            inner.queue.push_back(value);
+
+            // Wake all waiting receivers
+            for waker in inner.recv_wakers.drain(..) {
+                waker.wake();
+            }
+
+            return Poll::Ready(Ok(()));
+        }
+
+        // Channel is full - register our waker for notification
+        let waker = cx.waker().clone();
+        if !inner.send_wakers.iter().any(|w| w.will_wake(&waker)) {
+            inner.send_wakers.push(waker);
+        }
+
+        this.value = Some(value);
+        Poll::Pending
     }
 }
 
@@ -252,7 +310,13 @@ impl<T> BoundedReceiver<T> {
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
         let mut inner = self.inner.borrow_mut();
         match inner.queue.pop_front() {
-            Some(value) => Ok(value),
+            Some(value) => {
+                // Wake all waiting senders since space is now available
+                for waker in inner.send_wakers.drain(..) {
+                    waker.wake();
+                }
+                Ok(value)
+            }
             None if inner.closed => Err(TryRecvError::Closed),
             None => Err(TryRecvError::Empty),
         }
@@ -287,11 +351,27 @@ pub struct BoundedRecvFuture<'a, T> {
 impl<T> Future for BoundedRecvFuture<'_, T> {
     type Output = Option<T>;
 
-    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match self.receiver.try_recv() {
-            Ok(value) => Poll::Ready(Some(value)),
-            Err(TryRecvError::Closed) => Poll::Ready(None),
-            Err(TryRecvError::Empty) => Poll::Pending,
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut inner = self.receiver.inner.borrow_mut();
+
+        match inner.queue.pop_front() {
+            Some(value) => {
+                // Wake all waiting senders since space is now available
+                for waker in inner.send_wakers.drain(..) {
+                    waker.wake();
+                }
+                Poll::Ready(Some(value))
+            }
+            None if inner.closed => Poll::Ready(None),
+            None => {
+                // Register waker for notification when data arrives
+                let waker = cx.waker().clone();
+                // Avoid duplicate wakers
+                if !inner.recv_wakers.iter().any(|w| w.will_wake(&waker)) {
+                    inner.recv_wakers.push(waker);
+                }
+                Poll::Pending
+            }
         }
     }
 }
