@@ -3517,7 +3517,7 @@ mod tests {
         trace_event(TraceCategory::Custom, "test", Some("detail"));
 
         KERNEL.with(|k| {
-            assert!(k.borrow().tracer().events().len() > 0);
+            assert!(!k.borrow().tracer().events().is_empty());
         });
 
         trace_reset();

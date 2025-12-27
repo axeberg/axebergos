@@ -21,6 +21,7 @@ pub mod memory;
 pub mod mount;
 pub mod msgqueue;
 pub mod object;
+pub mod pkg;
 pub mod process;
 pub mod procfs;
 pub mod semaphore;
@@ -53,6 +54,11 @@ pub use memory::{
 pub use mount::{FsType, MountEntry, MountError, MountOptions, MountTable};
 pub use msgqueue::{
     Message, MessageQueue, MsgQueueError, MsgQueueId, MsgQueueManager, MsgQueueStats,
+};
+pub use pkg::{
+    Checksum, Dependency, InstalledPackage, PackageDatabase, PackageId, PackageInstaller,
+    PackageManager, PackageManifest, PackageRegistry, PkgError, PkgResult, RegistryEntry,
+    ResolvedPackage, Version, VersionReq,
 };
 pub use process::{Fd, Handle, OpenFlags, Pid};
 pub use semaphore::{SemError, SemId, SemOpResult, SemSetStats, SemaphoreManager, SemaphoreSet};
