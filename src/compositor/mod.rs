@@ -385,7 +385,28 @@ impl Compositor {
                 }
 
                 let is_focused = self.focused == Some(i);
-                self.queue_window_draw(surface, window, is_focused);
+                let rect = window.rect;
+
+                // Determine border color based on focus
+                let border_color = if is_focused {
+                    self.theme.focus_border
+                } else {
+                    self.theme.unfocus_border
+                };
+
+                // Draw window with border
+                surface.draw_rect_with_border(
+                    rect,
+                    self.theme.window_bg,
+                    border_color,
+                    self.theme.border_width,
+                );
+
+                // Draw title bar
+                if window.flags.decorated {
+                    let titlebar = window.titlebar_rect();
+                    surface.draw_rect(titlebar, self.theme.titlebar_bg);
+                }
             }
 
             // Submit all queued rectangles to GPU
@@ -393,36 +414,6 @@ impl Compositor {
         }
 
         self.mark_clean();
-    }
-
-    /// Queue draw commands for a window
-    fn queue_window_draw(&self, surface: &mut Surface, window: &Window, is_focused: bool) {
-        let rect = window.rect;
-
-        // Determine border color based on focus
-        let border_color = if is_focused {
-            self.theme.focus_border
-        } else {
-            self.theme.unfocus_border
-        };
-
-        // Draw window with border
-        surface.draw_rect_with_border(
-            rect,
-            self.theme.window_bg,
-            border_color,
-            self.theme.border_width,
-        );
-
-        // Draw title bar
-        if window.flags.decorated {
-            let titlebar = window.titlebar_rect();
-            surface.draw_rect(titlebar, self.theme.titlebar_bg);
-        }
-
-        // Note: Text rendering requires a separate text rendering system
-        // For now, we only render the window frames. Text can be added later
-        // using a glyph atlas and texture sampling in the shader.
     }
 }
 

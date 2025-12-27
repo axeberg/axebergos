@@ -25,6 +25,12 @@ const FLOATS_PER_VERTEX: usize = 6;
 const VERTICES_PER_RECT: usize = 4;
 const FLOATS_PER_RECT: usize = FLOATS_PER_VERTEX * VERTICES_PER_RECT;
 
+// Buffer usage flags (from WebGPU spec)
+const GPU_BUFFER_USAGE_VERTEX: u32 = 0x0020;
+const GPU_BUFFER_USAGE_INDEX: u32 = 0x0010;
+const GPU_BUFFER_USAGE_UNIFORM: u32 = 0x0040;
+const GPU_BUFFER_USAGE_COPY_DST: u32 = 0x0008;
+
 /// A rectangle to be rendered
 #[derive(Debug, Clone, Copy)]
 pub struct RenderRect {
@@ -101,7 +107,7 @@ impl Surface {
 
         // Create buffers
         let vertex_buffer = create_vertex_buffer(&device)?;
-        let index_buffer = create_index_buffer(&device)?;
+        let index_buffer = create_index_buffer(&device, &queue)?;
         let uniform_buffer = create_uniform_buffer(&device)?;
 
         // Create bind group
@@ -152,8 +158,9 @@ impl Surface {
     fn update_uniforms(&self) {
         let uniforms = [self.width as f32, self.height as f32, 0.0, 0.0];
         let data = Float32Array::from(uniforms.as_slice());
-        self.queue
-            .write_buffer_with_buffer_source(&self.uniform_buffer, 0, &data);
+        let _ =
+            self.queue
+                .write_buffer_with_f64_and_buffer_source(&self.uniform_buffer, 0.0, &data);
     }
 
     /// Clear pending rectangles
@@ -222,13 +229,20 @@ impl Surface {
         let vertex_data = self.build_vertex_data();
         if !vertex_data.is_empty() {
             let data = Float32Array::from(vertex_data.as_slice());
-            self.queue
-                .write_buffer_with_buffer_source(&self.vertex_buffer, 0, &data);
+            let _ =
+                self.queue
+                    .write_buffer_with_f64_and_buffer_source(&self.vertex_buffer, 0.0, &data);
         }
 
         // Get current texture
-        let texture = self.context.get_current_texture();
-        let view = texture.create_view();
+        let texture = match self.context.get_current_texture() {
+            Ok(t) => t,
+            Err(_) => return, // Skip frame if texture unavailable
+        };
+        let view = match texture.create_view() {
+            Ok(v) => v,
+            Err(_) => return, // Skip frame if view unavailable
+        };
 
         // Create command encoder
         let encoder = self.device.create_command_encoder();
@@ -236,7 +250,10 @@ impl Surface {
         // Begin render pass
         let color_attachment = create_color_attachment(&view, clear_color);
         let render_pass_desc = create_render_pass_descriptor(&color_attachment);
-        let pass = encoder.begin_render_pass(&render_pass_desc);
+        let pass = match encoder.begin_render_pass(&render_pass_desc) {
+            Ok(p) => p,
+            Err(_) => return, // Skip frame on error
+        };
 
         // Draw rectangles
         if !self.rects.is_empty() {
@@ -342,7 +359,7 @@ fn configure_context(
     let config = web_sys::GpuCanvasConfiguration::new(device, *format);
     // Set alpha mode to premultiplied for proper transparency
     config.set_alpha_mode(web_sys::GpuCanvasAlphaMode::Premultiplied);
-    context.configure(&config);
+    let _ = context.configure(&config);
 
     // Update canvas size
     if let Ok(canvas) = context.canvas().dyn_into::<HtmlCanvasElement>() {
@@ -439,21 +456,25 @@ fn create_render_pipeline(
     Reflect::set(&pipeline_desc, &"layout".into(), &"auto".into()).unwrap();
 
     let pipeline_desc: web_sys::GpuRenderPipelineDescriptor = pipeline_desc.unchecked_into();
-    Ok(device.create_render_pipeline(&pipeline_desc))
+    device
+        .create_render_pipeline(&pipeline_desc)
+        .map_err(|e| format!("failed to create render pipeline: {:?}", e))
 }
 
 fn create_vertex_buffer(device: &GpuDevice) -> Result<GpuBuffer, String> {
-    let size = (MAX_RECTS * FLOATS_PER_RECT * 4) as u64; // 4 bytes per float
+    let size = (MAX_RECTS * FLOATS_PER_RECT * 4) as f64; // 4 bytes per float
 
     let descriptor = web_sys::GpuBufferDescriptor::new(
-        size as f64,
-        web_sys::GpuBufferUsage::VERTEX | web_sys::GpuBufferUsage::COPY_DST,
+        size,
+        GPU_BUFFER_USAGE_VERTEX | GPU_BUFFER_USAGE_COPY_DST,
     );
 
-    Ok(device.create_buffer(&descriptor))
+    device
+        .create_buffer(&descriptor)
+        .map_err(|e| format!("failed to create vertex buffer: {:?}", e))
 }
 
-fn create_index_buffer(device: &GpuDevice) -> Result<GpuBuffer, String> {
+fn create_index_buffer(device: &GpuDevice, queue: &GpuQueue) -> Result<GpuBuffer, String> {
     // 6 indices per rectangle (2 triangles)
     let mut indices: Vec<u16> = Vec::with_capacity(MAX_RECTS * 6);
 
@@ -469,33 +490,33 @@ fn create_index_buffer(device: &GpuDevice) -> Result<GpuBuffer, String> {
         indices.push(base + 3);
     }
 
-    let size = (indices.len() * 2) as u64; // 2 bytes per u16
-    let descriptor = web_sys::GpuBufferDescriptor::new(
-        size as f64,
-        web_sys::GpuBufferUsage::INDEX | web_sys::GpuBufferUsage::COPY_DST,
-    );
+    let size = (indices.len() * 2) as f64; // 2 bytes per u16
+    let descriptor =
+        web_sys::GpuBufferDescriptor::new(size, GPU_BUFFER_USAGE_INDEX | GPU_BUFFER_USAGE_COPY_DST);
 
-    let buffer = device.create_buffer(&descriptor);
+    let buffer = device
+        .create_buffer(&descriptor)
+        .map_err(|e| format!("failed to create index buffer: {:?}", e))?;
 
     // Upload index data
     let data = Uint16Array::from(indices.as_slice());
-    device
-        .queue()
-        .write_buffer_with_buffer_source(&buffer, 0, &data);
+    let _ = queue.write_buffer_with_f64_and_buffer_source(&buffer, 0.0, &data);
 
     Ok(buffer)
 }
 
 fn create_uniform_buffer(device: &GpuDevice) -> Result<GpuBuffer, String> {
     // Screen dimensions: width, height, padding (16-byte aligned)
-    let size = 16u64;
+    let size = 16.0;
 
     let descriptor = web_sys::GpuBufferDescriptor::new(
-        size as f64,
-        web_sys::GpuBufferUsage::UNIFORM | web_sys::GpuBufferUsage::COPY_DST,
+        size,
+        GPU_BUFFER_USAGE_UNIFORM | GPU_BUFFER_USAGE_COPY_DST,
     );
 
-    Ok(device.create_buffer(&descriptor))
+    device
+        .create_buffer(&descriptor)
+        .map_err(|e| format!("failed to create uniform buffer: {:?}", e))
 }
 
 fn create_bind_group(
