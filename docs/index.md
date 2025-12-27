@@ -39,8 +39,8 @@ axeberg is an operating system you can understand. The entire codebase is design
 │  │                            │                             │    │
 │  │                            ▼                             │    │
 │  │  ┌─────────────────────────────────────────────────┐    │    │
-│  │  │              Compositor (Canvas2D)               │    │    │
-│  │  │                    Terminal                       │    │    │
+│  │  │               Compositor (WebGPU)                │    │    │
+│  │  │              BSP Tiling · Themes                  │    │    │
 │  │  └───────────────────────────────────────────────────┘    │    │
 │  └─────────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────┘
@@ -161,7 +161,7 @@ When you type `cat file.txt | grep hello`:
 | **Async cooperative** | Browser event loop drives everything; tasks yield voluntarily |
 | **WASM command modules** | Isolation, extensibility, polyglot support |
 | **Reference-counted objects** | Simple lifetime management, works with Rust ownership |
-| **In-memory VFS** | Fast, simple; OPFS persistence planned for later |
+| **Layered VFS** | In-memory with OPFS persistence; union mounts for overlays |
 
 ## Project Structure
 
@@ -180,16 +180,24 @@ axebergos/
 │   │   │   ├── abi.rs       # ABI types
 │   │   │   ├── loader.rs    # Module validation/loading
 │   │   │   ├── runtime.rs   # Syscall runtime
-│   │   │   └── WasmLoader.tla  # TLA+ specification
+│   │   │   ├── wasi_preview2.rs  # WASI 0.2 interfaces
+│   │   │   └── WasmLoader.tla    # TLA+ specification
+│   │   ├── pkg/             # Package manager
 │   │   └── ...
 │   ├── shell/
 │   │   ├── parser.rs        # Command parsing
 │   │   ├── executor.rs      # Pipeline execution
 │   │   ├── builtins.rs      # Built-in commands
 │   │   └── terminal.rs      # Terminal emulator
-│   └── vfs/
-│       ├── mod.rs           # VFS traits
-│       └── memory.rs        # In-memory filesystem
+│   ├── vfs/
+│   │   ├── mod.rs           # VFS traits
+│   │   ├── memory.rs        # In-memory filesystem
+│   │   └── layered.rs       # Union filesystem
+│   └── compositor/
+│       ├── mod.rs           # Compositor, themes, animations
+│       ├── layout.rs        # BSP tiling layout
+│       ├── surface.rs       # WebGPU rendering
+│       └── text.rs          # Text rendering
 ├── docs/                    # This documentation
 ├── index.html               # Browser entry point
 └── Cargo.toml
@@ -213,7 +221,9 @@ Current capabilities:
 - Permission enforcement (Unix rwx model)
 - User persistence (`/etc/passwd`, `/etc/shadow`, `/etc/group`)
 - In-memory VFS with proc/sys/dev virtual filesystems
-- WASM command module ABI (execution in progress)
+- WASM command modules with full ABI and WASI Preview2 support
+- WebGPU compositor with BSP tiling, themes, and animations
+- Package manager for installing WASM commands
 
 ## License
 
