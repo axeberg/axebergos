@@ -20,6 +20,9 @@ pub mod shell;
 pub mod vfs;
 
 #[cfg(target_arch = "wasm32")]
+pub mod compositor;
+
+#[cfg(target_arch = "wasm32")]
 pub mod terminal;
 
 #[cfg(target_arch = "wasm32")]

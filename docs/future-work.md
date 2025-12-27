@@ -68,13 +68,16 @@ Consolidated list of planned features and enhancements for axeberg.
 
 *Source: [docs/kernel/ipc.md](kernel/ipc.md)*
 
-## Compositor (Planned Feature)
+## Compositor
 
-The compositor itself is not yet implemented. Once implemented, these enhancements are planned:
+> **Compositor Implemented**: WebGPU-based window compositor with BSP tiling layout.
+> See `src/compositor/` for the implementation.
+
+The core compositor is now implemented. These enhancements are planned:
 
 | Feature | Description | Complexity |
 |---------|-------------|------------|
-| WebGPU backend | Higher performance rendering | High |
+| Text rendering | GPU-accelerated text via glyph atlas | Medium |
 | Window decorations | Close/minimize/maximize buttons, drag, resize | Medium |
 | Animations | Window open/close, layout transitions | Medium |
 | Themes | User-configurable colors, light/dark mode | Low |
@@ -97,4 +100,4 @@ The compositor itself is not yet implemented. Once implemented, these enhancemen
 1. ~~Work stealing executor~~ ✅ Done
 2. ~~Copy-on-write memory~~ ✅ Done
 3. ~~Package manager~~ ✅ Done
-4. Compositor implementation
+4. ~~Compositor implementation~~ ✅ Done (WebGPU)

@@ -1,8 +1,8 @@
-# Compositor Design (Future Work)
+# Compositor Design
 
-> ⚠️ **Status**: This is a design document for a planned feature. The compositor has not been implemented - the system currently uses xterm.js for terminal rendering.
+> ✅ **Status**: Implemented. See `src/compositor/` for the WebGPU-based implementation.
 
-The compositor manages windows and renders the GUI using Canvas2D.
+The compositor manages windows and renders the GUI using WebGPU for GPU-accelerated rendering.
 
 ## Architecture
 
@@ -11,7 +11,7 @@ The compositor manages windows and renders the GUI using Canvas2D.
 │              Compositor                  │
 │  ┌─────────────┐  ┌─────────────────┐   │
 │  │   Layout    │  │     Surface     │   │
-│  │ (Tiling BSP)│  │   (Canvas2D)    │   │
+│  │ (Tiling BSP)│  │    (WebGPU)     │   │
 │  └──────┬──────┘  └────────┬────────┘   │
 │         │                  │            │
 │  ┌──────▼──────────────────▼──────┐     │
@@ -75,14 +75,18 @@ enum LayoutNode {
 
 ### Surface
 
-Canvas2D rendering:
+WebGPU rendering:
 
 ```rust
 pub struct Surface {
     canvas: HtmlCanvasElement,
-    context: CanvasRenderingContext2d,
-    width: u32,
-    height: u32,
+    context: GpuCanvasContext,
+    device: GpuDevice,
+    queue: GpuQueue,
+    pipeline: GpuRenderPipeline,
+    vertex_buffer: GpuBuffer,
+    index_buffer: GpuBuffer,
+    // ...
 }
 ```
 
