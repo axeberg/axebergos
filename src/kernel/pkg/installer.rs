@@ -282,17 +282,6 @@ impl PackageInstaller {
         ))
     }
 
-    /// Cache an archive to disk
-    #[allow(dead_code)]
-    fn cache_archive(&self, id: &PackageId, data: &[u8]) -> PkgResult<()> {
-        let cache_path = format!("{}/{}.axepkg", paths::PKG_CACHE, id.dir_name());
-
-        // Ensure cache directory exists
-        mkdir_recursive(paths::PKG_CACHE)?;
-
-        write_file_bytes(&cache_path, data)
-    }
-
     /// Remove an installed package
     pub fn remove(&self, package: &InstalledPackage) -> PkgResult<()> {
         // Remove binary files
@@ -372,47 +361,6 @@ struct PackageArchive {
     files: Vec<(String, Vec<u8>)>,
 }
 
-/// Create a package archive from a manifest and files
-#[allow(dead_code)]
-pub fn create_archive(manifest: &PackageManifest, files: &[(String, Vec<u8>)]) -> Vec<u8> {
-    let mut archive = Vec::new();
-
-    // Write magic
-    archive.extend_from_slice(AXEPKG_MAGIC);
-
-    // Serialize manifest
-    let manifest_data = manifest.to_toml();
-    let manifest_bytes = manifest_data.as_bytes();
-
-    // Write manifest size
-    archive.extend_from_slice(&(manifest_bytes.len() as u32).to_le_bytes());
-
-    // Write number of files
-    archive.extend_from_slice(&(files.len() as u32).to_le_bytes());
-
-    // Write manifest
-    archive.extend_from_slice(manifest_bytes);
-
-    // Write files
-    for (path, content) in files {
-        let path_bytes = path.as_bytes();
-
-        // Write path length
-        archive.extend_from_slice(&(path_bytes.len() as u16).to_le_bytes());
-
-        // Write path
-        archive.extend_from_slice(path_bytes);
-
-        // Write content length
-        archive.extend_from_slice(&(content.len() as u32).to_le_bytes());
-
-        // Write content
-        archive.extend_from_slice(content);
-    }
-
-    archive
-}
-
 // Helper functions
 
 fn path_exists(path: &str) -> bool {
@@ -490,61 +438,6 @@ mod tests {
         let installer = PackageInstaller::new();
         assert!(installer.verify_checksums);
         assert!(installer.keep_cache);
-    }
-
-    #[test]
-    fn test_create_archive() {
-        let manifest = PackageManifest {
-            name: "test".to_string(),
-            version: Version::new(1, 0, 0),
-            description: None,
-            authors: vec![],
-            license: None,
-            repository: None,
-            homepage: None,
-            keywords: vec![],
-            binaries: vec![],
-            dependencies: vec![],
-            dev_dependencies: vec![],
-        };
-
-        let files = vec![("test.txt".to_string(), b"hello".to_vec())];
-
-        let archive = create_archive(&manifest, &files);
-
-        // Check magic
-        assert_eq!(&archive[0..8], AXEPKG_MAGIC);
-    }
-
-    #[test]
-    fn test_parse_archive_roundtrip() {
-        let manifest = PackageManifest {
-            name: "test".to_string(),
-            version: Version::new(1, 0, 0),
-            description: Some("Test package".to_string()),
-            authors: vec![],
-            license: None,
-            repository: None,
-            homepage: None,
-            keywords: vec![],
-            binaries: vec![],
-            dependencies: vec![],
-            dev_dependencies: vec![],
-        };
-
-        let files = vec![
-            ("file1.txt".to_string(), b"content1".to_vec()),
-            ("file2.wasm".to_string(), b"\x00asm\x01\x00\x00\x00".to_vec()),
-        ];
-
-        let archive_data = create_archive(&manifest, &files);
-
-        let installer = PackageInstaller::new();
-        let parsed = installer.parse_archive(&archive_data).unwrap();
-
-        assert_eq!(parsed.manifest.name, "test");
-        assert_eq!(parsed.manifest.version, Version::new(1, 0, 0));
-        assert_eq!(parsed.files.len(), 2);
     }
 
     #[test]

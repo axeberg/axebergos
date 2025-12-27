@@ -221,21 +221,6 @@ impl DependencyResolver {
         Ok(())
     }
 
-    /// Add a version constraint and check for conflicts
-    #[allow(dead_code)]
-    fn add_constraint(&mut self, name: &str, req: &VersionReq) -> PkgResult<()> {
-        let constraints = self.constraints.entry(name.to_string()).or_default();
-
-        // Check if new constraint conflicts with existing ones
-        // For simplicity, we just collect them - a more sophisticated resolver
-        // would try to find a version satisfying all constraints
-        constraints.push(req.clone());
-
-        // Check if the constraints are satisfiable
-        // (This is simplified - real resolvers use SAT solving)
-        Ok(())
-    }
-
     /// Create a manifest from registry metadata
     #[cfg(target_arch = "wasm32")]
     async fn create_manifest_from_registry(
@@ -265,57 +250,6 @@ impl DependencyResolver {
         })
     }
 
-    /// Perform topological sort on resolved packages
-    #[allow(dead_code)]
-    fn topological_sort(&self) -> PkgResult<Vec<ResolvedPackage>> {
-        let mut result = Vec::new();
-        let mut visited = HashSet::new();
-        let mut temp_visited = HashSet::new();
-
-        fn visit(
-            name: &str,
-            resolved: &HashMap<String, ResolvedPackage>,
-            visited: &mut HashSet<String>,
-            temp_visited: &mut HashSet<String>,
-            result: &mut Vec<ResolvedPackage>,
-        ) -> PkgResult<()> {
-            if temp_visited.contains(name) {
-                return Err(PkgError::CircularDependency(vec![name.to_string()]));
-            }
-            if visited.contains(name) {
-                return Ok(());
-            }
-
-            temp_visited.insert(name.to_string());
-
-            if let Some(pkg) = resolved.get(name) {
-                for dep in &pkg.dependencies {
-                    visit(dep, resolved, visited, temp_visited, result)?;
-                }
-            }
-
-            temp_visited.remove(name);
-            visited.insert(name.to_string());
-
-            if let Some(pkg) = resolved.get(name) {
-                result.push(pkg.clone());
-            }
-
-            Ok(())
-        }
-
-        for name in self.resolved.keys() {
-            visit(name, &self.resolved, &mut visited, &mut temp_visited, &mut result)?;
-        }
-
-        // Update order numbers
-        for (i, pkg) in result.iter_mut().enumerate() {
-            pkg.order = i;
-        }
-
-        Ok(result)
-    }
-
     /// Check if all constraints for a package can be satisfied
     pub fn check_constraints(&self, name: &str, version: &Version) -> bool {
         if let Some(constraints) = self.constraints.get(name) {
@@ -332,51 +266,6 @@ impl DependencyResolver {
 }
 
 impl Default for DependencyResolver {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Simple dependency resolution for local packages (without network)
-#[allow(dead_code)]
-pub struct LocalResolver {
-    /// Available packages (from local database)
-    available: HashMap<String, Vec<Version>>,
-}
-
-#[allow(dead_code)]
-impl LocalResolver {
-    pub fn new() -> Self {
-        Self {
-            available: HashMap::new(),
-        }
-    }
-
-    /// Add an available package
-    pub fn add_available(&mut self, name: &str, version: Version) {
-        self.available
-            .entry(name.to_string())
-            .or_default()
-            .push(version);
-    }
-
-    /// Find best matching version for a requirement
-    pub fn find_match(&self, name: &str, req: &VersionReq) -> Option<Version> {
-        self.available
-            .get(name)?
-            .iter()
-            .filter(|v| req.matches(v))
-            .max()
-            .cloned()
-    }
-
-    /// Check if a package is available
-    pub fn is_available(&self, name: &str) -> bool {
-        self.available.contains_key(name)
-    }
-}
-
-impl Default for LocalResolver {
     fn default() -> Self {
         Self::new()
     }
@@ -407,39 +296,14 @@ mod tests {
     #[test]
     fn test_check_constraints() {
         let mut resolver = DependencyResolver::new();
-        resolver.add_constraint("test", &VersionReq::parse("^1.0.0").unwrap()).unwrap();
+        resolver.constraints.insert(
+            "test".to_string(),
+            vec![VersionReq::parse("^1.0.0").unwrap()],
+        );
 
         assert!(resolver.check_constraints("test", &Version::new(1, 0, 0)));
         assert!(resolver.check_constraints("test", &Version::new(1, 5, 0)));
         assert!(!resolver.check_constraints("test", &Version::new(2, 0, 0)));
-    }
-
-    #[test]
-    fn test_local_resolver() {
-        let mut resolver = LocalResolver::new();
-        resolver.add_available("foo", Version::new(1, 0, 0));
-        resolver.add_available("foo", Version::new(1, 1, 0));
-        resolver.add_available("foo", Version::new(2, 0, 0));
-
-        // Find best match for ^1.0
-        let req = VersionReq::parse("^1.0.0").unwrap();
-        let best = resolver.find_match("foo", &req);
-        assert_eq!(best, Some(Version::new(1, 1, 0)));
-
-        // Find best match for >=2.0
-        let req = VersionReq::parse(">=2.0.0").unwrap();
-        let best = resolver.find_match("foo", &req);
-        assert_eq!(best, Some(Version::new(2, 0, 0)));
-    }
-
-    #[test]
-    fn test_local_resolver_no_match() {
-        let mut resolver = LocalResolver::new();
-        resolver.add_available("foo", Version::new(1, 0, 0));
-
-        let req = VersionReq::parse("^2.0.0").unwrap();
-        let best = resolver.find_match("foo", &req);
-        assert_eq!(best, None);
     }
 
     #[test]

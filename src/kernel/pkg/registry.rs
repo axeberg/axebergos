@@ -28,7 +28,6 @@
 
 use super::error::{PkgError, PkgResult};
 use super::version::Version;
-use crate::kernel::syscall;
 use std::collections::HashMap;
 
 /// Default registry URL
@@ -71,24 +70,8 @@ impl RegistryEntry {
 pub struct PackageRegistry {
     /// Registry base URL
     registry_url: String,
-    /// Cached index
-    index_cache: Option<RegistryIndex>,
     /// Per-package cache
     package_cache: HashMap<String, RegistryEntry>,
-}
-
-/// Registry index (list of all packages)
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-struct RegistryIndex {
-    packages: HashMap<String, IndexEntry>,
-}
-
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-struct IndexEntry {
-    versions: Vec<Version>,
-    latest: Version,
 }
 
 impl PackageRegistry {
@@ -96,7 +79,6 @@ impl PackageRegistry {
     pub fn new() -> Self {
         Self {
             registry_url: DEFAULT_REGISTRY.to_string(),
-            index_cache: None,
             package_cache: HashMap::new(),
         }
     }
@@ -105,7 +87,6 @@ impl PackageRegistry {
     pub fn with_url(url: &str) -> Self {
         Self {
             registry_url: url.to_string(),
-            index_cache: None,
             package_cache: HashMap::new(),
         }
     }
@@ -123,7 +104,6 @@ impl PackageRegistry {
 
     /// Clear all caches
     pub fn clear_cache(&mut self) {
-        self.index_cache = None;
         self.package_cache.clear();
     }
 
@@ -287,308 +267,11 @@ impl PackageRegistry {
     pub async fn search(&self, _query: &str) -> PkgResult<Vec<RegistryEntry>> {
         Err(PkgError::NotAvailable("WASM required".to_string()))
     }
-
-    /// Parse the registry index JSON
-    #[allow(dead_code)]
-    fn parse_index(&self, json: &str) -> PkgResult<RegistryIndex> {
-        // Simple JSON parser for index format
-        let mut packages = HashMap::new();
-
-        // Find "packages" object
-        if let Some(start) = json.find("\"packages\"") {
-            let rest = &json[start..];
-            if let Some(obj_start) = rest.find('{') {
-                let obj_rest = &rest[obj_start + 1..];
-
-                // Parse each package entry
-                let mut depth = 1;
-                let mut current_name = String::new();
-                let mut in_object = false;
-                let mut object_content = String::new();
-
-                for (i, c) in obj_rest.chars().enumerate() {
-                    match c {
-                        '{' => {
-                            depth += 1;
-                            if depth == 2 {
-                                in_object = true;
-                                object_content.clear();
-                            } else if in_object {
-                                object_content.push(c);
-                            }
-                        }
-                        '}' => {
-                            depth -= 1;
-                            if depth == 1 && in_object {
-                                // Parse the package entry
-                                if !current_name.is_empty()
-                                    && let Some(entry) =
-                                        self.parse_index_entry(&object_content)
-                                    {
-                                        packages.insert(current_name.clone(), entry);
-                                    }
-                                in_object = false;
-                            } else if in_object {
-                                object_content.push(c);
-                            }
-                            if depth == 0 {
-                                break;
-                            }
-                        }
-                        '"' if !in_object && depth == 1 => {
-                            // Start of package name
-                            let name_end = obj_rest[i + 1..].find('"').unwrap_or(0);
-                            current_name = obj_rest[i + 1..i + 1 + name_end].to_string();
-                        }
-                        _ if in_object => {
-                            object_content.push(c);
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-
-        Ok(RegistryIndex { packages })
-    }
-
-    #[allow(dead_code)]
-    fn parse_index_entry(&self, content: &str) -> Option<IndexEntry> {
-        let mut versions = Vec::new();
-        let mut latest = None;
-
-        // Parse "versions" array
-        if let Some(ver_start) = content.find("\"versions\"") {
-            let ver_rest = &content[ver_start..];
-            if let Some(arr_start) = ver_rest.find('[')
-                && let Some(arr_end) = ver_rest[arr_start..].find(']') {
-                    let arr_content = &ver_rest[arr_start + 1..arr_start + arr_end];
-                    for part in arr_content.split(',') {
-                        let v = part.trim().trim_matches('"');
-                        if let Ok(ver) = Version::parse(v) {
-                            versions.push(ver);
-                        }
-                    }
-                }
-        }
-
-        // Parse "latest"
-        if let Some(lat_start) = content.find("\"latest\"") {
-            let lat_rest = &content[lat_start..];
-            if let Some(colon) = lat_rest.find(':') {
-                let val_rest = lat_rest[colon + 1..].trim();
-                if val_rest.starts_with('"')
-                    && let Some(end) = val_rest[1..].find('"')
-                        && let Ok(ver) = Version::parse(&val_rest[1..end + 1]) {
-                            latest = Some(ver);
-                        }
-            }
-        }
-
-        let latest = latest.or_else(|| versions.iter().max().cloned())?;
-
-        Some(IndexEntry { versions, latest })
-    }
-
-    #[allow(dead_code)]
-    fn parse_package_entry(&self, name: &str, json: &str) -> PkgResult<RegistryEntry> {
-        let mut versions = Vec::new();
-        let mut latest = None;
-        let mut description = None;
-        let mut keywords = Vec::new();
-        let mut download_url = None;
-
-        // Parse versions
-        if let Some(ver_start) = json.find("\"versions\"") {
-            let ver_rest = &json[ver_start..];
-            if let Some(arr_start) = ver_rest.find('[')
-                && let Some(arr_end) = ver_rest[arr_start..].find(']') {
-                    let arr_content = &ver_rest[arr_start + 1..arr_start + arr_end];
-                    for part in arr_content.split(',') {
-                        let v = part.trim().trim_matches('"');
-                        if let Ok(ver) = Version::parse(v) {
-                            versions.push(ver);
-                        }
-                    }
-                }
-        }
-
-        // Parse latest
-        if let Some(lat_start) = json.find("\"latest\"") {
-            let lat_rest = &json[lat_start..];
-            if let Some(colon) = lat_rest.find(':') {
-                let val = extract_string_value(&lat_rest[colon + 1..]);
-                if let Some(v) = val
-                    && let Ok(ver) = Version::parse(&v) {
-                        latest = Some(ver);
-                    }
-            }
-        }
-
-        // Parse description
-        if let Some(desc_start) = json.find("\"description\"") {
-            let desc_rest = &json[desc_start..];
-            if let Some(colon) = desc_rest.find(':') {
-                description = extract_string_value(&desc_rest[colon + 1..]);
-            }
-        }
-
-        // Parse keywords
-        if let Some(kw_start) = json.find("\"keywords\"") {
-            let kw_rest = &json[kw_start..];
-            if let Some(arr_start) = kw_rest.find('[')
-                && let Some(arr_end) = kw_rest[arr_start..].find(']') {
-                    let arr_content = &kw_rest[arr_start + 1..arr_start + arr_end];
-                    for part in arr_content.split(',') {
-                        let kw = part.trim().trim_matches('"').to_string();
-                        if !kw.is_empty() {
-                            keywords.push(kw);
-                        }
-                    }
-                }
-        }
-
-        // Parse download_url
-        if let Some(url_start) = json.find("\"download_url\"") {
-            let url_rest = &json[url_start..];
-            if let Some(colon) = url_rest.find(':') {
-                download_url = extract_string_value(&url_rest[colon + 1..]);
-            }
-        }
-
-        versions.sort();
-        let latest = latest
-            .or_else(|| versions.iter().max().cloned())
-            .ok_or_else(|| PkgError::RegistryError("no versions available".to_string()))?;
-
-        Ok(RegistryEntry {
-            name: name.to_string(),
-            versions,
-            latest,
-            description,
-            keywords,
-            download_url,
-        })
-    }
-
-    #[allow(dead_code)]
-    fn parse_search_results(&self, json: &str) -> PkgResult<Vec<RegistryEntry>> {
-        let mut results = Vec::new();
-
-        // Find "results" array
-        if let Some(arr_start) = json.find("\"results\"") {
-            let arr_rest = &json[arr_start..];
-            if let Some(bracket_start) = arr_rest.find('[') {
-                // Parse each result object
-                let mut depth = 0;
-                let mut obj_start = None;
-
-                for (i, c) in arr_rest[bracket_start..].chars().enumerate() {
-                    match c {
-                        '[' if depth == 0 => depth = 1,
-                        '{' => {
-                            if depth == 1 {
-                                obj_start = Some(i);
-                            }
-                            depth += 1;
-                        }
-                        '}' => {
-                            depth -= 1;
-                            if depth == 1 {
-                                if let Some(start) = obj_start {
-                                    let obj_content =
-                                        &arr_rest[bracket_start + start..bracket_start + i + 1];
-                                    if let Some(name) = extract_name(obj_content)
-                                        && let Ok(entry) = self.parse_package_entry(&name, obj_content)
-                                        {
-                                            results.push(entry);
-                                        }
-                                }
-                                obj_start = None;
-                            }
-                        }
-                        ']' if depth == 1 => break,
-                        _ => {}
-                    }
-                }
-            }
-        }
-
-        Ok(results)
-    }
 }
 
 impl Default for PackageRegistry {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-// Helper functions for JSON parsing (used by parse methods)
-
-#[allow(dead_code)]
-fn extract_string_value(s: &str) -> Option<String> {
-    let s = s.trim();
-    if let Some(stripped) = s.strip_prefix('"') {
-        let end = stripped.find('"')?;
-        Some(stripped[..end].to_string())
-    } else {
-        None
-    }
-}
-
-#[allow(dead_code)]
-fn extract_name(json: &str) -> Option<String> {
-    if let Some(name_start) = json.find("\"name\"") {
-        let rest = &json[name_start..];
-        if let Some(colon) = rest.find(':') {
-            return extract_string_value(&rest[colon + 1..]);
-        }
-    }
-    None
-}
-
-#[allow(dead_code)]
-fn write_file(path: &str, content: &str) -> PkgResult<()> {
-    // Ensure parent directory exists
-    if let Some(pos) = path.rfind('/') {
-        let parent = &path[..pos];
-        if !syscall::exists(parent).unwrap_or(false) {
-            let _ = syscall::mkdir(parent);
-        }
-    }
-
-    let fd = syscall::open(path, syscall::OpenFlags::WRITE)
-        .map_err(|e| PkgError::IoError(format!("{}: {}", path, e)))?;
-
-    syscall::write(fd, content.as_bytes())
-        .map_err(|e| PkgError::IoError(format!("{}: {}", path, e)))?;
-
-    syscall::close(fd).map_err(|e| PkgError::IoError(format!("{}: {}", path, e)))?;
-
-    Ok(())
-}
-
-// Simple URL encoding for search queries
-#[allow(dead_code)]
-mod urlencoding {
-    pub fn encode(s: &str) -> String {
-        let mut result = String::new();
-        for c in s.chars() {
-            match c {
-                'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => {
-                    result.push(c);
-                }
-                ' ' => result.push('+'),
-                _ => {
-                    for byte in c.to_string().bytes() {
-                        result.push('%');
-                        result.push_str(&format!("{:02X}", byte));
-                    }
-                }
-            }
-        }
-        result
     }
 }
 
@@ -638,17 +321,4 @@ mod tests {
         assert_eq!(url, "https://cdn.example.com/hello/1.0.0.tar.gz");
     }
 
-    #[test]
-    fn test_urlencoding() {
-        assert_eq!(urlencoding::encode("hello"), "hello");
-        assert_eq!(urlencoding::encode("hello world"), "hello+world");
-        assert_eq!(urlencoding::encode("hello@world"), "hello%40world");
-    }
-
-    #[test]
-    fn test_extract_string_value() {
-        assert_eq!(extract_string_value("\"hello\""), Some("hello".to_string()));
-        assert_eq!(extract_string_value("  \"hello\"  "), Some("hello".to_string()));
-        assert_eq!(extract_string_value("hello"), None);
-    }
 }
