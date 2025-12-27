@@ -408,6 +408,57 @@ impl Process {
     pub fn can_run(&self) -> bool {
         matches!(self.state, ProcessState::Running | ProcessState::Sleeping)
     }
+
+    /// Create a forked copy of this process with COW memory
+    ///
+    /// The child process gets:
+    /// - New PID
+    /// - This process as parent
+    /// - Same pgid, sid, uid, gid, environ, cwd
+    /// - Empty file table (caller must set up fds)
+    /// - COW memory (shared pages until written)
+    /// - Empty children list
+    ///
+    /// Returns a new Process that needs its fds and task set up by the caller.
+    pub fn cow_fork<F>(
+        &self,
+        child_pid: Pid,
+        region_id_generator: F,
+    ) -> (
+        Self,
+        std::collections::HashMap<super::memory::RegionId, super::memory::RegionId>,
+    )
+    where
+        F: FnMut() -> super::memory::RegionId,
+    {
+        // COW clone the memory
+        let (child_memory, region_mapping) = self.memory.cow_fork(region_id_generator);
+
+        let child = Self {
+            pid: child_pid,
+            parent: Some(self.pid),
+            pgid: self.pgid, // Inherit process group
+            sid: self.sid,   // Inherit session
+            uid: self.uid,
+            gid: self.gid,
+            euid: self.euid,
+            egid: self.egid,
+            groups: self.groups.clone(),
+            state: ProcessState::Running,
+            files: FileTable::new(), // Caller sets up fds
+            memory: child_memory,
+            signals: super::signal::ProcessSignals::new(), // Fresh signal state
+            environ: self.environ.clone(),
+            cwd: self.cwd.clone(),
+            task: None, // Caller sets up task
+            name: self.name.clone(),
+            children: Vec::new(), // No children yet
+            ctty: self.ctty.clone(),
+            is_session_leader: false, // Child is not session leader
+        };
+
+        (child, region_mapping)
+    }
 }
 
 /// A process's file descriptor table
@@ -447,6 +498,20 @@ impl FileTable {
 
     pub fn contains(&self, fd: Fd) -> bool {
         self.table.contains_key(&fd)
+    }
+
+    /// Clone the file table for fork
+    /// Returns a new FileTable with the same mappings
+    pub fn clone_for_fork(&self) -> Self {
+        Self {
+            next_fd: self.next_fd,
+            table: self.table.clone(),
+        }
+    }
+
+    /// Get all file descriptors and their handles
+    pub fn iter(&self) -> impl Iterator<Item = (Fd, Handle)> + '_ {
+        self.table.iter().map(|(fd, h)| (*fd, *h))
     }
 }
 

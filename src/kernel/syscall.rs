@@ -649,6 +649,55 @@ impl Kernel {
         pid
     }
 
+    /// fork - Create a child process with COW memory (like Linux fork(2))
+    ///
+    /// The child process is a copy of the parent, but with:
+    /// - New PID
+    /// - Parent set to the calling process
+    /// - COW memory (pages shared until written)
+    /// - Cloned file descriptors (reference counted)
+    ///
+    /// Returns:
+    /// - In parent: child PID
+    /// - In child: 0 (simulated, since we return immediately)
+    pub fn sys_fork(&mut self) -> SyscallResult<Pid> {
+        let parent_pid = self.current.ok_or(SyscallError::NoProcess)?;
+
+        // Allocate child PID
+        let child_pid = Pid(self.next_pid);
+        self.next_pid += 1;
+
+        // Create region ID generator for COW memory
+        let memory_manager = &self.memory;
+        let mut region_id_gen = || memory_manager.alloc_region_id();
+
+        // Get parent and fork it
+        let parent = self
+            .processes
+            .get(&parent_pid)
+            .ok_or(SyscallError::NoProcess)?;
+
+        let (mut child, _region_mapping) = parent.cow_fork(child_pid, &mut region_id_gen);
+
+        // Clone file descriptors - each fd in child references same kernel object
+        // We need to retain (increment refcount) for each handle
+        let parent_files: Vec<_> = parent.files.iter().collect();
+        for (fd, handle) in parent_files {
+            self.objects.retain(handle);
+            child.files.insert(fd, handle);
+        }
+
+        // Add child to parent's children list
+        if let Some(parent) = self.processes.get_mut(&parent_pid) {
+            parent.children.push(child_pid);
+        }
+
+        // Insert child process
+        self.processes.insert(child_pid, child);
+
+        Ok(child_pid)
+    }
+
     /// setsid - Create a new session (like Linux setsid(2))
     /// The calling process becomes the session leader and process group leader.
     /// Returns the new session ID on success.
@@ -2533,6 +2582,15 @@ pub fn dup(fd: Fd) -> SyscallResult<Fd> {
 /// Spawn a new process (internal, will be expanded)
 pub fn spawn_process(name: &str) -> Pid {
     KERNEL.with(|k| k.borrow_mut().spawn_process(name, None))
+}
+
+/// Fork the current process (like Linux fork(2))
+///
+/// Creates a child process with COW memory. Returns the child PID to the caller.
+/// The child's memory is shared with the parent until either writes to it,
+/// at which point the written pages are copied (copy-on-write).
+pub fn fork() -> SyscallResult<Pid> {
+    KERNEL.with(|k| k.borrow_mut().sys_fork())
 }
 
 /// Spawn a new login shell process for a user

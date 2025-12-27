@@ -1,6 +1,6 @@
 # Memory Management
 
-axeberg provides memory accounting, allocation tracking, and shared memory for inter-process communication.
+axeberg provides memory accounting, allocation tracking, shared memory for inter-process communication, and copy-on-write (COW) for efficient process forking.
 
 ## Design Philosophy
 
@@ -10,6 +10,7 @@ In WASM, we cannot provide hardware-level memory isolation (no MMU, no page tabl
 2. **Limits**: Prevent runaway processes from consuming all memory
 3. **Shared Memory**: Efficient zero-copy IPC
 4. **Visibility**: Full insight into system memory state
+5. **Copy-on-Write**: Efficient fork without copying memory upfront
 
 ## Memory Regions
 
@@ -191,6 +192,103 @@ for info in list {
     println!("  Creator: {:?}", info.creator);
 }
 ```
+
+## Copy-on-Write (COW)
+
+axeberg implements copy-on-write semantics for efficient process forking. When a process forks, memory pages are shared between parent and child until one of them writes, at which point only the modified page is copied.
+
+### Page-Based Memory
+
+Memory regions are divided into 4KB pages internally:
+
+```rust
+pub const PAGE_SIZE: usize = 4096;
+
+pub struct Page {
+    /// Data is reference-counted via Arc
+    data: Arc<Vec<u8>>,
+}
+```
+
+Pages track their reference count:
+- `ref_count() == 1`: Page is private (owned by single process)
+- `ref_count() > 1`: Page is shared (COW - copy before writing)
+
+### COW Semantics
+
+When a process writes to a shared page:
+
+1. Check if page has `ref_count > 1` (shared)
+2. If shared, clone the page data (COW fault)
+3. Replace page with private copy
+4. Write to the private copy
+
+This is transparent to the process:
+
+```rust
+// Both parent and child see this region
+let region = mem_alloc(4096, Protection::READ_WRITE)?;
+mem_write(region, 0, b"initial data")?;
+
+// After fork, child has COW copy of all regions
+let child_pid = fork()?;
+
+// Parent writes - triggers COW on parent's page
+mem_write(region, 0, b"parent data")?;
+
+// Child writes - triggers COW on child's page
+mem_write(region, 0, b"child data")?;
+
+// Now parent and child have independent copies
+```
+
+### Fork System Call
+
+The `fork()` syscall creates a child process with COW memory:
+
+```rust
+// Fork the current process
+let child_pid = fork()?;
+
+// Returns child PID to parent
+// Child inherits:
+// - COW memory (shared until written)
+// - File descriptors (reference counted)
+// - Environment variables
+// - Current working directory
+// - Process group and session
+```
+
+### COW Statistics
+
+Get COW statistics for a region or process:
+
+```rust
+// Per-region stats
+let stats = region.cow_stats();
+println!("Total pages: {}", stats.total_pages);
+println!("Shared pages: {}", stats.shared_pages);
+println!("Private pages: {}", stats.private_pages);
+println!("COW faults: {}", stats.cow_faults);
+
+// Per-process stats
+let stats = process_memory.cow_stats();
+println!("Regions with COW: {}", stats.regions_with_cow);
+```
+
+### Benefits
+
+1. **Fast fork**: No immediate memory copy needed
+2. **Memory efficient**: Pages only copied when modified
+3. **Read sharing**: Unmodified pages stay shared forever
+4. **Lazy copying**: Copy cost spread over time
+
+### Implementation Notes
+
+- Page size is 4KB (standard page size)
+- Reference counting via `Arc<Vec<u8>>`
+- COW applies to private memory only (not shared memory segments)
+- COW faults are counted for monitoring
 
 ## Memory Manager
 
