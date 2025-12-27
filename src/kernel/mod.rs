@@ -49,7 +49,8 @@ pub use init::{
 };
 pub use ipc::{Receiver, Sender, channel};
 pub use memory::{
-    MemoryError, MemoryStats, Protection, RegionId, ShmId, ShmInfo, SystemMemoryStats,
+    CowStats, MemoryError, MemoryStats, PAGE_SIZE, ProcessCowStats, Protection, RegionId, ShmId,
+    ShmInfo, SystemMemoryStats,
 };
 pub use mount::{FsType, MountEntry, MountError, MountOptions, MountTable};
 pub use msgqueue::{

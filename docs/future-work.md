@@ -45,14 +45,19 @@ Consolidated list of planned features and enhancements for axeberg.
 
 ## Memory
 
-| Feature | Description | Complexity |
-|---------|-------------|------------|
-| Memory-mapped files | Map VFS files into memory regions | Medium |
-| Copy-on-write | Efficient fork via COW pages | High |
-| Memory pools | Arena allocation for performance | Medium |
-| OPFS persistence | Persist memory regions to disk | Low |
+| Feature | Description | Complexity | Status |
+|---------|-------------|------------|--------|
+| Memory-mapped files | Map VFS files into memory regions | Medium | Planned |
+| Copy-on-write | Efficient fork via COW pages | High | ✅ Done |
+| Memory pools | Arena allocation for performance | Medium | Planned |
+| OPFS persistence | Persist memory regions to disk | Low | Planned |
 
 *Source: [docs/kernel/memory.md](kernel/memory.md)*
+
+> **Copy-on-Write Implemented**: Page-based COW with Arc reference counting.
+> Fork syscall creates child processes with shared memory pages that are
+> copied only when written (copy-on-write semantics).
+> See `src/kernel/memory.rs` for Page, CowMemory, and cow_fork implementations.
 
 ## IPC
 
@@ -90,6 +95,6 @@ The compositor itself is not yet implemented. Once implemented, these enhancemen
 
 ### Major Features
 1. ~~Work stealing executor~~ ✅ Done
-2. Copy-on-write memory
+2. ~~Copy-on-write memory~~ ✅ Done
 3. ~~Package manager~~ ✅ Done
 4. Compositor implementation
