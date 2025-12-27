@@ -340,9 +340,9 @@ impl Runtime {
 
         // Calculate new position based on whence
         let new_pos = match whence {
-            0 => offset, // SEEK_SET
+            0 => offset,                      // SEEK_SET
             1 => current_pos as i64 + offset, // SEEK_CUR
-            2 => file_size as i64 + offset, // SEEK_END
+            2 => file_size as i64 + offset,   // SEEK_END
             _ => return SyscallError::InvalidArgument.code() as i64,
         };
 
@@ -393,12 +393,10 @@ impl Runtime {
     fn resolve_path(&self, path: &str) -> String {
         if path.starts_with('/') {
             path.to_string()
+        } else if self.cwd == "/" {
+            format!("/{}", path)
         } else {
-            if self.cwd == "/" {
-                format!("/{}", path)
-            } else {
-                format!("{}/{}", self.cwd, path)
-            }
+            format!("{}/{}", self.cwd, path)
         }
     }
 }

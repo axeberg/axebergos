@@ -324,10 +324,10 @@ impl TaskGroupManager {
             }
 
             // Remove from parent's children
-            if let Some(parent_id) = group.parent() {
-                if let Some(parent) = self.groups.get_mut(&parent_id) {
-                    parent.remove_child(group_id);
-                }
+            if let Some(parent_id) = group.parent()
+                && let Some(parent) = self.groups.get_mut(&parent_id)
+            {
+                parent.remove_child(group_id);
             }
 
             // Recursively delete children

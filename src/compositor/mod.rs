@@ -984,8 +984,7 @@ mod tests {
 
     #[test]
     fn test_animation_is_complete() {
-        let anim = Animation::new(AnimationProperty::Scale, 1.0, 2.0, 100.0)
-            .with_start_time(0.0);
+        let anim = Animation::new(AnimationProperty::Scale, 1.0, 2.0, 100.0).with_start_time(0.0);
 
         assert!(!anim.is_complete(50.0));
         assert!(anim.is_complete(100.0));

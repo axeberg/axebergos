@@ -1324,7 +1324,7 @@ impl MemoryPool {
     ///
     /// Returns true if the object was freed, false if the offset was invalid.
     pub fn free(&mut self, offset: usize) -> bool {
-        if offset % self.object_size != 0 {
+        if !offset.is_multiple_of(self.object_size) {
             return false; // Not aligned to object boundary
         }
 

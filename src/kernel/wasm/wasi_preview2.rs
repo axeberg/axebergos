@@ -119,9 +119,10 @@ impl FilesystemError {
 }
 
 /// File type enumeration
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DescriptorType {
     /// Unknown file type
+    #[default]
     Unknown,
     /// Block device
     BlockDevice,
@@ -154,12 +155,6 @@ pub struct DescriptorStat {
     pub modification_time: Option<Datetime>,
     /// Status change time
     pub status_change_time: Option<Datetime>,
-}
-
-impl Default for DescriptorType {
-    fn default() -> Self {
-        Self::Unknown
-    }
 }
 
 /// Directory entry
@@ -880,10 +875,7 @@ impl FilesystemState {
         flags: WasiOpenFlags,
         desc_flags: WasiDescriptorFlags,
     ) -> Result<DescriptorId, FilesystemError> {
-        let dir_desc = self
-            .descriptors
-            .get(&dir)
-            .ok_or(FilesystemError::NoEntry)?;
+        let dir_desc = self.descriptors.get(&dir).ok_or(FilesystemError::NoEntry)?;
 
         let full_path = if dir_desc.path == "/" {
             format!("/{}", path)
@@ -904,14 +896,14 @@ impl FilesystemState {
 
         if flags.create && !exists {
             // Create the file
-            if let Err(_) = ksyscall::write_file(&full_path, "") {
+            if ksyscall::write_file(&full_path, "").is_err() {
                 return Err(FilesystemError::Io);
             }
         }
 
         if flags.truncate {
             // Truncate the file
-            if let Err(_) = ksyscall::write_file(&full_path, "") {
+            if ksyscall::write_file(&full_path, "").is_err() {
                 return Err(FilesystemError::Io);
             }
         }

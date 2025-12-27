@@ -300,8 +300,7 @@ pub fn layout_text(text: &str, bounds: Rect, options: &TextLayoutOptions) -> Tex
                     TextAlign::Right => bounds.x + bounds.width - width,
                 };
 
-                let glyphs =
-                    layout_line_glyphs(&line_text, x, current_y, &metrics, options, true);
+                let glyphs = layout_line_glyphs(&line_text, x, current_y, &metrics, options, true);
 
                 lines.push(TextLine {
                     text: line_text,
@@ -614,7 +613,12 @@ impl TextRenderer {
     }
 
     /// Layout text with custom options
-    pub fn layout_with_options(&self, text: &str, bounds: Rect, options: &TextLayoutOptions) -> TextLayout {
+    pub fn layout_with_options(
+        &self,
+        text: &str,
+        bounds: Rect,
+        options: &TextLayoutOptions,
+    ) -> TextLayout {
         layout_text(text, bounds, options)
     }
 
@@ -633,7 +637,10 @@ impl TextRenderer {
         let metrics = FontMetrics::monospace(font_size);
         let width = measure_line(text, &metrics, 0.0, true);
         let height = metrics.height;
-        Point { x: width, y: height }
+        Point {
+            x: width,
+            y: height,
+        }
     }
 
     /// Measure multi-line text
