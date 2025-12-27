@@ -1,278 +1,97 @@
-# RFD 0001: Package Registry for axeberg
+---
+authors: axeberg contributors
+state: predraft
+discussion: https://github.com/axeberg/axebergos/issues/TBD
+---
 
-## Metadata
+# RFD 0001 Package Registry
 
-- **Authors:** axeberg contributors
-- **State:** ideation
-- **Discussion:** (pending)
-- **Created:** 2025-12-27
-- **Updated:** 2025-12-27
+## Introduction
 
-## Background
+The axeberg package manager exists, but the registry it talks to does not. This document proposes the design of a package registry that can serve WASM command packages to axeberg installations.
 
-The axeberg package manager (`pkg`) provides a client-side implementation for installing, managing, and distributing WebAssembly command modules. However, the system currently lacks an actual registry server to host and serve packages.
-
-This RFD proposes a registry design heavily inspired by [Cargo/crates.io](https://github.com/rust-lang/crates.io), which has evolved through years of real-world use and security incidents. We adapt their proven patterns for axeberg's browser-based WASM environment.
-
-### Prior Art Reviewed
-
-| Registry | Lessons Learned |
-|----------|-----------------|
-| [crates.io](https://crates.io) | Sparse index protocol, trusted publishing, yank semantics |
-| [npm](https://npmjs.com) | Scoped packages, typosquatting detection, dependency confusion |
-| [PyPI](https://pypi.org) | Trusted publishing pioneer (16,000+ projects) |
-| [Alexandrie](https://github.com/Hirevo/alexandrie) | Modular design, multiple storage backends |
-| [cargo-http-registry](https://github.com/d-e-s-o/cargo-http-registry) | Simplicity, filesystem-first |
+The package manager client already implements semantic versioning, dependency resolution, checksum verification, and an HTTP-based registry protocol. What remains is designing and operating the server-side infrastructure: hosting packages, serving metadata, enabling discovery, and allowing the community to publish.
 
 ## Problem Statement
 
-Without a registry, users cannot discover, install, or share packages. The registry must address:
+Without a registry, axeberg is a closed system. Users cannot share packages. The ecosystem cannot grow. Every installation is limited to whatever commands ship with the OS itself.
 
-1. **Availability** - Packages must be downloadable reliably
-2. **Security** - Protection against supply chain attacks
-3. **Scalability** - Handle growth without infrastructure changes
-4. **Simplicity** - Minimal operational burden for maintainers
+We need infrastructure that:
 
-### Known Attack Vectors
+1. Hosts package archives reliably
+2. Serves package metadata efficiently
+3. Resists supply chain attacks
+4. Operates with minimal cost and complexity
 
-Research from [Snyk](https://snyk.io/blog/malicious-packages-open-source-ecosystems/) and [academia](https://arxiv.org/abs/2108.09576) documents 3,600+ malicious packages detected in 2024 alone:
+The last point matters because axeberg is a small project. We cannot afford to run PostgreSQL clusters or pay for dedicated compute. Whatever we build must work with static hosting and free-tier services.
 
-| Attack | Description | Mitigation |
-|--------|-------------|------------|
-| **Typosquatting** | `lod-ash` instead of `lodash` | Levenshtein distance checks, name reservation |
-| **Dependency Confusion** | Public package shadows private name | Scoped namespaces from day 1 |
-| **Account Takeover** | Stolen API tokens | OIDC trusted publishing, no long-lived tokens |
-| **Malicious Updates** | Compromised maintainer pushes bad version | Immutable versions, signing |
-| **AI Hallucination** | LLMs invent package names attackers register | Reserved name detection |
+## Prior Art
 
-## Proposed Solution
+Package registries are a solved problem, but the solutions have diverged based on scale and threat model.
 
-### Architecture Overview
+**crates.io** started with a git-based index that clients cloned entirely. This worked until the index exceeded 200MB, at which point CI builds became painfully slow. They responded with the sparse index protocol (RFC 2789): clients fetch only the index files they need via HTTP, using conditional requests for cache efficiency. More recently, they adopted trusted publishing (RFC 3691), replacing long-lived API tokens with short-lived OIDC credentials from CI systems.
 
-We adopt Cargo's **sparse index protocol** with **static hosting**:
+**npm** learned different lessons. With millions of packages came millions of attacks: typosquatting, dependency confusion, account takeovers. Their responses included scoped packages (`@scope/name`) to prevent namespace collisions, Levenshtein distance checks to catch typosquats, and mandatory 2FA for popular package maintainers. Despite this, Snyk documented 3,000+ malicious npm packages in 2024 alone.
 
-```
-┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│ Author Repo  │────>│ GitHub OIDC  │────>│ Registry Repo│
-│              │     │ (verify ID)  │     │ (git + CI)   │
-└──────────────┘     └──────────────┘     └──────┬───────┘
-                                                 │ deploy
-                                                 v
-┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│ pkg client   │<────│ CDN (Fastly/ │<────│ Static Files │
-│ (browser)    │     │ Cloudflare)  │     │ (R2/S3/GHP)  │
-└──────────────┘     └──────────────┘     └──────────────┘
-```
+**PyPI** pioneered trusted publishing, proving that OIDC-based authentication from GitHub Actions could replace API tokens entirely. Over 16,000 projects now use it.
 
-### Index Format (Cargo-Inspired)
+The pattern is clear: start simple, get attacked, add defenses. We can skip the "get attacked" phase by learning from their mistakes.
 
-Following [Cargo's sparse index RFC 2789](https://rust-lang.github.io/rfcs/2789-sparse-index.html), we use one file per package with one JSON line per version:
+## Design Principles
 
-#### Directory Structure
+**Static over dynamic.** A registry that requires no running servers cannot go down because a server crashed. Static files on a CDN scale infinitely and cost almost nothing. The tradeoff is that publishing becomes a batch operation (commit to git, rebuild index, deploy) rather than an instant API call. This is acceptable.
 
-Packages are organized to minimize directory size (like crates.io):
+**Scoped from day one.** npm added scopes after namespace conflicts became painful. We should require them immediately: `@axeberg/core`, `@user/mypkg`, `@org/internal`. This eliminates dependency confusion attacks entirely and makes ownership unambiguous.
+
+**No long-lived secrets.** API tokens get leaked. They sit in CI configs, get committed to repos, get stolen in breaches. Trusted publishing with OIDC means the only credential is a cryptographic proof that "this request came from GitHub Actions running workflow X in repo Y." That proof is unforgeable and expires in minutes.
+
+**Immutable versions.** Once `@axeberg/hello@1.0.0` exists, its checksum is forever. Yanking hides a version from default resolution but does not delete it. This makes builds reproducible and makes supply chain forensics possible.
+
+## The Sparse Index Protocol
+
+Following Cargo's design, the index is a collection of files, one per package. Each file contains one JSON object per line, one line per version:
 
 ```
-index/
-├── config.json              # Registry configuration
-├── 1/                       # 1-char names
-│   └── a                    # package "a"
-├── 2/                       # 2-char names
-│   └── ab                   # package "ab"
-├── 3/                       # 3-char names
-│   └── a/
-│       └── abc              # package "abc"
-├── he/                      # 4+ char names: first 2 chars
-│   └── ll/                  # next 2 chars
-│       └── hello            # package "hello"
-└── @axeberg/                # scoped packages
-    └── co/
-        └── re/
-            └── core         # @axeberg/core
+{"name":"hello","vers":"1.0.0","deps":[],"cksum":"sha256:abc...","yanked":false}
+{"name":"hello","vers":"1.1.0","deps":[{"name":"core","req":"^1.0","scope":"axeberg"}],"cksum":"sha256:def...","yanked":false}
 ```
 
-#### config.json
+Files are organized to keep directories small. A package named `hello` lives at `he/ll/hello`. Shorter names use simpler paths: `1/a`, `2/ab`, `3/a/abc`. Scoped packages nest under their scope: `@axeberg/co/re/core`.
+
+Clients fetch `https://index.pkg.axeberg.dev/he/ll/hello` when resolving the `hello` package. HTTP/2 allows parallel requests. Conditional requests (`If-None-Match`, `If-Modified-Since`) avoid re-downloading unchanged files. A cold cache fetches only what it needs; a warm cache fetches almost nothing.
+
+The root `config.json` tells clients where to find things:
 
 ```json
 {
   "dl": "https://dl.pkg.axeberg.dev/{crate}/{version}.axepkg",
-  "api": "https://pkg.axeberg.dev",
-  "auth-required": false
+  "api": "https://pkg.axeberg.dev"
 }
 ```
 
-The `{crate}` and `{version}` markers are substituted by the client. This separation allows the download CDN to be different from the API/index server.
+Downloads come from a separate CDN-optimized domain. The `{crate}` and `{version}` markers are client-substituted.
 
-#### Package Index File
+## Package Downloads
 
-Each package file contains one JSON object per line (no array wrapper):
-
-```
-{"name":"hello","vers":"1.0.0","deps":[],"cksum":"sha256:abc...","features":{},"yanked":false}
-{"name":"hello","vers":"1.1.0","deps":[{"name":"core","req":"^1.0","scope":"axeberg"}],"cksum":"sha256:def...","features":{"async":["dep:tokio"]},"yanked":false}
-```
-
-##### Index Entry Schema
-
-```typescript
-interface IndexEntry {
-  // Package name (without scope)
-  name: string;
-
-  // Semantic version
-  vers: string;
-
-  // Dependencies
-  deps: Dependency[];
-
-  // SHA-256 of .axepkg file
-  cksum: string;
-
-  // Feature flags
-  features: Record<string, string[]>;
-
-  // Soft-deleted (still downloadable, not installed by default)
-  yanked: boolean;
-
-  // Minimum axeberg version required (optional)
-  axeberg_version?: string;
-
-  // Binary targets in package
-  bins: string[];
-}
-
-interface Dependency {
-  // Package name
-  name: string;
-
-  // Version requirement (e.g., "^1.0.0", ">=2.0,<3.0")
-  req: string;
-
-  // Scope (optional, for scoped deps like @axeberg/core)
-  scope?: string;
-
-  // Is this optional?
-  optional?: boolean;
-
-  // Required features
-  features?: string[];
-
-  // Default features enabled?
-  default_features?: boolean;
-}
-```
-
-### Scoped Packages (Namespaces)
-
-Following [npm's recommendation](https://docs.npmjs.com/threats-and-mitigations/) and [Inedo's analysis](https://blog.inedo.com/npm/avoid-security-risks-in-npm-packages-with-scoping), we require scopes from day 1:
-
-```
-@axeberg/core      # Official packages
-@user/mypackage    # User packages
-@org/internal      # Organization packages
-```
-
-**Why mandatory scopes?**
-- Prevents namespace squatting
-- Eliminates dependency confusion attacks
-- Clear ownership model
-- Matches npm/Deno conventions
-
-**Exception**: A curated set of "blessed" unscoped names for stdlib:
-- `core`, `std`, `test` → reserved for `@axeberg/*`
-
-### Sparse HTTP Protocol
-
-Instead of downloading the full index, clients fetch only needed package files:
-
-```rust
-impl PackageRegistry {
-    /// Fetch index entry for a package
-    pub async fn fetch_index_entry(&self, scope: &str, name: &str) -> PkgResult<Vec<IndexEntry>> {
-        // Compute path: @axeberg/hello -> index/@axeberg/he/ll/hello
-        let path = self.index_path(scope, name);
-        let url = format!("{}/{}", self.index_url, path);
-
-        // HTTP/2 allows efficient parallel fetches
-        let response = self.client.get(&url)
-            .header("If-None-Match", self.cached_etag(scope, name))
-            .send()
-            .await?;
-
-        match response.status() {
-            304 => self.cached_entries(scope, name),  // Not modified
-            200 => self.parse_and_cache(scope, name, response),
-            404 => Ok(vec![]),  // Package doesn't exist
-            _ => Err(PkgError::RegistryError),
-        }
-    }
-}
-```
-
-**Key benefits** (from [Cargo's experience](https://blog.rust-lang.org/inside-rust/2023/01/30/cargo-sparse-protocol.html)):
-- First fetch: download only what you need (not 215MB git clone)
-- Subsequent fetches: HTTP conditional requests (ETag/If-Modified-Since)
-- HTTP/2 pipelining for parallel dependency resolution
-
-### Package Archives
-
-Downloads are served from a separate CDN-optimized endpoint:
+Versioned package URLs are immutable:
 
 ```
 https://dl.pkg.axeberg.dev/@axeberg/hello/1.0.0.axepkg
 ```
 
-**Caching Strategy** (based on [CDN best practices](https://systemdesignschool.io/fundamentals/cdn-cache-invalidation)):
+The CDN caches these forever (`Cache-Control: immutable, max-age=31536000`). There is no invalidation problem because there is nothing to invalidate. A version, once published, never changes.
 
-| Resource | Cache-Control | Why |
-|----------|---------------|-----|
-| `/{pkg}/{version}.axepkg` | `immutable, max-age=31536000` | Versions never change |
-| `/index/{path}` | `max-age=300, stale-while-revalidate=60` | Index updates, but not critical |
-| `/config.json` | `max-age=3600` | Rarely changes |
+The index files have shorter cache times (`max-age=300, stale-while-revalidate=60`) because they do change as new versions are published. But even stale index data only means "you might not see the newest version for five minutes," which is acceptable.
 
-Versioned URLs are **immutable** - once `hello@1.0.0` is published, that exact checksum is forever. This sidesteps CDN invalidation complexity entirely.
+## Trusted Publishing
 
-### Authentication: Trusted Publishing
+When an author wants to publish `@octocat/hello`, their GitHub Actions workflow requests an OIDC token from GitHub. This token is a signed JWT asserting:
 
-Following [crates.io's implementation](https://crates.io/docs/trusted-publishing) (via [RFC 3691](https://rust-lang.github.io/rfcs/3691-trusted-publishing-cratesio.html)) and [PyPI's pioneering work](https://docs.pypi.org/trusted-publishers/), we use **OIDC trusted publishing** instead of long-lived API tokens:
+- Repository: `octocat/hello-pkg`
+- Workflow: `.github/workflows/publish.yml`
+- Ref: `refs/tags/v1.0.0`
 
-```yaml
-# .github/workflows/publish.yml
-name: Publish to axeberg registry
-on:
-  release:
-    types: [published]
-
-permissions:
-  id-token: write  # Required for OIDC
-
-jobs:
-  publish:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Build package
-        run: axepkg build
-
-      - uses: axeberg/publish-action@v1
-        # No secrets needed! OIDC proves identity
-```
-
-**How it works:**
-
-1. GitHub Actions generates an OIDC token proving:
-   - Repository: `octocat/hello-pkg`
-   - Workflow: `publish.yml`
-   - Environment: `production` (optional)
-
-2. Registry verifies token against GitHub's JWKS endpoint
-
-3. Registry checks if `octocat/hello-pkg` is authorized to publish `@octocat/hello`
-
-4. If valid, issues 30-minute scoped token for this publish only
-
-**Trust Configuration** (stored in registry):
+The registry verifies this token against GitHub's public keys, then checks a trust database:
 
 ```json
 {
@@ -280,363 +99,143 @@ jobs:
     "trusted_publishers": [{
       "provider": "github",
       "repository": "octocat/hello-pkg",
-      "workflow": "publish.yml",
-      "environment": "production"
+      "workflow": "publish.yml"
     }]
   }
 }
 ```
 
-### Typosquatting Protection
+If the token's claims match a trusted publisher entry, the registry accepts the upload. No API tokens exist. Nothing can be stolen.
 
-Before accepting new package names, we check:
+The workflow is simple:
 
-1. **Levenshtein Distance**: Reject names within edit distance 2 of popular packages
-2. **Homoglyph Detection**: `he11o` vs `hello` (1 vs l, 0 vs o)
-3. **Reserved Prefixes**: `axeberg-*`, `stdlib-*`, etc.
-4. **Scope Verification**: `@octocat/*` requires GitHub org membership
+```yaml
+name: Publish
+on:
+  release:
+    types: [published]
 
-```rust
-fn validate_package_name(name: &str, scope: &str) -> Result<(), ValidationError> {
-    // Check against top 1000 packages
-    for popular in POPULAR_PACKAGES {
-        if levenshtein(name, popular) <= 2 && name != popular {
-            return Err(ValidationError::TooSimilar(popular.to_string()));
-        }
-    }
+permissions:
+  id-token: write
 
-    // Check homoglyphs
-    let normalized = name
-        .replace('1', "l")
-        .replace('0', "o")
-        .replace('_', "-");
-    if normalized != name && package_exists(&normalized, scope) {
-        return Err(ValidationError::Homoglyph(normalized));
-    }
-
-    Ok(())
-}
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: axepkg build
+      - uses: axeberg/publish-action@v1
 ```
 
-### Package Signing (Phase 1, not Phase 2)
+## Typosquatting Defenses
 
-Given the [severity of supply chain attacks](https://vulert.com/blog/npm-supply-chain-attack-20-packages-compromised/), signing is essential from launch:
+Before accepting a new package name, the registry checks:
 
-We use [Sigstore](https://www.sigstore.dev/) for keyless signing:
+1. Levenshtein distance to existing popular packages. `hello-wrold` is rejected if `hello-world` exists.
+2. Homoglyph normalization. `he11o` (with digit one) is rejected if `hello` exists.
+3. Scope ownership. `@octocat/*` requires proof of control over the `octocat` GitHub organization.
 
-```
-┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│ Author       │────>│ Sigstore     │────>│ Rekor        │
-│ (GitHub ID)  │     │ (sign w/OIDC)│     │ (transparency│
-└──────────────┘     └──────────────┘     │  log)        │
-                                          └──────────────┘
-```
+These checks happen at publish time. The static index contains only packages that passed validation.
 
-**Why Sigstore?**
-- No key management for authors
-- Identity tied to GitHub/GitLab account
-- Public transparency log (Rekor) for audit
-- Same approach [npm is adopting](https://github.blog/security/supply-chain-security/introducing-npm-package-provenance/)
+## Package Signing
 
-**Verification on install:**
+Checksums prove integrity but not provenance. A SHA-256 hash tells you "this file hasn't been modified" but not "this file came from the author you trust."
 
-```rust
-pub async fn verify_package(pkg: &[u8], entry: &IndexEntry) -> PkgResult<()> {
-    // 1. Verify checksum
-    let actual_checksum = sha256(pkg);
-    if actual_checksum != entry.cksum {
-        return Err(PkgError::ChecksumMismatch);
-    }
+We use Sigstore for keyless signing. When publishing, the author's OIDC identity (their GitHub account) is bound to a signature over the package contents. This signature is recorded in Rekor, a public transparency log. Anyone can verify that a package was signed by a specific GitHub identity at a specific time.
 
-    // 2. Verify Sigstore signature (if present)
-    if let Some(sig) = &entry.signature {
-        let bundle = sigstore::verify(pkg, sig).await?;
+Verification on install:
 
-        // Check signer identity matches trusted publisher
-        if !is_trusted_identity(&bundle.signer, &entry.name) {
-            return Err(PkgError::UntrustedSigner);
-        }
-    }
+1. Compute SHA-256 of downloaded package
+2. Compare to checksum in index entry
+3. If signature present, verify against Sigstore and check that the signer matches a trusted publisher
 
-    Ok(())
-}
-```
+Packages from unknown signers trigger a warning. Packages with invalid signatures fail to install.
 
-### Registry Operations
+## Hosting
 
-#### Publishing Flow
+The registry requires three components:
 
-```
-1. Author: git tag v1.0.0 && git push --tags
-           │
-           v
-2. GitHub Actions: Build, test, create .axepkg
-           │
-           v
-3. publish-action: Request OIDC token from GitHub
-           │
-           v
-4. Registry API: Verify OIDC token, check trust config
-           │
-           v
-5. Registry API: Validate package (name, checksum, manifest)
-           │
-           v
-6. Registry API: Sign with Sigstore, upload to storage
-           │
-           v
-7. Registry API: Update index file, commit to git
-           │
-           v
-8. GitHub Pages/Cloudflare: Deploy updated index
-```
+1. **Index storage.** Static files served via CDN. Cloudflare R2 or GitHub Pages work. Cost is negligible.
 
-#### Yanking
+2. **Package storage.** Larger static files (the `.axepkg` archives). Same infrastructure as the index, possibly a separate bucket for operational clarity.
 
-Yanking marks a version as "do not install by default" but keeps it downloadable for reproducibility:
+3. **Publish API.** A small HTTP endpoint that verifies OIDC tokens, validates packages, and commits to the index git repository. Cloudflare Workers can handle this within their free tier.
 
-```bash
-$ axepkg yank @myorg/broken@1.0.0 --reason "Security vulnerability CVE-2025-1234"
-```
+The source of truth is a git repository containing the index files. Publishing means committing a new line to a package's index file and pushing the new archive to storage. A GitHub Action rebuilds any derived artifacts and deploys to the CDN.
 
-```json
-{"name":"broken","vers":"1.0.0",...,"yanked":true,"yank_reason":"Security vulnerability CVE-2025-1234"}
-```
+## Scope Ownership
 
-Clients show warnings but still allow explicit install of yanked versions.
+How does `@myorg` prove they control `myorg`?
 
-#### Auditing
+The simplest answer: GitHub organization membership. If you can generate an OIDC token from a repository in the `myorg` organization, you can publish to `@myorg/*`. This piggybacks on GitHub's existing access control.
 
-Every change to the registry is a git commit:
+For organizations not on GitHub, DNS verification works: place a TXT record at `_axepkg.myorg.com` containing a verification code. This is how npm handles it.
+
+## User Interaction
+
+**Installing a package:**
 
 ```
-commit abc123
-Author: trusted-publisher-bot
-Date:   2025-12-27
-
-    Publish @octocat/hello@1.0.0
-
-    Publisher: github:octocat/hello-pkg@refs/heads/main
-    Workflow: .github/workflows/publish.yml
-    Signature: sigstore:rekor.sigstore.dev/entry/abc123
+$ pkg install @axeberg/json
+Resolving dependencies...
+  @axeberg/json@1.2.0
+  @axeberg/core@2.0.0 (already installed)
+Downloading @axeberg/json@1.2.0...
+Verifying signature... ok (signed by github:axeberg)
+Installing...
+Done.
 ```
 
-### Client Implementation
+**Publishing a package:**
 
-Update `src/kernel/pkg/registry.rs`:
+Authors configure trusted publishing once (via a web UI or CLI that updates the trust database), then every release is automatic: tag, push, GitHub Actions handles the rest.
 
-```rust
-pub struct PackageRegistry {
-    index_url: String,      // https://index.pkg.axeberg.dev
-    download_url: String,   // https://dl.pkg.axeberg.dev
-    api_url: String,        // https://pkg.axeberg.dev
-    cache: IndexCache,
-    http_client: HttpClient,
-}
-
-impl PackageRegistry {
-    /// Resolve dependencies using sparse index
-    pub async fn resolve(&self, root: &PackageId) -> PkgResult<Vec<ResolvedPackage>> {
-        let mut to_fetch = vec![root.clone()];
-        let mut resolved = HashMap::new();
-
-        while let Some(pkg) = to_fetch.pop() {
-            if resolved.contains_key(&pkg) {
-                continue;
-            }
-
-            // Fetch index entry (HTTP/2 parallel)
-            let entries = self.fetch_index_entry(&pkg.scope, &pkg.name).await?;
-
-            // Find matching version
-            let entry = self.select_version(&entries, &pkg.version_req)?;
-
-            // Queue dependencies
-            for dep in &entry.deps {
-                to_fetch.push(PackageId::from_dep(dep));
-            }
-
-            resolved.insert(pkg, entry);
-        }
-
-        Ok(self.topological_sort(resolved)?)
-    }
-
-    /// Download and verify package
-    pub async fn download(&self, pkg: &ResolvedPackage) -> PkgResult<Vec<u8>> {
-        let url = format!(
-            "{}/{}/{}/{}.axepkg",
-            self.download_url, pkg.scope, pkg.name, pkg.version
-        );
-
-        let bytes = self.http_client.get(&url).send().await?.bytes()?;
-
-        // Verify checksum
-        let checksum = sha256(&bytes);
-        if checksum != pkg.cksum {
-            return Err(PkgError::ChecksumMismatch);
-        }
-
-        // Verify signature
-        self.verify_signature(&bytes, pkg).await?;
-
-        Ok(bytes)
-    }
-}
-```
-
-### Hosting Architecture
+**Searching:**
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    pkg.axeberg.dev                          │
-├─────────────────────────────────────────────────────────────┤
-│  Cloudflare (DNS + CDN + WAF)                               │
-│  ├── index.pkg.axeberg.dev → R2 bucket (index files)        │
-│  ├── dl.pkg.axeberg.dev → R2 bucket (packages)              │
-│  └── pkg.axeberg.dev → Workers (API for publish/search)     │
-└─────────────────────────────────────────────────────────────┘
-                           │
-                           v
-┌─────────────────────────────────────────────────────────────┐
-│  GitHub                                                      │
-│  ├── axeberg/registry (index git repo, source of truth)     │
-│  ├── axeberg/registry-api (Workers source)                  │
-│  └── GitHub Actions (index rebuild on push)                 │
-└─────────────────────────────────────────────────────────────┘
+$ pkg search json
+@axeberg/json    1.2.0    JSON parsing and serialization
+@user/json-ld    0.3.0    JSON-LD processing
 ```
 
-**Cost Estimate** (based on [Cloudflare R2 pricing](https://www.cloudflare.com/products/r2/)):
-- Storage: $0.015/GB/month
-- Operations: Free for reads from Workers
-- Egress: Free (Cloudflare's key advantage)
-- Workers: Free tier covers most use cases
+Search happens client-side against a small metadata file. For a registry with hundreds of packages, this file is under 100KB. Client-side fuzzy matching is fast enough.
 
-### Search
+## Security Considerations
 
-Since index files are per-package, we maintain a separate search index:
+**What untrusted input enters the system?**
 
-```
-search/
-├── all.json           # All packages (< 1MB typically)
-├── popular.json       # Top 100 by downloads
-└── recent.json        # Last 50 published
-```
+Package archives submitted for publishing. These are WASM modules and metadata. The registry validates checksums and manifest structure but does not execute the WASM.
 
-Client-side search with fuzzy matching:
+**What privileges does publishing require?**
 
-```rust
-pub async fn search(&self, query: &str) -> PkgResult<Vec<SearchResult>> {
-    let index = self.fetch_search_index().await?;
+An OIDC token proving the request originates from a trusted repository/workflow combination. No persistent credentials.
 
-    let mut results: Vec<_> = index.packages
-        .iter()
-        .filter_map(|pkg| {
-            let score = fuzzy_score(query, &pkg.name, &pkg.description);
-            if score > 0.3 {
-                Some((pkg.clone(), score))
-            } else {
-                None
-            }
-        })
-        .collect();
+**How could an attacker escalate privileges?**
 
-    results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-    Ok(results.into_iter().map(|(pkg, _)| pkg).take(20).collect())
-}
-```
+If an attacker compromises a GitHub repository, they can publish malicious versions of packages owned by that repository. Sigstore signatures create an audit trail, and yanking allows rapid response, but the damage window exists. This is the same threat model as every other package registry.
 
-## Alternatives Considered
+**What about the registry infrastructure itself?**
 
-### Full crates.io Clone
-
-**Pros**: Battle-tested, feature-complete
-**Cons**: PostgreSQL + Heroku + significant ops burden
-**Decision**: Too complex for our scale; static hosting is sufficient
-
-### Git-Based Index (Original Cargo)
-
-**Pros**: Atomic updates, familiar
-**Cons**: 215MB+ index, requires git in browser
-**Decision**: Sparse HTTP is strictly better for our use case
-
-### npm-Style Dynamic API
-
-**Pros**: Real-time, powerful queries
-**Cons**: Requires always-on server, higher latency
-**Decision**: Static + client-side search is sufficient
+The publish API runs on Cloudflare Workers with no persistent state. The index is a git repository. Compromise of either requires compromising Cloudflare or GitHub, at which point the attacker has bigger targets than our package registry.
 
 ## Open Questions
 
-1. **Scope Claim Process**: How does `@myorg` prove they own `myorg`?
-   - Option A: GitHub org membership (automated)
-   - Option B: DNS TXT record (like npm)
-   - Option C: Manual review (doesn't scale)
-   - **Recommendation**: Start with GitHub org, add DNS later
+**Should we allow unscoped packages?**
 
-2. **Private Registries**: Should we support self-hosted registries?
-   - Config similar to Cargo's `[registries]` in `.cargo/config.toml`
-   - **Recommendation**: Yes, essential for enterprise adoption
+Scopes add friction. Typing `@axeberg/hello` is more annoying than `hello`. But unscoped packages invite namespace conflicts and dependency confusion. The current proposal reserves a small set of unscoped names (`core`, `std`) for official use and requires scopes for everything else.
 
-3. **Mirroring**: How do we handle regional mirrors?
-   - Cloudflare's global network may be sufficient initially
-   - **Recommendation**: Design for it, implement if needed
+**How do we handle abandoned packages?**
 
-## Implementation Plan
+If `@user/foo` is abandoned and `user` deletes their GitHub account, the package becomes unpublishable. Do we allow transferring ownership? Do we allow re-claiming abandoned scopes? This needs policy, not just technology.
 
-### Phase 1: Foundation (Weeks 1-2)
+**Should we support private registries?**
 
-- [ ] Create `axeberg/registry` repo with index structure
-- [ ] Implement index builder script (Rust CLI)
-- [ ] Deploy to Cloudflare R2 + Pages
-- [ ] Update `pkg` client for sparse protocol
-- [ ] Publish `@axeberg/core`, `@axeberg/hello` as seed packages
-
-### Phase 2: Authentication (Weeks 3-4)
-
-- [ ] Implement OIDC verification endpoint (Cloudflare Workers)
-- [ ] Create `axeberg/publish-action` GitHub Action
-- [ ] Add trust configuration management
-- [ ] Integrate Sigstore signing
-
-### Phase 3: Protection (Weeks 5-6)
-
-- [ ] Implement typosquatting checks
-- [ ] Add package name validation rules
-- [ ] Create moderation tooling for yanking
-- [ ] Set up security advisory system
-
-### Phase 4: Polish (Weeks 7-8)
-
-- [ ] Build web UI for browsing packages
-- [ ] Add download statistics
-- [ ] Implement private registry support
-- [ ] Documentation and tutorials
+Enterprises want to host internal packages without publishing to the public registry. The protocol supports this (just point `config.json` at different URLs), but the tooling and documentation would need work.
 
 ## References
 
-### Registry Design
-- [Cargo Registry Index](https://doc.rust-lang.org/cargo/reference/registry-index.html)
-- [Cargo Sparse Index RFC 2789](https://rust-lang.github.io/rfcs/2789-sparse-index.html)
-- [crates.io Architecture](https://github.com/rust-lang/crates.io/blob/main/docs/ARCHITECTURE.md)
-- [Alexandrie Registry](https://github.com/Hirevo/alexandrie)
-
-### Security
-- [crates.io Trusted Publishing RFC 3691](https://rust-lang.github.io/rfcs/3691-trusted-publishing-cratesio.html)
-- [PyPI Trusted Publishers](https://docs.pypi.org/trusted-publishers/)
-- [npm Threats and Mitigations](https://docs.npmjs.com/threats-and-mitigations/)
-- [Survey on npm/PyPI Threats](https://arxiv.org/abs/2108.09576)
-- [Sigstore](https://www.sigstore.dev/)
-
-### Caching
-- [CDN Cache Invalidation Strategies](https://systemdesignschool.io/fundamentals/cdn-cache-invalidation)
-- [Cloudflare Cache Best Practices](https://developers.cloudflare.com/cache/)
-
-### Supply Chain Security
-- [OSSF Malicious Packages Database](https://github.com/ossf/malicious-packages)
-- [Snyk Malicious Package Report](https://snyk.io/blog/malicious-packages-open-source-ecosystems/)
-- [Dependency Confusion Attacks](https://www.aquasec.com/cloud-native-academy/supply-chain-security/dependency-confusion/)
-
----
-
-*This RFD is in the ideation state. Feedback welcome via GitHub issues.*
+- Cargo Sparse Index: https://rust-lang.github.io/rfcs/2789-sparse-index.html
+- Cargo Trusted Publishing: https://rust-lang.github.io/rfcs/3691-trusted-publishing-cratesio.html
+- npm Threats and Mitigations: https://docs.npmjs.com/threats-and-mitigations/
+- Sigstore: https://www.sigstore.dev/
+- Survey on npm/PyPI Threats: https://arxiv.org/abs/2108.09576
