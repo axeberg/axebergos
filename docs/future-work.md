@@ -4,11 +4,16 @@ Consolidated list of planned features and enhancements for axeberg.
 
 ## VFS
 
-| Feature | Description | Complexity |
-|---------|-------------|------------|
-| Layered Filesystem | Union mount for read-only base + writable overlay | Medium |
+| Feature | Description | Complexity | Status |
+|---------|-------------|------------|--------|
+| Layered Filesystem | Union mount for read-only base + writable overlay | Medium | ✅ Done |
 
 *Source: [docs/userspace/vfs.md](userspace/vfs.md)*
+
+> **Layered Filesystem Implemented**: Union mount with read-only base layer and
+> writable overlay. Features copy-on-write semantics, whiteout markers for deletions,
+> merged directory listings, and opaque directory support.
+> See `src/vfs/layered.rs` for LayeredFs implementation.
 
 ## Executor
 
@@ -105,10 +110,11 @@ The core compositor is now implemented. These enhancements are planned:
 3. ~~OPFS persistence for memory~~ ✅ Done
 
 ### Medium Impact
-1. Timeouts for executor
-2. Memory-mapped files
-3. Port commands to WASM
-4. Waker-based async for IPC
+1. ~~Layered filesystem~~ ✅ Done
+2. Timeouts for executor
+3. Memory-mapped files
+4. Port commands to WASM
+5. Waker-based async for IPC
 
 ### Major Features
 1. ~~Work stealing executor~~ ✅ Done
