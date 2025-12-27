@@ -63,7 +63,12 @@ impl LayoutNode {
     }
 
     /// Create a split node
-    pub fn split(direction: SplitDirection, ratio: f32, first: LayoutNode, second: LayoutNode) -> Self {
+    pub fn split(
+        direction: SplitDirection,
+        ratio: f32,
+        first: LayoutNode,
+        second: LayoutNode,
+    ) -> Self {
         Self::Split {
             direction,
             ratio,

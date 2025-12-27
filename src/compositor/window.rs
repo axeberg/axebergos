@@ -139,7 +139,12 @@ impl Window {
     /// Get the title bar area
     pub fn titlebar_rect(&self) -> Rect {
         if self.flags.decorated {
-            Rect::new(self.rect.x, self.rect.y, self.rect.width, Self::TITLEBAR_HEIGHT)
+            Rect::new(
+                self.rect.x,
+                self.rect.y,
+                self.rect.width,
+                Self::TITLEBAR_HEIGHT,
+            )
         } else {
             Rect::new(0.0, 0.0, 0.0, 0.0)
         }

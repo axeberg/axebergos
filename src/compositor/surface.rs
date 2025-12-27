@@ -12,8 +12,8 @@ use js_sys::{Array, Float32Array, Object, Reflect, Uint16Array};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
-    GpuAdapter, GpuBindGroup, GpuBuffer, GpuCanvasContext, GpuDevice,
-    GpuQueue, GpuRenderPipeline, GpuTextureFormat, HtmlCanvasElement,
+    GpuAdapter, GpuBindGroup, GpuBuffer, GpuCanvasContext, GpuDevice, GpuQueue, GpuRenderPipeline,
+    GpuTextureFormat, HtmlCanvasElement,
 };
 
 /// Maximum number of rectangles we can render in a single frame
@@ -152,7 +152,8 @@ impl Surface {
     fn update_uniforms(&self) {
         let uniforms = [self.width as f32, self.height as f32, 0.0, 0.0];
         let data = Float32Array::from(uniforms.as_slice());
-        self.queue.write_buffer_with_buffer_source(&self.uniform_buffer, 0, &data);
+        self.queue
+            .write_buffer_with_buffer_source(&self.uniform_buffer, 0, &data);
     }
 
     /// Clear pending rectangles
@@ -179,10 +180,7 @@ impl Surface {
         let bw = border_width;
 
         // Top border
-        self.draw_rect(
-            Rect::new(rect.x, rect.y, rect.width, bw),
-            border_color,
-        );
+        self.draw_rect(Rect::new(rect.x, rect.y, rect.width, bw), border_color);
         // Bottom border
         self.draw_rect(
             Rect::new(rect.x, rect.y + rect.height - bw, rect.width, bw),
@@ -195,7 +193,12 @@ impl Surface {
         );
         // Right border
         self.draw_rect(
-            Rect::new(rect.x + rect.width - bw, rect.y + bw, bw, rect.height - 2.0 * bw),
+            Rect::new(
+                rect.x + rect.width - bw,
+                rect.y + bw,
+                bw,
+                rect.height - 2.0 * bw,
+            ),
             border_color,
         );
 
@@ -219,7 +222,8 @@ impl Surface {
         let vertex_data = self.build_vertex_data();
         if !vertex_data.is_empty() {
             let data = Float32Array::from(vertex_data.as_slice());
-            self.queue.write_buffer_with_buffer_source(&self.vertex_buffer, 0, &data);
+            self.queue
+                .write_buffer_with_buffer_source(&self.vertex_buffer, 0, &data);
         }
 
         // Get current texture
@@ -378,7 +382,12 @@ fn create_render_pipeline(
     let vertex_buffer_layout = Object::new();
     Reflect::set(&vertex_buffer_layout, &"arrayStride".into(), &24.into()).unwrap(); // 6 floats * 4 bytes
     Reflect::set(&vertex_buffer_layout, &"stepMode".into(), &"vertex".into()).unwrap();
-    Reflect::set(&vertex_buffer_layout, &"attributes".into(), &vertex_attributes).unwrap();
+    Reflect::set(
+        &vertex_buffer_layout,
+        &"attributes".into(),
+        &vertex_attributes,
+    )
+    .unwrap();
 
     let vertex_buffers = Array::of1(&vertex_buffer_layout);
 
@@ -390,7 +399,12 @@ fn create_render_pipeline(
     // Fragment state
     let blend_component = Object::new();
     Reflect::set(&blend_component, &"srcFactor".into(), &"src-alpha".into()).unwrap();
-    Reflect::set(&blend_component, &"dstFactor".into(), &"one-minus-src-alpha".into()).unwrap();
+    Reflect::set(
+        &blend_component,
+        &"dstFactor".into(),
+        &"one-minus-src-alpha".into(),
+    )
+    .unwrap();
     Reflect::set(&blend_component, &"operation".into(), &"add".into()).unwrap();
 
     let blend = Object::new();
@@ -410,7 +424,12 @@ fn create_render_pipeline(
 
     // Primitive state
     let primitive_state = Object::new();
-    Reflect::set(&primitive_state, &"topology".into(), &"triangle-list".into()).unwrap();
+    Reflect::set(
+        &primitive_state,
+        &"topology".into(),
+        &"triangle-list".into(),
+    )
+    .unwrap();
 
     // Pipeline descriptor
     let pipeline_desc = Object::new();
@@ -460,7 +479,9 @@ fn create_index_buffer(device: &GpuDevice) -> Result<GpuBuffer, String> {
 
     // Upload index data
     let data = Uint16Array::from(indices.as_slice());
-    device.queue().write_buffer_with_buffer_source(&buffer, 0, &data);
+    device
+        .queue()
+        .write_buffer_with_buffer_source(&buffer, 0, &data);
 
     Ok(buffer)
 }
