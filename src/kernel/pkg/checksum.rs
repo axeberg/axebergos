@@ -94,7 +94,7 @@ const K: [u32; 64] = [
 /// Right rotate
 #[inline]
 fn rotr(x: u32, n: u32) -> u32 {
-    (x >> n) | (x << (32 - n))
+    x.rotate_right(n)
 }
 
 /// SHA-256 Ch function
