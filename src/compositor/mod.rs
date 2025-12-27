@@ -1,11 +1,11 @@
 //! Compositor - Window management and rendering
 //!
-//! The compositor manages windows and renders the GUI using Canvas2D.
+//! The compositor manages windows and renders the GUI using WebGPU.
 //! It provides:
 //! - Window creation and management
 //! - Tiling layout using Binary Space Partition (BSP)
 //! - Focus management and input routing
-//! - Canvas2D rendering
+//! - GPU-accelerated rendering via WebGPU
 //!
 //! Architecture:
 //! ```text
@@ -13,7 +13,7 @@
 //! │              Compositor                  │
 //! │  ┌─────────────┐  ┌─────────────────┐   │
 //! │  │   Layout    │  │     Surface     │   │
-//! │  │ (Tiling BSP)│  │   (Canvas2D)    │   │
+//! │  │ (Tiling BSP)│  │    (WebGPU)     │   │
 //! │  └──────┬──────┘  └────────┬────────┘   │
 //! │         │                  │            │
 //! │  ┌──────▼──────────────────▼──────┐     │
@@ -30,7 +30,7 @@ mod layout;
 mod surface;
 mod window;
 
-pub use geometry::{Point, Rect};
+pub use geometry::{Color, Point, Rect};
 pub use layout::{LayoutNode, SplitDirection, TilingLayout};
 pub use window::{Window, WindowId};
 
@@ -44,26 +44,32 @@ use std::collections::HashMap;
 /// Theme colors for the compositor
 #[derive(Debug, Clone)]
 pub struct Theme {
+    /// Background color for the desktop
+    pub background: Color,
     /// Background color for windows
-    pub window_bg: String,
+    pub window_bg: Color,
     /// Title bar background color
-    pub titlebar_bg: String,
+    pub titlebar_bg: Color,
     /// Title bar text color
-    pub titlebar_fg: String,
+    pub titlebar_fg: Color,
     /// Focused window border color
-    pub focus_border: String,
+    pub focus_border: Color,
     /// Unfocused window border color
-    pub unfocus_border: String,
+    pub unfocus_border: Color,
+    /// Border width in pixels
+    pub border_width: f64,
 }
 
 impl Default for Theme {
     fn default() -> Self {
         Self {
-            window_bg: "#1a1a2e".to_string(),
-            titlebar_bg: "#16213e".to_string(),
-            titlebar_fg: "#ffffff".to_string(),
-            focus_border: "#00ff88".to_string(),
-            unfocus_border: "#333333".to_string(),
+            background: Color::from_hex("#0f0f1a").unwrap_or(Color::BLACK),
+            window_bg: Color::from_hex("#1a1a2e").unwrap_or(Color::BLACK),
+            titlebar_bg: Color::from_hex("#16213e").unwrap_or(Color::BLACK),
+            titlebar_fg: Color::WHITE,
+            focus_border: Color::from_hex("#00ff88").unwrap_or(Color::GREEN),
+            unfocus_border: Color::from_hex("#333333").unwrap_or(Color::BLACK),
+            border_width: 2.0,
         }
     }
 }
@@ -78,7 +84,7 @@ pub struct Compositor {
     next_window_id: u64,
     /// The tiling layout
     layout: TilingLayout,
-    /// Canvas2D surface (only on wasm32)
+    /// WebGPU surface (only on wasm32)
     #[cfg(target_arch = "wasm32")]
     surface: Option<Surface>,
     /// Currently focused window index
@@ -340,6 +346,18 @@ impl Compositor {
         Ok(())
     }
 
+    /// Initialize with a specific canvas ID
+    pub async fn init_with_canvas(&mut self, canvas_id: &str) -> Result<(), String> {
+        let surface = Surface::from_canvas_id(canvas_id).await?;
+        self.surface = Some(surface);
+        Ok(())
+    }
+
+    /// Check if the compositor is initialized
+    pub fn is_initialized(&self) -> bool {
+        self.surface.is_some()
+    }
+
     /// Get the surface
     pub fn surface(&self) -> Option<&Surface> {
         self.surface.as_ref()
@@ -350,88 +368,61 @@ impl Compositor {
         self.surface.as_mut()
     }
 
-    /// Render all windows
+    /// Render all windows using WebGPU
     pub fn render(&mut self) {
         if !self.is_dirty() {
             return;
         }
 
-        if let Some(surface) = &self.surface {
-            // Clear
-            surface.clear(&self.theme.window_bg);
+        if let Some(surface) = &mut self.surface {
+            // Clear the surface
+            surface.clear();
 
             // Draw each window
             for (i, window) in self.windows.iter().enumerate() {
+                if !window.flags.visible {
+                    continue;
+                }
+
                 let is_focused = self.focused == Some(i);
-                self.draw_window(surface, window, is_focused);
+                self.queue_window_draw(surface, window, is_focused);
             }
+
+            // Submit all queued rectangles to GPU
+            surface.render(self.theme.background);
         }
 
         self.mark_clean();
     }
 
-    /// Draw a single window
-    fn draw_window(&self, surface: &Surface, window: &Window, is_focused: bool) {
-        let rect = &window.rect;
-        let ctx = surface.context();
+    /// Queue draw commands for a window
+    fn queue_window_draw(&self, surface: &mut Surface, window: &Window, is_focused: bool) {
+        let rect = window.rect;
 
-        // Window background
-        ctx.set_fill_style_str(&self.theme.window_bg);
-        ctx.fill_rect(rect.x, rect.y, rect.width, rect.height);
-
-        // Title bar (24px height)
-        ctx.set_fill_style_str(&self.theme.titlebar_bg);
-        ctx.fill_rect(rect.x, rect.y, rect.width, 24.0);
-
-        // Title text
-        ctx.set_fill_style_str(&self.theme.titlebar_fg);
-        ctx.set_font("14px monospace");
-        let _ = ctx.fill_text(&window.title, rect.x + 8.0, rect.y + 17.0);
-
-        // Border for focused window
+        // Determine border color based on focus
         let border_color = if is_focused {
-            &self.theme.focus_border
+            self.theme.focus_border
         } else {
-            &self.theme.unfocus_border
+            self.theme.unfocus_border
         };
-        ctx.set_stroke_style_str(border_color);
-        ctx.set_line_width(2.0);
-        ctx.stroke_rect(rect.x, rect.y, rect.width, rect.height);
 
-        // Draw window content
-        self.draw_window_content(surface, window);
-    }
-
-    /// Draw window content area
-    fn draw_window_content(&self, surface: &Surface, window: &Window) {
-        let content_rect = window.content_rect();
-        let ctx = surface.context();
-
-        // Clip to content area
-        ctx.save();
-        ctx.begin_path();
-        ctx.rect(
-            content_rect.x,
-            content_rect.y,
-            content_rect.width,
-            content_rect.height,
+        // Draw window with border
+        surface.draw_rect_with_border(
+            rect,
+            self.theme.window_bg,
+            border_color,
+            self.theme.border_width,
         );
-        ctx.clip();
 
-        // Draw content lines
-        ctx.set_fill_style_str(&self.theme.titlebar_fg);
-        ctx.set_font("14px monospace");
-
-        let line_height = 18.0;
-        for (i, line) in window.content.iter().enumerate() {
-            let y = content_rect.y + (i as f64 + 1.0) * line_height;
-            if y > content_rect.y + content_rect.height {
-                break;
-            }
-            let _ = ctx.fill_text(line, content_rect.x + 4.0, y);
+        // Draw title bar
+        if window.flags.decorated {
+            let titlebar = window.titlebar_rect();
+            surface.draw_rect(titlebar, self.theme.titlebar_bg);
         }
 
-        ctx.restore();
+        // Note: Text rendering requires a separate text rendering system
+        // For now, we only render the window frames. Text can be added later
+        // using a glyph atlas and texture sampling in the shader.
     }
 }
 
