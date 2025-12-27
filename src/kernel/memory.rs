@@ -984,6 +984,552 @@ pub struct SystemMemoryStats {
     pub shm_total_size: usize,
 }
 
+// ============================================================================
+// Memory-Mapped Files
+// ============================================================================
+
+/// Unique identifier for a memory-mapped file region
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MmapId(pub u64);
+
+/// Flags for memory-mapped files
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MmapFlags {
+    /// Map is shared - writes are visible to other processes
+    pub shared: bool,
+    /// Map is private (copy-on-write) - writes are private
+    pub private: bool,
+    /// Map is anonymous (not backed by a file)
+    pub anonymous: bool,
+    /// Map is fixed at the specified address (hint only in our implementation)
+    pub fixed: bool,
+}
+
+impl Default for MmapFlags {
+    fn default() -> Self {
+        Self {
+            shared: false,
+            private: true,
+            anonymous: false,
+            fixed: false,
+        }
+    }
+}
+
+impl MmapFlags {
+    /// Create flags for a shared file mapping
+    pub fn shared() -> Self {
+        Self {
+            shared: true,
+            private: false,
+            anonymous: false,
+            fixed: false,
+        }
+    }
+
+    /// Create flags for a private (COW) file mapping
+    pub fn private() -> Self {
+        Self {
+            shared: false,
+            private: true,
+            anonymous: false,
+            fixed: false,
+        }
+    }
+
+    /// Create flags for an anonymous mapping (not backed by file)
+    pub fn anonymous() -> Self {
+        Self {
+            shared: false,
+            private: true,
+            anonymous: true,
+            fixed: false,
+        }
+    }
+}
+
+/// A memory-mapped file region
+#[derive(Debug)]
+pub struct MmapRegion {
+    /// Unique identifier
+    pub id: MmapId,
+    /// The memory region containing the mapped data
+    pub region_id: RegionId,
+    /// The file path this is mapped from (None for anonymous)
+    pub file_path: Option<String>,
+    /// Offset within the file
+    pub file_offset: usize,
+    /// Size of the mapping
+    pub size: usize,
+    /// Mapping flags
+    pub flags: MmapFlags,
+    /// Protection flags
+    pub protection: Protection,
+    /// Whether the mapping has been modified (dirty)
+    dirty: bool,
+}
+
+impl MmapRegion {
+    /// Check if this mapping is dirty (modified)
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    /// Mark the mapping as dirty
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
+    /// Clear the dirty flag (after sync)
+    pub fn clear_dirty(&mut self) {
+        self.dirty = false;
+    }
+
+    /// Check if this is an anonymous mapping
+    pub fn is_anonymous(&self) -> bool {
+        self.flags.anonymous
+    }
+
+    /// Check if this is a shared mapping
+    pub fn is_shared(&self) -> bool {
+        self.flags.shared
+    }
+
+    /// Check if this is a private (COW) mapping
+    pub fn is_private(&self) -> bool {
+        self.flags.private
+    }
+}
+
+/// Memory-mapped file manager
+///
+/// Manages mappings between files and memory regions. Supports:
+/// - Private (COW) mappings: changes are not written back to the file
+/// - Shared mappings: changes can be synced back to the file
+/// - Anonymous mappings: memory not backed by any file
+#[derive(Debug, Default)]
+pub struct MmapManager {
+    /// Next mmap ID
+    next_id: u64,
+    /// Active mappings
+    mappings: HashMap<MmapId, MmapRegion>,
+    /// Mapping from region ID to mmap ID for quick lookup
+    region_to_mmap: HashMap<RegionId, MmapId>,
+}
+
+impl MmapManager {
+    pub fn new() -> Self {
+        Self {
+            next_id: 1,
+            mappings: HashMap::new(),
+            region_to_mmap: HashMap::new(),
+        }
+    }
+
+    /// Create a memory mapping from file data
+    ///
+    /// The caller is responsible for reading the file data and passing it here.
+    /// This allows the mmap manager to be decoupled from the VFS.
+    pub fn mmap(
+        &mut self,
+        region_id: RegionId,
+        file_path: Option<String>,
+        file_offset: usize,
+        size: usize,
+        protection: Protection,
+        flags: MmapFlags,
+    ) -> MmapId {
+        let id = MmapId(self.next_id);
+        self.next_id += 1;
+
+        let region = MmapRegion {
+            id,
+            region_id,
+            file_path,
+            file_offset,
+            size,
+            flags,
+            protection,
+            dirty: false,
+        };
+
+        self.mappings.insert(id, region);
+        self.region_to_mmap.insert(region_id, id);
+
+        id
+    }
+
+    /// Remove a memory mapping
+    pub fn munmap(&mut self, id: MmapId) -> Option<MmapRegion> {
+        if let Some(region) = self.mappings.remove(&id) {
+            self.region_to_mmap.remove(&region.region_id);
+            Some(region)
+        } else {
+            None
+        }
+    }
+
+    /// Get a mapping by ID
+    pub fn get(&self, id: MmapId) -> Option<&MmapRegion> {
+        self.mappings.get(&id)
+    }
+
+    /// Get a mutable mapping by ID
+    pub fn get_mut(&mut self, id: MmapId) -> Option<&mut MmapRegion> {
+        self.mappings.get_mut(&id)
+    }
+
+    /// Get a mapping by its memory region ID
+    pub fn get_by_region(&self, region_id: RegionId) -> Option<&MmapRegion> {
+        self.region_to_mmap
+            .get(&region_id)
+            .and_then(|id| self.mappings.get(id))
+    }
+
+    /// Get a mutable mapping by its memory region ID
+    pub fn get_by_region_mut(&mut self, region_id: RegionId) -> Option<&mut MmapRegion> {
+        if let Some(&id) = self.region_to_mmap.get(&region_id) {
+            self.mappings.get_mut(&id)
+        } else {
+            None
+        }
+    }
+
+    /// Mark a mapping as dirty (modified)
+    pub fn mark_dirty(&mut self, id: MmapId) -> bool {
+        if let Some(region) = self.mappings.get_mut(&id) {
+            region.mark_dirty();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Get all dirty shared mappings (for msync)
+    pub fn dirty_shared_mappings(&self) -> Vec<&MmapRegion> {
+        self.mappings
+            .values()
+            .filter(|r| r.is_dirty() && r.is_shared())
+            .collect()
+    }
+
+    /// List all mappings
+    pub fn list(&self) -> Vec<MmapInfo> {
+        self.mappings
+            .values()
+            .map(|r| MmapInfo {
+                id: r.id,
+                region_id: r.region_id,
+                file_path: r.file_path.clone(),
+                file_offset: r.file_offset,
+                size: r.size,
+                is_shared: r.is_shared(),
+                is_anonymous: r.is_anonymous(),
+                is_dirty: r.is_dirty(),
+            })
+            .collect()
+    }
+
+    /// Get the count of active mappings
+    pub fn count(&self) -> usize {
+        self.mappings.len()
+    }
+}
+
+/// Information about a memory mapping
+#[derive(Debug, Clone)]
+pub struct MmapInfo {
+    pub id: MmapId,
+    pub region_id: RegionId,
+    pub file_path: Option<String>,
+    pub file_offset: usize,
+    pub size: usize,
+    pub is_shared: bool,
+    pub is_anonymous: bool,
+    pub is_dirty: bool,
+}
+
+// ============================================================================
+// Memory Pools (Arena Allocation)
+// ============================================================================
+
+/// Unique identifier for a memory pool
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PoolId(pub u64);
+
+/// A memory pool for arena-style allocation
+///
+/// Memory pools provide fast allocation for many small objects of the same size.
+/// Objects are allocated from a contiguous chunk and freed all at once.
+#[derive(Debug)]
+pub struct MemoryPool {
+    /// Pool identifier
+    pub id: PoolId,
+    /// Size of each object in the pool
+    pub object_size: usize,
+    /// Maximum number of objects
+    pub capacity: usize,
+    /// The backing memory
+    data: Vec<u8>,
+    /// Bitmap of allocated slots (true = allocated)
+    allocated: Vec<bool>,
+    /// Number of allocated objects
+    alloc_count: usize,
+    /// Free list for O(1) allocation
+    free_list: Vec<usize>,
+}
+
+impl MemoryPool {
+    /// Create a new memory pool
+    ///
+    /// # Arguments
+    /// * `id` - Unique identifier for this pool
+    /// * `object_size` - Size of each object in bytes
+    /// * `capacity` - Maximum number of objects
+    pub fn new(id: PoolId, object_size: usize, capacity: usize) -> Self {
+        assert!(object_size > 0, "object_size must be > 0");
+        assert!(capacity > 0, "capacity must be > 0");
+
+        let total_size = object_size * capacity;
+        let data = vec![0u8; total_size];
+        let allocated = vec![false; capacity];
+        let free_list = (0..capacity).rev().collect(); // Stack of free indices
+
+        Self {
+            id,
+            object_size,
+            capacity,
+            data,
+            allocated,
+            alloc_count: 0,
+            free_list,
+        }
+    }
+
+    /// Allocate an object from the pool
+    ///
+    /// Returns the offset within the pool where the object is allocated,
+    /// or None if the pool is full.
+    pub fn alloc(&mut self) -> Option<usize> {
+        if let Some(slot) = self.free_list.pop() {
+            self.allocated[slot] = true;
+            self.alloc_count += 1;
+            Some(slot * self.object_size)
+        } else {
+            None // Pool is full
+        }
+    }
+
+    /// Free an object at the given offset
+    ///
+    /// Returns true if the object was freed, false if the offset was invalid.
+    pub fn free(&mut self, offset: usize) -> bool {
+        if !offset.is_multiple_of(self.object_size) {
+            return false; // Not aligned to object boundary
+        }
+
+        let slot = offset / self.object_size;
+        if slot >= self.capacity || !self.allocated[slot] {
+            return false; // Out of bounds or not allocated
+        }
+
+        // Clear the memory (optional, but good for security/debugging)
+        let start = slot * self.object_size;
+        let end = start + self.object_size;
+        self.data[start..end].fill(0);
+
+        self.allocated[slot] = false;
+        self.alloc_count -= 1;
+        self.free_list.push(slot);
+
+        true
+    }
+
+    /// Read from an allocated object
+    pub fn read(&self, offset: usize, buf: &mut [u8]) -> Option<usize> {
+        let slot = offset / self.object_size;
+        if slot >= self.capacity || !self.allocated[slot] {
+            return None;
+        }
+
+        let start = offset;
+        let slot_end = (slot + 1) * self.object_size;
+        let available = slot_end - start;
+        let to_read = buf.len().min(available);
+
+        buf[..to_read].copy_from_slice(&self.data[start..start + to_read]);
+        Some(to_read)
+    }
+
+    /// Write to an allocated object
+    pub fn write(&mut self, offset: usize, buf: &[u8]) -> Option<usize> {
+        let slot = offset / self.object_size;
+        if slot >= self.capacity || !self.allocated[slot] {
+            return None;
+        }
+
+        let start = offset;
+        let slot_end = (slot + 1) * self.object_size;
+        let available = slot_end - start;
+        let to_write = buf.len().min(available);
+
+        self.data[start..start + to_write].copy_from_slice(&buf[..to_write]);
+        Some(to_write)
+    }
+
+    /// Get the number of allocated objects
+    pub fn alloc_count(&self) -> usize {
+        self.alloc_count
+    }
+
+    /// Get the number of free slots
+    pub fn free_count(&self) -> usize {
+        self.capacity - self.alloc_count
+    }
+
+    /// Check if the pool is full
+    pub fn is_full(&self) -> bool {
+        self.alloc_count == self.capacity
+    }
+
+    /// Check if the pool is empty
+    pub fn is_empty(&self) -> bool {
+        self.alloc_count == 0
+    }
+
+    /// Get the total memory used by this pool
+    pub fn total_size(&self) -> usize {
+        self.data.len()
+    }
+
+    /// Get the memory in use (allocated objects)
+    pub fn used_size(&self) -> usize {
+        self.alloc_count * self.object_size
+    }
+
+    /// Reset the pool, freeing all allocations
+    pub fn reset(&mut self) {
+        self.data.fill(0);
+        self.allocated.fill(false);
+        self.alloc_count = 0;
+        self.free_list = (0..self.capacity).rev().collect();
+    }
+}
+
+/// Memory pool manager
+///
+/// Manages multiple memory pools for different object sizes.
+#[derive(Debug, Default)]
+pub struct PoolManager {
+    /// Next pool ID
+    next_id: u64,
+    /// Active pools
+    pools: HashMap<PoolId, MemoryPool>,
+}
+
+impl PoolManager {
+    pub fn new() -> Self {
+        Self {
+            next_id: 1,
+            pools: HashMap::new(),
+        }
+    }
+
+    /// Create a new memory pool
+    pub fn create_pool(&mut self, object_size: usize, capacity: usize) -> PoolId {
+        let id = PoolId(self.next_id);
+        self.next_id += 1;
+
+        let pool = MemoryPool::new(id, object_size, capacity);
+        self.pools.insert(id, pool);
+
+        id
+    }
+
+    /// Delete a memory pool
+    pub fn delete_pool(&mut self, id: PoolId) -> Option<MemoryPool> {
+        self.pools.remove(&id)
+    }
+
+    /// Get a pool by ID
+    pub fn get(&self, id: PoolId) -> Option<&MemoryPool> {
+        self.pools.get(&id)
+    }
+
+    /// Get a mutable pool by ID
+    pub fn get_mut(&mut self, id: PoolId) -> Option<&mut MemoryPool> {
+        self.pools.get_mut(&id)
+    }
+
+    /// Allocate from a pool
+    pub fn alloc(&mut self, id: PoolId) -> Option<usize> {
+        self.pools.get_mut(&id).and_then(|p| p.alloc())
+    }
+
+    /// Free in a pool
+    pub fn free(&mut self, id: PoolId, offset: usize) -> bool {
+        self.pools
+            .get_mut(&id)
+            .map(|p| p.free(offset))
+            .unwrap_or(false)
+    }
+
+    /// Get statistics for all pools
+    pub fn stats(&self) -> PoolStats {
+        let mut total_pools = 0;
+        let mut total_capacity = 0;
+        let mut total_allocated = 0;
+        let mut total_memory = 0;
+
+        for pool in self.pools.values() {
+            total_pools += 1;
+            total_capacity += pool.capacity;
+            total_allocated += pool.alloc_count();
+            total_memory += pool.total_size();
+        }
+
+        PoolStats {
+            total_pools,
+            total_capacity,
+            total_allocated,
+            total_memory,
+        }
+    }
+
+    /// List all pools
+    pub fn list(&self) -> Vec<PoolInfo> {
+        self.pools
+            .values()
+            .map(|p| PoolInfo {
+                id: p.id,
+                object_size: p.object_size,
+                capacity: p.capacity,
+                alloc_count: p.alloc_count(),
+                total_size: p.total_size(),
+            })
+            .collect()
+    }
+}
+
+/// Statistics for all memory pools
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PoolStats {
+    pub total_pools: usize,
+    pub total_capacity: usize,
+    pub total_allocated: usize,
+    pub total_memory: usize,
+}
+
+/// Information about a single pool
+#[derive(Debug, Clone)]
+pub struct PoolInfo {
+    pub id: PoolId,
+    pub object_size: usize,
+    pub capacity: usize,
+    pub alloc_count: usize,
+    pub total_size: usize,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1571,5 +2117,347 @@ mod tests {
         assert_eq!(stats.cow_faults, 1);
         assert_eq!(stats.private_pages, 1);
         assert_eq!(stats.shared_pages, 2);
+    }
+
+    // ========================================================================
+    // Memory-Mapped File Tests
+    // ========================================================================
+
+    #[test]
+    fn test_mmap_flags() {
+        let shared = MmapFlags::shared();
+        assert!(shared.shared);
+        assert!(!shared.private);
+        assert!(!shared.anonymous);
+
+        let private = MmapFlags::private();
+        assert!(!private.shared);
+        assert!(private.private);
+        assert!(!private.anonymous);
+
+        let anon = MmapFlags::anonymous();
+        assert!(!anon.shared);
+        assert!(anon.private);
+        assert!(anon.anonymous);
+    }
+
+    #[test]
+    fn test_mmap_manager_basic() {
+        let mut mgr = MmapManager::new();
+        let region_id = RegionId(1);
+
+        let mmap_id = mgr.mmap(
+            region_id,
+            Some("/path/to/file".to_string()),
+            0,
+            4096,
+            Protection::READ_WRITE,
+            MmapFlags::private(),
+        );
+
+        assert_eq!(mgr.count(), 1);
+
+        let mapping = mgr.get(mmap_id).unwrap();
+        assert_eq!(mapping.region_id, region_id);
+        assert_eq!(mapping.file_path, Some("/path/to/file".to_string()));
+        assert_eq!(mapping.size, 4096);
+        assert!(!mapping.is_dirty());
+        assert!(mapping.is_private());
+        assert!(!mapping.is_shared());
+        assert!(!mapping.is_anonymous());
+    }
+
+    #[test]
+    fn test_mmap_manager_anonymous() {
+        let mut mgr = MmapManager::new();
+        let region_id = RegionId(1);
+
+        let mmap_id = mgr.mmap(
+            region_id,
+            None,
+            0,
+            4096,
+            Protection::READ_WRITE,
+            MmapFlags::anonymous(),
+        );
+
+        let mapping = mgr.get(mmap_id).unwrap();
+        assert!(mapping.is_anonymous());
+        assert!(mapping.file_path.is_none());
+    }
+
+    #[test]
+    fn test_mmap_dirty_tracking() {
+        let mut mgr = MmapManager::new();
+        let region_id = RegionId(1);
+
+        let mmap_id = mgr.mmap(
+            region_id,
+            Some("/file".to_string()),
+            0,
+            4096,
+            Protection::READ_WRITE,
+            MmapFlags::shared(),
+        );
+
+        // Initially not dirty
+        assert!(!mgr.get(mmap_id).unwrap().is_dirty());
+        assert!(mgr.dirty_shared_mappings().is_empty());
+
+        // Mark dirty
+        mgr.mark_dirty(mmap_id);
+        assert!(mgr.get(mmap_id).unwrap().is_dirty());
+        assert_eq!(mgr.dirty_shared_mappings().len(), 1);
+
+        // Clear dirty
+        mgr.get_mut(mmap_id).unwrap().clear_dirty();
+        assert!(!mgr.get(mmap_id).unwrap().is_dirty());
+        assert!(mgr.dirty_shared_mappings().is_empty());
+    }
+
+    #[test]
+    fn test_mmap_munmap() {
+        let mut mgr = MmapManager::new();
+        let region_id = RegionId(1);
+
+        let mmap_id = mgr.mmap(
+            region_id,
+            Some("/file".to_string()),
+            0,
+            4096,
+            Protection::READ_WRITE,
+            MmapFlags::private(),
+        );
+
+        assert_eq!(mgr.count(), 1);
+
+        let removed = mgr.munmap(mmap_id);
+        assert!(removed.is_some());
+        assert_eq!(mgr.count(), 0);
+        assert!(mgr.get(mmap_id).is_none());
+    }
+
+    #[test]
+    fn test_mmap_get_by_region() {
+        let mut mgr = MmapManager::new();
+        let region_id = RegionId(42);
+
+        let mmap_id = mgr.mmap(
+            region_id,
+            Some("/file".to_string()),
+            0,
+            4096,
+            Protection::READ,
+            MmapFlags::shared(),
+        );
+
+        let mapping = mgr.get_by_region(region_id).unwrap();
+        assert_eq!(mapping.id, mmap_id);
+
+        assert!(mgr.get_by_region(RegionId(999)).is_none());
+    }
+
+    #[test]
+    fn test_mmap_list() {
+        let mut mgr = MmapManager::new();
+
+        mgr.mmap(
+            RegionId(1),
+            Some("/file1".to_string()),
+            0,
+            4096,
+            Protection::READ,
+            MmapFlags::shared(),
+        );
+        mgr.mmap(
+            RegionId(2),
+            Some("/file2".to_string()),
+            0,
+            8192,
+            Protection::READ_WRITE,
+            MmapFlags::private(),
+        );
+
+        let list = mgr.list();
+        assert_eq!(list.len(), 2);
+    }
+
+    // ========================================================================
+    // Memory Pool Tests
+    // ========================================================================
+
+    #[test]
+    fn test_memory_pool_basic() {
+        let pool = MemoryPool::new(PoolId(1), 64, 10);
+
+        assert_eq!(pool.object_size, 64);
+        assert_eq!(pool.capacity, 10);
+        assert_eq!(pool.alloc_count(), 0);
+        assert_eq!(pool.free_count(), 10);
+        assert!(pool.is_empty());
+        assert!(!pool.is_full());
+    }
+
+    #[test]
+    fn test_memory_pool_alloc_free() {
+        let mut pool = MemoryPool::new(PoolId(1), 64, 3);
+
+        // Allocate
+        let off1 = pool.alloc().unwrap();
+        let off2 = pool.alloc().unwrap();
+        let off3 = pool.alloc().unwrap();
+
+        assert_eq!(pool.alloc_count(), 3);
+        assert!(pool.is_full());
+        assert!(pool.alloc().is_none()); // Pool is full
+
+        // Free one
+        assert!(pool.free(off2));
+        assert_eq!(pool.alloc_count(), 2);
+        assert!(!pool.is_full());
+
+        // Allocate again
+        let off4 = pool.alloc().unwrap();
+        assert_eq!(off4, off2); // Reuses freed slot
+
+        // Free all
+        assert!(pool.free(off1));
+        assert!(pool.free(off3));
+        assert!(pool.free(off4));
+        assert!(pool.is_empty());
+    }
+
+    #[test]
+    fn test_memory_pool_read_write() {
+        let mut pool = MemoryPool::new(PoolId(1), 32, 2);
+
+        let off = pool.alloc().unwrap();
+
+        // Write data
+        let data = b"hello, pool!";
+        assert_eq!(pool.write(off, data), Some(12));
+
+        // Read it back
+        let mut buf = [0u8; 12];
+        assert_eq!(pool.read(off, &mut buf), Some(12));
+        assert_eq!(&buf, data);
+
+        // Can't read/write unallocated
+        let off2 = pool.object_size; // Second slot (not allocated)
+        assert!(pool.read(off2, &mut buf).is_none());
+        assert!(pool.write(off2, data).is_none());
+    }
+
+    #[test]
+    fn test_memory_pool_invalid_free() {
+        let mut pool = MemoryPool::new(PoolId(1), 64, 10);
+
+        // Free unallocated slot
+        assert!(!pool.free(0));
+
+        // Free out of bounds
+        assert!(!pool.free(1000));
+
+        // Free misaligned
+        let off = pool.alloc().unwrap();
+        assert!(!pool.free(off + 1)); // Not aligned
+
+        // Double free
+        pool.free(off);
+        assert!(!pool.free(off));
+    }
+
+    #[test]
+    fn test_memory_pool_reset() {
+        let mut pool = MemoryPool::new(PoolId(1), 64, 5);
+
+        // Allocate all
+        for _ in 0..5 {
+            pool.alloc().unwrap();
+        }
+        assert!(pool.is_full());
+
+        // Reset
+        pool.reset();
+        assert!(pool.is_empty());
+        assert_eq!(pool.free_count(), 5);
+
+        // Can allocate again
+        assert!(pool.alloc().is_some());
+    }
+
+    #[test]
+    fn test_memory_pool_sizes() {
+        let pool = MemoryPool::new(PoolId(1), 100, 10);
+
+        assert_eq!(pool.total_size(), 1000);
+        assert_eq!(pool.used_size(), 0);
+    }
+
+    #[test]
+    fn test_pool_manager_basic() {
+        let mut mgr = PoolManager::new();
+
+        let id1 = mgr.create_pool(64, 100);
+        let id2 = mgr.create_pool(128, 50);
+
+        let stats = mgr.stats();
+        assert_eq!(stats.total_pools, 2);
+        assert_eq!(stats.total_capacity, 150);
+        assert_eq!(stats.total_allocated, 0);
+        assert_eq!(stats.total_memory, 64 * 100 + 128 * 50);
+
+        // Allocate from pools
+        mgr.alloc(id1).unwrap();
+        mgr.alloc(id1).unwrap();
+        mgr.alloc(id2).unwrap();
+
+        let stats = mgr.stats();
+        assert_eq!(stats.total_allocated, 3);
+
+        // Free
+        mgr.free(id1, 0);
+        let stats = mgr.stats();
+        assert_eq!(stats.total_allocated, 2);
+    }
+
+    #[test]
+    fn test_pool_manager_delete() {
+        let mut mgr = PoolManager::new();
+
+        let id = mgr.create_pool(64, 10);
+        assert!(mgr.get(id).is_some());
+
+        let deleted = mgr.delete_pool(id);
+        assert!(deleted.is_some());
+        assert!(mgr.get(id).is_none());
+    }
+
+    #[test]
+    fn test_pool_manager_list() {
+        let mut mgr = PoolManager::new();
+
+        mgr.create_pool(32, 10);
+        mgr.create_pool(64, 20);
+        mgr.create_pool(128, 30);
+
+        let list = mgr.list();
+        assert_eq!(list.len(), 3);
+
+        // Check one of them
+        let info = list.iter().find(|p| p.object_size == 64).unwrap();
+        assert_eq!(info.capacity, 20);
+    }
+
+    #[test]
+    #[should_panic(expected = "object_size must be > 0")]
+    fn test_pool_zero_object_size() {
+        MemoryPool::new(PoolId(1), 0, 10);
+    }
+
+    #[test]
+    #[should_panic(expected = "capacity must be > 0")]
+    fn test_pool_zero_capacity() {
+        MemoryPool::new(PoolId(1), 64, 0);
     }
 }

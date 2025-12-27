@@ -5,9 +5,11 @@
 //!
 //! Design: trait-based abstraction, keeping it simple.
 
+pub mod layered;
 pub mod memory;
 pub mod persist;
 
+pub use layered::LayeredFs;
 pub use memory::{FsSnapshot, MemoryFs};
 pub use persist::Persistence;
 

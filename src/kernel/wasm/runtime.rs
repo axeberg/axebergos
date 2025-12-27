@@ -269,6 +269,136 @@ impl Runtime {
             Err(_) => Err(SyscallError::NotFound),
         }
     }
+
+    /// Mkdir syscall: mkdir(path) -> 0 or error
+    pub fn sys_mkdir(&self, path: &str) -> i32 {
+        // Resolve path relative to cwd if needed
+        let full_path = self.resolve_path(path);
+        match ksyscall::mkdir(&full_path) {
+            Ok(()) => 0,
+            Err(_) => SyscallError::Generic.code(),
+        }
+    }
+
+    /// Readdir syscall: readdir(path) -> entries or error
+    ///
+    /// Returns entries as null-terminated strings concatenated together.
+    pub fn sys_readdir(&self, path: &str) -> Result<Vec<String>, SyscallError> {
+        let full_path = self.resolve_path(path);
+        match ksyscall::readdir(&full_path) {
+            Ok(entries) => Ok(entries),
+            Err(_) => Err(SyscallError::NotFound),
+        }
+    }
+
+    /// Rmdir syscall: rmdir(path) -> 0 or error
+    pub fn sys_rmdir(&self, path: &str) -> i32 {
+        let full_path = self.resolve_path(path);
+        match ksyscall::rmdir(&full_path) {
+            Ok(()) => 0,
+            Err(_) => SyscallError::Generic.code(),
+        }
+    }
+
+    /// Unlink syscall: unlink(path) -> 0 or error
+    pub fn sys_unlink(&self, path: &str) -> i32 {
+        let full_path = self.resolve_path(path);
+        match ksyscall::unlink(&full_path) {
+            Ok(()) => 0,
+            Err(_) => SyscallError::Generic.code(),
+        }
+    }
+
+    /// Rename syscall: rename(from, to) -> 0 or error
+    pub fn sys_rename(&self, from: &str, to: &str) -> i32 {
+        let from_path = self.resolve_path(from);
+        let to_path = self.resolve_path(to);
+        match ksyscall::rename(&from_path, &to_path) {
+            Ok(()) => 0,
+            Err(_) => SyscallError::Generic.code(),
+        }
+    }
+
+    /// Seek syscall: seek(fd, offset, whence) -> position or error
+    ///
+    /// whence: 0 = SET, 1 = CUR, 2 = END
+    pub fn sys_seek(&mut self, fd_num: i32, offset: i64, whence: i32) -> i64 {
+        if !self.fd_table.is_valid(fd_num) {
+            return SyscallError::BadFd.code() as i64;
+        }
+
+        // Get current position and file size
+        let current_pos = self.fd_table.get_position(fd_num).unwrap_or(0);
+        let file_size = if let Some(path) = self.fd_table.get_path(fd_num) {
+            match ksyscall::metadata(&path) {
+                Ok(meta) => meta.size,
+                Err(_) => return SyscallError::Generic.code() as i64,
+            }
+        } else {
+            return SyscallError::BadFd.code() as i64;
+        };
+
+        // Calculate new position based on whence
+        let new_pos = match whence {
+            0 => offset,                      // SEEK_SET
+            1 => current_pos as i64 + offset, // SEEK_CUR
+            2 => file_size as i64 + offset,   // SEEK_END
+            _ => return SyscallError::InvalidArgument.code() as i64,
+        };
+
+        if new_pos < 0 {
+            return SyscallError::InvalidArgument.code() as i64;
+        }
+
+        // Update position
+        self.fd_table.set_position(fd_num, new_pos as u64);
+        new_pos
+    }
+
+    /// Dup syscall: dup(fd) -> new_fd or error
+    pub fn sys_dup(&mut self, fd_num: i32) -> i32 {
+        if !self.fd_table.is_valid(fd_num) {
+            return SyscallError::BadFd.code();
+        }
+
+        if let Some(path) = self.fd_table.get_path(fd_num) {
+            match self.fd_table.allocate(&path, OpenFlags::READ) {
+                Ok(new_fd) => new_fd,
+                Err(_) => SyscallError::Generic.code(),
+            }
+        } else {
+            SyscallError::BadFd.code()
+        }
+    }
+
+    /// Copy a file: copy(from, to) -> bytes_copied or error
+    pub fn sys_copy(&self, from: &str, to: &str) -> i64 {
+        let from_path = self.resolve_path(from);
+        let to_path = self.resolve_path(to);
+
+        // Read source file
+        let content = match ksyscall::read_file(&from_path) {
+            Ok(c) => c,
+            Err(_) => return SyscallError::NotFound.code() as i64,
+        };
+
+        // Write to destination
+        match ksyscall::write_file(&to_path, &content) {
+            Ok(()) => content.len() as i64,
+            Err(_) => SyscallError::Generic.code() as i64,
+        }
+    }
+
+    /// Resolve a path relative to cwd
+    fn resolve_path(&self, path: &str) -> String {
+        if path.starts_with('/') {
+            path.to_string()
+        } else if self.cwd == "/" {
+            format!("/{}", path)
+        } else {
+            format!("{}/{}", self.cwd, path)
+        }
+    }
 }
 
 impl Default for Runtime {

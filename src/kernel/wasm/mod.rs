@@ -210,6 +210,7 @@ mod error;
 mod executor;
 mod loader;
 mod runtime;
+mod wasi_preview2;
 
 pub use abi::*;
 pub use command::*;
@@ -217,6 +218,7 @@ pub use error::*;
 pub use executor::*;
 pub use loader::*;
 pub use runtime::*;
+pub use wasi_preview2::*;
 
 #[cfg(test)]
 mod tests;
