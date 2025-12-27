@@ -110,7 +110,9 @@ fn cmd_init(stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// Install a package from registry
-fn cmd_install(args: &[&str], _stdout: &mut String, stderr: &mut String) -> i32 {
+#[allow(unused_variables)]
+#[allow(clippy::ptr_arg)]
+fn cmd_install(args: &[&str], stdout: &mut String, stderr: &mut String) -> i32 {
     if args.is_empty() {
         stderr.push_str("pkg install: missing package name\n");
         stderr.push_str("Usage: pkg install <name>[@version]\n");
@@ -119,7 +121,7 @@ fn cmd_install(args: &[&str], _stdout: &mut String, stderr: &mut String) -> i32 
 
     // Parse name[@version]
     let spec = args[0];
-    let (name, _version) = if let Some(at_pos) = spec.find('@') {
+    let (name, version) = if let Some(at_pos) = spec.find('@') {
         (&spec[..at_pos], Some(&spec[at_pos + 1..]))
     } else {
         (spec, None)
@@ -369,7 +371,7 @@ fn cmd_search(args: &[&str], _stdout: &mut String, stderr: &mut String) -> i32 {
 }
 
 /// Update registry index (async)
-fn cmd_update(_stdout: &mut String, stderr: &mut String) -> i32 {
+fn cmd_update(_stdout: &mut String, _stderr: &mut String) -> i32 {
     #[cfg(target_arch = "wasm32")]
     {
         _stdout.push_str("Updating package registry...\n");
@@ -391,13 +393,13 @@ fn cmd_update(_stdout: &mut String, stderr: &mut String) -> i32 {
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        stderr.push_str("pkg update: requires WASM build for network access\n");
+        _stderr.push_str("pkg update: requires WASM build for network access\n");
         1
     }
 }
 
 /// Upgrade all packages (async)
-fn cmd_upgrade(_stdout: &mut String, stderr: &mut String) -> i32 {
+fn cmd_upgrade(_stdout: &mut String, _stderr: &mut String) -> i32 {
     #[cfg(target_arch = "wasm32")]
     {
         _stdout.push_str("Checking for upgrades...\n");
@@ -426,7 +428,7 @@ fn cmd_upgrade(_stdout: &mut String, stderr: &mut String) -> i32 {
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        stderr.push_str("pkg upgrade: requires WASM build for network access\n");
+        _stderr.push_str("pkg upgrade: requires WASM build for network access\n");
         1
     }
 }

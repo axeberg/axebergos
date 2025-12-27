@@ -81,7 +81,15 @@ impl PackageInstaller {
         }
 
         // Extract and install
-        self.install_from_archive(&archive_data)
+        let _ = self.install_from_archive(&archive_data)?;
+        Ok(())
+    }
+
+    /// Cache archive to disk (WASM only)
+    #[cfg(target_arch = "wasm32")]
+    fn cache_archive(&self, _id: &super::PackageId, _data: &[u8]) -> PkgResult<()> {
+        // Placeholder - would write to VFS cache directory
+        Ok(())
     }
 
     /// Install from registry (non-WASM stub)
@@ -436,7 +444,6 @@ fn write_file_bytes(path: &str, data: &[u8]) -> PkgResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kernel::pkg::version::Version;
 
     #[test]
     fn test_installer_new() {

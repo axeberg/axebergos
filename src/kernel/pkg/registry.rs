@@ -30,6 +30,32 @@ use super::error::{PkgError, PkgResult};
 use super::version::Version;
 use std::collections::HashMap;
 
+/// Package paths
+#[cfg(target_arch = "wasm32")]
+mod paths {
+    pub const PKG_REGISTRY: &str = "/var/pkg/registry";
+}
+
+/// Simple URL encoding for WASM
+#[cfg(target_arch = "wasm32")]
+mod urlencoding {
+    pub fn encode(s: &str) -> String {
+        let mut result = String::with_capacity(s.len() * 3);
+        for c in s.chars() {
+            match c {
+                'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => result.push(c),
+                ' ' => result.push_str("%20"),
+                _ => {
+                    for b in c.to_string().as_bytes() {
+                        result.push_str(&format!("%{:02X}", b));
+                    }
+                }
+            }
+        }
+        result
+    }
+}
+
 /// Default registry URL
 pub const DEFAULT_REGISTRY: &str = "https://pkg.axeberg.dev";
 
@@ -63,16 +89,39 @@ impl RegistryEntry {
     }
 }
 
+/// Registry index (WASM only)
+#[cfg(target_arch = "wasm32")]
+#[derive(Debug, Clone, Default)]
+pub struct RegistryIndex {
+    /// Package names and their versions
+    #[allow(dead_code)]
+    pub packages: HashMap<String, Vec<Version>>,
+}
+
 /// Package registry client
 pub struct PackageRegistry {
     /// Registry base URL
     registry_url: String,
     /// Per-package cache
     package_cache: HashMap<String, RegistryEntry>,
+    /// Cached index (WASM only)
+    #[cfg(target_arch = "wasm32")]
+    index_cache: Option<RegistryIndex>,
 }
 
 impl PackageRegistry {
     /// Create a new registry client with default URL
+    #[cfg(target_arch = "wasm32")]
+    pub fn new() -> Self {
+        Self {
+            registry_url: DEFAULT_REGISTRY.to_string(),
+            package_cache: HashMap::new(),
+            index_cache: None,
+        }
+    }
+
+    /// Create a new registry client with default URL
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new() -> Self {
         Self {
             registry_url: DEFAULT_REGISTRY.to_string(),
@@ -81,6 +130,17 @@ impl PackageRegistry {
     }
 
     /// Create with a custom registry URL
+    #[cfg(target_arch = "wasm32")]
+    pub fn with_url(url: &str) -> Self {
+        Self {
+            registry_url: url.to_string(),
+            package_cache: HashMap::new(),
+            index_cache: None,
+        }
+    }
+
+    /// Create with a custom registry URL
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn with_url(url: &str) -> Self {
         Self {
             registry_url: url.to_string(),
@@ -100,6 +160,14 @@ impl PackageRegistry {
     }
 
     /// Clear all caches
+    #[cfg(target_arch = "wasm32")]
+    pub fn clear_cache(&mut self) {
+        self.package_cache.clear();
+        self.index_cache = None;
+    }
+
+    /// Clear all caches
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn clear_cache(&mut self) {
         self.package_cache.clear();
     }
@@ -248,11 +316,49 @@ impl PackageRegistry {
         self.parse_search_results(&body)
     }
 
+    /// Parse search results from JSON response (WASM only)
+    #[cfg(target_arch = "wasm32")]
+    fn parse_search_results(&self, _body: &str) -> PkgResult<Vec<RegistryEntry>> {
+        // Simple placeholder - returns empty results
+        // Full implementation would parse JSON
+        Ok(Vec::new())
+    }
+
+    /// Parse registry index from JSON (WASM only)
+    #[cfg(target_arch = "wasm32")]
+    fn parse_index(&self, _body: &str) -> PkgResult<RegistryIndex> {
+        // Simple placeholder - returns empty index
+        // Full implementation would parse JSON
+        Ok(RegistryIndex::default())
+    }
+
+    /// Parse package entry from JSON (WASM only)
+    #[cfg(target_arch = "wasm32")]
+    fn parse_package_entry(&self, name: &str, _body: &str) -> PkgResult<RegistryEntry> {
+        // Simple placeholder - returns minimal entry
+        // Full implementation would parse JSON
+        Ok(RegistryEntry {
+            name: name.to_string(),
+            versions: vec![Version::new(1, 0, 0)],
+            latest: Version::new(1, 0, 0),
+            description: None,
+            keywords: vec![],
+            download_url: None,
+        })
+    }
+
     /// Search packages (non-WASM stub)
     #[cfg(not(target_arch = "wasm32"))]
     pub async fn search(&self, _query: &str) -> PkgResult<Vec<RegistryEntry>> {
         Err(PkgError::NotAvailable("WASM required".to_string()))
     }
+}
+
+/// Write file helper (WASM only)
+#[cfg(target_arch = "wasm32")]
+fn write_file(_path: &str, _content: &str) -> Result<(), std::io::Error> {
+    // Placeholder - would write to VFS
+    Ok(())
 }
 
 impl Default for PackageRegistry {

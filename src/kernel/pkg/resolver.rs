@@ -81,7 +81,7 @@ impl DependencyResolver {
         self.reset();
 
         // Fetch root package
-        let entry = registry.fetch_package(&root.name).await?;
+        let _entry = registry.fetch_package(&root.name).await?;
 
         // Create manifest from registry entry
         let manifest = self
@@ -247,6 +247,34 @@ impl DependencyResolver {
             dependencies: vec![], // Would need to fetch from registry
             dev_dependencies: vec![],
         })
+    }
+
+    /// Add a version constraint for a package (WASM only)
+    #[cfg(target_arch = "wasm32")]
+    fn add_constraint(&mut self, name: &str, req: &VersionReq) -> PkgResult<()> {
+        let constraints = self.constraints.entry(name.to_string()).or_default();
+
+        // Check if any resolved version conflicts with the new requirement
+        if let Some(resolved) = self.resolved.get(name) {
+            if !req.matches(&resolved.id.version) {
+                return Err(PkgError::DependencyConflict {
+                    package: name.to_string(),
+                    requirement1: resolved.id.version.to_string(),
+                    requirement2: req.to_string(),
+                });
+            }
+        }
+
+        constraints.push(req.clone());
+        Ok(())
+    }
+
+    /// Topological sort of resolved packages (WASM only)
+    #[cfg(target_arch = "wasm32")]
+    fn topological_sort(&self) -> PkgResult<Vec<ResolvedPackage>> {
+        let mut result: Vec<_> = self.resolved.values().cloned().collect();
+        result.sort_by_key(|p| p.order);
+        Ok(result)
     }
 
     /// Check if all constraints for a package can be satisfied
