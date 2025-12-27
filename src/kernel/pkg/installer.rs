@@ -23,14 +23,14 @@
 //!   content: bytes         # File content (content_len bytes)
 //! ```
 
-use super::checksum::{verify_checksum, Checksum};
+use super::PackageId;
+use super::checksum::{Checksum, verify_checksum};
 use super::database::{InstalledPackage, PackageDatabase};
 use super::error::{PkgError, PkgResult};
 use super::manifest::PackageManifest;
 use super::paths;
 use super::registry::PackageRegistry;
 use super::resolver::ResolvedPackage;
-use super::PackageId;
 use crate::kernel::syscall;
 
 /// Package archive magic number
@@ -125,9 +125,10 @@ impl PackageInstaller {
                     // Find matching binary entry in manifest
                     for bin_entry in &archive.manifest.binaries {
                         if bin_entry.path.ends_with(bin_name)
-                            && let Some(ref expected) = bin_entry.checksum {
-                                verify_checksum(bin_data, expected)?;
-                            }
+                            && let Some(ref expected) = bin_entry.checksum
+                        {
+                            verify_checksum(bin_data, expected)?;
+                        }
                     }
                 }
             }
@@ -136,9 +137,10 @@ impl PackageInstaller {
         // Install binaries to /bin
         for bin_entry in &archive.manifest.binaries {
             // Find the binary data
-            let bin_data = archive.files.iter().find(|(name, _)| {
-                name == &bin_entry.path || bin_entry.path.ends_with(name)
-            });
+            let bin_data = archive
+                .files
+                .iter()
+                .find(|(name, _)| name == &bin_entry.path || bin_entry.path.ends_with(name));
 
             if let Some((_, data)) = bin_data {
                 let dest_path = format!("{}/{}.wasm", paths::BIN_DIR, bin_entry.name);
@@ -166,8 +168,7 @@ impl PackageInstaller {
         }
 
         // Read header
-        let manifest_size =
-            u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
+        let manifest_size = u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
         let num_files = u32::from_le_bytes([data[12], data[13], data[14], data[15]]) as usize;
 
         // Check sizes
@@ -317,8 +318,11 @@ impl PackageInstaller {
 
             // If we have a manifest checksum, verify the manifest
             if let Some(ref expected) = package.manifest_checksum {
-                let manifest_path =
-                    format!("{}/{}/package.toml", paths::PKG_PACKAGES, package.id().dir_name());
+                let manifest_path = format!(
+                    "{}/{}/package.toml",
+                    paths::PKG_PACKAGES,
+                    package.id().dir_name()
+                );
                 if let Ok(content) = read_file(&manifest_path) {
                     let actual = Checksum::compute(content.as_bytes());
                     if &actual != expected {
@@ -376,7 +380,8 @@ fn mkdir_recursive(path: &str) -> PkgResult<()> {
         current.push_str(part);
 
         if !path_exists(&current) {
-            syscall::mkdir(&current).map_err(|e| PkgError::IoError(format!("{}: {}", current, e)))?;
+            syscall::mkdir(&current)
+                .map_err(|e| PkgError::IoError(format!("{}: {}", current, e)))?;
         }
     }
 

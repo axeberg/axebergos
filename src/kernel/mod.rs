@@ -55,6 +55,11 @@ pub use mount::{FsType, MountEntry, MountError, MountOptions, MountTable};
 pub use msgqueue::{
     Message, MessageQueue, MsgQueueError, MsgQueueId, MsgQueueManager, MsgQueueStats,
 };
+pub use pkg::{
+    Checksum, Dependency, InstalledPackage, PackageDatabase, PackageId, PackageInstaller,
+    PackageManager, PackageManifest, PackageRegistry, PkgError, PkgResult, RegistryEntry,
+    ResolvedPackage, Version, VersionReq,
+};
 pub use process::{Fd, Handle, OpenFlags, Pid};
 pub use semaphore::{SemError, SemId, SemOpResult, SemSetStats, SemaphoreManager, SemaphoreSet};
 pub use signal::{Signal, SignalAction, SignalError};
@@ -67,11 +72,6 @@ pub use users::{FileMode, Gid, Group, Uid, User, UserDb};
 pub use work_stealing::{
     Config as WorkStealingConfig, Injector, StealResult, Stealer, TaskHandle, WorkStealingExecutor,
     Worker,
-};
-pub use pkg::{
-    Checksum, Dependency, InstalledPackage, PackageDatabase, PackageId, PackageInstaller,
-    PackageManifest, PackageManager, PackageRegistry, PkgError, PkgResult, RegistryEntry,
-    ResolvedPackage, Version, VersionReq,
 };
 
 use std::cell::RefCell;

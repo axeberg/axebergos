@@ -234,20 +234,21 @@ fn cmd_list(stdout: &mut String, stderr: &mut String) -> i32 {
                 stdout.push_str("Use 'pkg install <name>' to install a package.\n");
             } else {
                 stdout.push_str("Installed packages:\n");
-                stdout.push_str(&format!("{:<20} {:<12} {}\n", "NAME", "VERSION", "BINARIES"));
-                stdout.push_str(&format!("{:<20} {:<12} {}\n", "----", "-------", "--------"));
+                stdout.push_str(&format!(
+                    "{:<20} {:<12} {}\n",
+                    "NAME", "VERSION", "BINARIES"
+                ));
+                stdout.push_str(&format!(
+                    "{:<20} {:<12} {}\n",
+                    "----", "-------", "--------"
+                ));
                 for pkg in packages {
                     let bins = if pkg.binaries.is_empty() {
                         "(none)".to_string()
                     } else {
                         pkg.binaries
                             .iter()
-                            .map(|b| {
-                                b.rsplit('/')
-                                    .next()
-                                    .unwrap_or(b)
-                                    .trim_end_matches(".wasm")
-                            })
+                            .map(|b| b.rsplit('/').next().unwrap_or(b).trim_end_matches(".wasm"))
                             .collect::<Vec<_>>()
                             .join(", ")
                     };
@@ -278,7 +279,10 @@ fn cmd_info(args: &[&str], stdout: &mut String, stderr: &mut String) -> i32 {
         Ok(Some(pkg)) => {
             stdout.push_str(&format!("Package: {}\n", pkg.name));
             stdout.push_str(&format!("Version: {}\n", pkg.version));
-            stdout.push_str(&format!("Installed: {}\n", format_timestamp(pkg.installed_at)));
+            stdout.push_str(&format!(
+                "Installed: {}\n",
+                format_timestamp(pkg.installed_at)
+            ));
 
             if !pkg.binaries.is_empty() {
                 stdout.push_str("Binaries:\n");

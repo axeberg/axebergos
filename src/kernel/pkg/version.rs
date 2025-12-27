@@ -84,7 +84,10 @@ impl Version {
 
         // Split off prerelease (after -)
         let (version, prerelease) = if let Some(pos) = version_pre.find('-') {
-            (&version_pre[..pos], Some(version_pre[pos + 1..].to_string()))
+            (
+                &version_pre[..pos],
+                Some(version_pre[pos + 1..].to_string()),
+            )
         } else {
             (version_pre, None)
         };
@@ -98,15 +101,15 @@ impl Version {
             )));
         }
 
-        let major = parts[0]
-            .parse()
-            .map_err(|_| PkgError::InvalidVersion(format!("invalid major version: {}", parts[0])))?;
-        let minor = parts[1]
-            .parse()
-            .map_err(|_| PkgError::InvalidVersion(format!("invalid minor version: {}", parts[1])))?;
-        let patch = parts[2]
-            .parse()
-            .map_err(|_| PkgError::InvalidVersion(format!("invalid patch version: {}", parts[2])))?;
+        let major = parts[0].parse().map_err(|_| {
+            PkgError::InvalidVersion(format!("invalid major version: {}", parts[0]))
+        })?;
+        let minor = parts[1].parse().map_err(|_| {
+            PkgError::InvalidVersion(format!("invalid minor version: {}", parts[1]))
+        })?;
+        let patch = parts[2].parse().map_err(|_| {
+            PkgError::InvalidVersion(format!("invalid patch version: {}", parts[2]))
+        })?;
 
         Ok(Self {
             major,
@@ -188,7 +191,7 @@ impl Ord for Version {
         // Pre-release versions have lower precedence
         match (&self.prerelease, &other.prerelease) {
             (None, None) => Ordering::Equal,
-            (Some(_), None) => Ordering::Less,    // pre-release < release
+            (Some(_), None) => Ordering::Less, // pre-release < release
             (None, Some(_)) => Ordering::Greater, // release > pre-release
             (Some(a), Some(b)) => compare_prerelease(a, b),
         }

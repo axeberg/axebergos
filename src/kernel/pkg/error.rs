@@ -69,7 +69,10 @@ impl fmt::Display for PkgError {
             }
             PkgError::AlreadyInstalled(id) => write!(f, "package already installed: {}", id),
             PkgError::NotInstalled(name) => write!(f, "package not installed: {}", name),
-            PkgError::HasDependents { package, dependents } => {
+            PkgError::HasDependents {
+                package,
+                dependents,
+            } => {
                 write!(
                     f,
                     "cannot remove {}: required by {}",

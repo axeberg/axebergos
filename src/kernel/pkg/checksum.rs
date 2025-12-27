@@ -222,10 +222,9 @@ mod tests {
     fn test_sha256_empty() {
         // SHA-256 of empty string
         let hash = sha256(b"");
-        let expected = Checksum::from_hex(
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-        )
-        .unwrap();
+        let expected =
+            Checksum::from_hex("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+                .unwrap();
         assert_eq!(hash, *expected.as_bytes());
     }
 
@@ -233,10 +232,9 @@ mod tests {
     fn test_sha256_hello() {
         // SHA-256 of "hello"
         let hash = sha256(b"hello");
-        let expected = Checksum::from_hex(
-            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
-        )
-        .unwrap();
+        let expected =
+            Checksum::from_hex("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
+                .unwrap();
         assert_eq!(hash, *expected.as_bytes());
     }
 
@@ -244,10 +242,9 @@ mod tests {
     fn test_sha256_hello_world() {
         // SHA-256 of "Hello, World!"
         let hash = sha256(b"Hello, World!");
-        let expected = Checksum::from_hex(
-            "dffd6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f",
-        )
-        .unwrap();
+        let expected =
+            Checksum::from_hex("dffd6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f")
+                .unwrap();
         assert_eq!(hash, *expected.as_bytes());
     }
 
@@ -256,10 +253,9 @@ mod tests {
         // Test with a message longer than one block
         let data = b"The quick brown fox jumps over the lazy dog";
         let hash = sha256(data);
-        let expected = Checksum::from_hex(
-            "d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592",
-        )
-        .unwrap();
+        let expected =
+            Checksum::from_hex("d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592")
+                .unwrap();
         assert_eq!(hash, *expected.as_bytes());
     }
 
@@ -283,20 +279,18 @@ mod tests {
     #[test]
     fn test_verify_checksum_success() {
         let data = b"hello";
-        let expected = Checksum::from_hex(
-            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
-        )
-        .unwrap();
+        let expected =
+            Checksum::from_hex("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
+                .unwrap();
         assert!(verify_checksum(data, &expected).is_ok());
     }
 
     #[test]
     fn test_verify_checksum_failure() {
         let data = b"hello";
-        let wrong = Checksum::from_hex(
-            "0000000000000000000000000000000000000000000000000000000000000000",
-        )
-        .unwrap();
+        let wrong =
+            Checksum::from_hex("0000000000000000000000000000000000000000000000000000000000000000")
+                .unwrap();
         assert!(verify_checksum(data, &wrong).is_err());
     }
 

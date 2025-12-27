@@ -208,7 +208,10 @@ impl PackageManager {
         let pkg_id = PackageId::new(name, best_version);
 
         // Check if already installed
-        if self.database.is_installed(&pkg_id.name, Some(&pkg_id.version))? {
+        if self
+            .database
+            .is_installed(&pkg_id.name, Some(&pkg_id.version))?
+        {
             return Err(PkgError::AlreadyInstalled(pkg_id.clone()));
         }
 
@@ -217,7 +220,10 @@ impl PackageManager {
 
         // Install all resolved packages
         for pkg in resolved {
-            if !self.database.is_installed(&pkg.id.name, Some(&pkg.id.version))? {
+            if !self
+                .database
+                .is_installed(&pkg.id.name, Some(&pkg.id.version))?
+            {
                 self.installer.install(&pkg, &self.registry).await?;
                 self.database.record_installed(&pkg.id, &pkg.manifest)?;
             }

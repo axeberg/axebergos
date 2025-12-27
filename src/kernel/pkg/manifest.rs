@@ -438,10 +438,10 @@ impl<'a> TomlParser<'a> {
             Ok(())
         })?;
 
-        let name = name
-            .ok_or_else(|| PkgError::InvalidManifest("bin entry missing 'name'".to_string()))?;
-        let path = path
-            .ok_or_else(|| PkgError::InvalidManifest("bin entry missing 'path'".to_string()))?;
+        let name =
+            name.ok_or_else(|| PkgError::InvalidManifest("bin entry missing 'name'".to_string()))?;
+        let path =
+            path.ok_or_else(|| PkgError::InvalidManifest("bin entry missing 'path'".to_string()))?;
 
         Ok(BinaryEntry {
             name,
@@ -561,7 +561,10 @@ description = "A hello world command"
         let manifest = PackageManifest::parse(toml).unwrap();
         assert_eq!(manifest.name, "hello");
         assert_eq!(manifest.version, Version::new(1, 0, 0));
-        assert_eq!(manifest.description, Some("A hello world command".to_string()));
+        assert_eq!(
+            manifest.description,
+            Some("A hello world command".to_string())
+        );
     }
 
     #[test]
@@ -597,7 +600,11 @@ core = ">=2.0.0"
         let manifest = PackageManifest::parse(toml).unwrap();
         assert_eq!(manifest.dependencies.len(), 2);
 
-        let utils_dep = manifest.dependencies.iter().find(|d| d.name == "utils").unwrap();
+        let utils_dep = manifest
+            .dependencies
+            .iter()
+            .find(|d| d.name == "utils")
+            .unwrap();
         assert!(utils_dep.version_req.matches(&Version::new(1, 0, 0)));
         assert!(utils_dep.version_req.matches(&Version::new(1, 5, 0)));
         assert!(!utils_dep.version_req.matches(&Version::new(2, 0, 0)));

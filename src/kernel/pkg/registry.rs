@@ -58,10 +58,7 @@ impl RegistryEntry {
                 .replace("{name}", &self.name)
                 .replace("{version}", &version.to_string())
         } else {
-            format!(
-                "{}/packages/{}/{}.axepkg",
-                registry_url, self.name, version
-            )
+            format!("{}/packages/{}/{}.axepkg", registry_url, self.name, version)
         }
     }
 }
@@ -190,17 +187,10 @@ impl PackageRegistry {
 
     /// Download a package archive
     #[cfg(target_arch = "wasm32")]
-    pub async fn download_package(
-        &self,
-        name: &str,
-        version: &Version,
-    ) -> PkgResult<Vec<u8>> {
+    pub async fn download_package(&self, name: &str, version: &Version) -> PkgResult<Vec<u8>> {
         use crate::kernel::network::HttpRequest;
 
-        let url = format!(
-            "{}/packages/{}/{}.axepkg",
-            self.registry_url, name, version
-        );
+        let url = format!("{}/packages/{}/{}.axepkg", self.registry_url, name, version);
 
         let response = HttpRequest::get(&url)
             .send()
@@ -223,11 +213,7 @@ impl PackageRegistry {
 
     /// Download package (non-WASM stub)
     #[cfg(not(target_arch = "wasm32"))]
-    pub async fn download_package(
-        &self,
-        name: &str,
-        version: &Version,
-    ) -> PkgResult<Vec<u8>> {
+    pub async fn download_package(&self, name: &str, version: &Version) -> PkgResult<Vec<u8>> {
         let _ = (name, version);
         Err(PkgError::NotAvailable("WASM required".to_string()))
     }
@@ -303,7 +289,10 @@ mod tests {
         };
 
         let url = entry.download_url(&Version::new(1, 0, 0), DEFAULT_REGISTRY);
-        assert_eq!(url, format!("{}/packages/hello/1.0.0.axepkg", DEFAULT_REGISTRY));
+        assert_eq!(
+            url,
+            format!("{}/packages/hello/1.0.0.axepkg", DEFAULT_REGISTRY)
+        );
     }
 
     #[test]
@@ -320,5 +309,4 @@ mod tests {
         let url = entry.download_url(&Version::new(1, 0, 0), DEFAULT_REGISTRY);
         assert_eq!(url, "https://cdn.example.com/hello/1.0.0.tar.gz");
     }
-
 }

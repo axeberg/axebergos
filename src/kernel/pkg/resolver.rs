@@ -20,11 +20,11 @@
 //! - For caret (^) requirements, stay within major version
 //! - For tilde (~) requirements, stay within minor version
 
+use super::PackageId;
 use super::error::{PkgError, PkgResult};
 use super::manifest::PackageManifest;
 use super::registry::PackageRegistry;
 use super::version::{Version, VersionReq};
-use super::PackageId;
 use std::collections::{HashMap, HashSet};
 
 /// A resolved package ready for installation
@@ -84,10 +84,13 @@ impl DependencyResolver {
         let entry = registry.fetch_package(&root.name).await?;
 
         // Create manifest from registry entry
-        let manifest = self.create_manifest_from_registry(&root.name, &root.version, registry).await?;
+        let manifest = self
+            .create_manifest_from_registry(&root.name, &root.version, registry)
+            .await?;
 
         // Resolve dependencies recursively
-        self.resolve_recursive(&root.name, &root.version, &manifest, registry).await?;
+        self.resolve_recursive(&root.name, &root.version, &manifest, registry)
+            .await?;
 
         // Build resolved package for root
         let root_resolved = ResolvedPackage {
@@ -175,17 +178,13 @@ impl DependencyResolver {
             self.add_constraint(&dep.name, &dep.version_req)?;
 
             // Create manifest for dependency
-            let dep_manifest =
-                self.create_manifest_from_registry(&dep.name, &best_version, registry).await?;
+            let dep_manifest = self
+                .create_manifest_from_registry(&dep.name, &best_version, registry)
+                .await?;
 
             // Recursively resolve
-            Box::pin(self.resolve_recursive(
-                &dep.name,
-                &best_version,
-                &dep_manifest,
-                registry,
-            ))
-            .await?;
+            Box::pin(self.resolve_recursive(&dep.name, &best_version, &dep_manifest, registry))
+                .await?;
 
             // Add to resolved
             let dep_resolved = ResolvedPackage {

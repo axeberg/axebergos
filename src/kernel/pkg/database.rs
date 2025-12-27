@@ -2,12 +2,12 @@
 //!
 //! Tracks installed packages and their metadata.
 
+use super::PackageId;
 use super::checksum::Checksum;
 use super::error::{PkgError, PkgResult};
 use super::manifest::PackageManifest;
 use super::paths;
 use super::version::Version;
-use super::PackageId;
 use crate::kernel::syscall;
 use std::collections::HashMap;
 
@@ -36,7 +36,11 @@ impl InstalledPackage {
             version: manifest.version.clone(),
             installed_at: current_timestamp(),
             binaries,
-            dependencies: manifest.dependencies.iter().map(|d| d.name.clone()).collect(),
+            dependencies: manifest
+                .dependencies
+                .iter()
+                .map(|d| d.name.clone())
+                .collect(),
             manifest_checksum: Some(Checksum::compute(manifest.to_toml().as_bytes())),
         }
     }
@@ -175,9 +179,10 @@ impl PackageDatabase {
 
     /// Save database to disk
     fn save(&self) -> PkgResult<()> {
-        let packages = self.cache.as_ref().ok_or_else(|| {
-            PkgError::IoError("database not loaded".to_string())
-        })?;
+        let packages = self
+            .cache
+            .as_ref()
+            .ok_or_else(|| PkgError::IoError("database not loaded".to_string()))?;
 
         let mut content = String::new();
         content.push_str("# Installed packages\n");
@@ -194,8 +199,11 @@ impl PackageDatabase {
             }
 
             if !pkg.dependencies.is_empty() {
-                let deps: Vec<String> =
-                    pkg.dependencies.iter().map(|d| format!("\"{}\"", d)).collect();
+                let deps: Vec<String> = pkg
+                    .dependencies
+                    .iter()
+                    .map(|d| format!("\"{}\"", d))
+                    .collect();
                 content.push_str(&format!("dependencies = [{}]\n", deps.join(", ")));
             }
 
@@ -266,30 +274,31 @@ impl PackageDatabase {
                     manifest_checksum: None,
                 });
             } else if let Some(ref mut pkg) = current_pkg
-                && let Some(pos) = line.find('=') {
-                    let key = line[..pos].trim();
-                    let value = line[pos + 1..].trim().trim_matches('"');
+                && let Some(pos) = line.find('=')
+            {
+                let key = line[..pos].trim();
+                let value = line[pos + 1..].trim().trim_matches('"');
 
-                    match key {
-                        "version" => {
-                            if let Ok(v) = Version::parse(value) {
-                                pkg.version = v;
-                            }
+                match key {
+                    "version" => {
+                        if let Ok(v) = Version::parse(value) {
+                            pkg.version = v;
                         }
-                        "installed_at" => {
-                            if let Ok(t) = value.parse() {
-                                pkg.installed_at = t;
-                            }
-                        }
-                        "binaries" => {
-                            pkg.binaries = parse_array(value);
-                        }
-                        "dependencies" => {
-                            pkg.dependencies = parse_array(value);
-                        }
-                        _ => {}
                     }
+                    "installed_at" => {
+                        if let Ok(t) = value.parse() {
+                            pkg.installed_at = t;
+                        }
+                    }
+                    "binaries" => {
+                        pkg.binaries = parse_array(value);
+                    }
+                    "dependencies" => {
+                        pkg.dependencies = parse_array(value);
+                    }
+                    _ => {}
                 }
+            }
         }
 
         if let Some(pkg) = current_pkg {
@@ -300,7 +309,11 @@ impl PackageDatabase {
     }
 
     /// Record a newly installed package
-    pub fn record_installed(&mut self, id: &PackageId, manifest: &PackageManifest) -> PkgResult<()> {
+    pub fn record_installed(
+        &mut self,
+        id: &PackageId,
+        manifest: &PackageManifest,
+    ) -> PkgResult<()> {
         self.load()?;
 
         let binaries: Vec<String> = manifest
@@ -320,7 +333,10 @@ impl PackageDatabase {
         // Also save manifest to packages directory
         let manifest_dir = format!("{}/{}", paths::PKG_PACKAGES, id.dir_name());
         mkdir_recursive(&manifest_dir)?;
-        write_file(&format!("{}/package.toml", manifest_dir), &manifest.to_toml())?;
+        write_file(
+            &format!("{}/package.toml", manifest_dir),
+            &manifest.to_toml(),
+        )?;
 
         Ok(())
     }
@@ -395,7 +411,8 @@ fn mkdir_recursive(path: &str) -> PkgResult<()> {
         current.push_str(part);
 
         if !path_exists(&current) {
-            syscall::mkdir(&current).map_err(|e| PkgError::IoError(format!("{}: {}", current, e)))?;
+            syscall::mkdir(&current)
+                .map_err(|e| PkgError::IoError(format!("{}: {}", current, e)))?;
         }
     }
 
@@ -516,7 +533,8 @@ mod tests {
             dev_dependencies: vec![],
         };
 
-        let installed = InstalledPackage::from_manifest(&manifest, vec!["/bin/test.wasm".to_string()]);
+        let installed =
+            InstalledPackage::from_manifest(&manifest, vec!["/bin/test.wasm".to_string()]);
         assert_eq!(installed.name, "test");
         assert_eq!(installed.version, Version::new(1, 0, 0));
         assert_eq!(installed.binaries, vec!["/bin/test.wasm"]);
