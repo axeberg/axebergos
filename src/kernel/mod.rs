@@ -18,6 +18,7 @@ pub mod fifo;
 pub mod init;
 pub mod ipc;
 pub mod memory;
+pub mod memory_persist;
 pub mod mount;
 pub mod msgqueue;
 pub mod object;
@@ -47,11 +48,15 @@ pub use fifo::{FifoBuffer, FifoError, FifoRegistry};
 pub use init::{
     InitSystem, RestartPolicy, Service, ServiceConfig, ServiceState, ServiceStatus, Target,
 };
-pub use ipc::{Receiver, Sender, channel};
+pub use ipc::{
+    BoundedReceiver, BoundedRecvFuture, BoundedSendFuture, BoundedSender, Receiver, SendError,
+    Sender, TryRecvError, TrySendError, bounded_channel, channel,
+};
 pub use memory::{
     CowStats, MemoryError, MemoryStats, PAGE_SIZE, ProcessCowStats, Protection, RegionId, ShmId,
     ShmInfo, SystemMemoryStats,
 };
+pub use memory_persist::{MemoryPersistStats, MemoryPersistence};
 pub use mount::{FsType, MountEntry, MountError, MountOptions, MountTable};
 pub use msgqueue::{
     Message, MessageQueue, MsgQueueError, MsgQueueId, MsgQueueManager, MsgQueueStats,

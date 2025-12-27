@@ -221,6 +221,35 @@ impl Executor {
         }
     }
 
+    /// Cancel a running task by ID
+    ///
+    /// Removes the task from the executor entirely. The task's future
+    /// is dropped immediately (cleanup via Drop trait).
+    /// Returns true if the task existed and was cancelled.
+    pub fn cancel_task(&mut self, task_id: TaskId) -> bool {
+        // Remove from ready set
+        self.ready.borrow_mut().remove(&task_id);
+
+        // Try to remove from pending spawn queue
+        let mut pending = self.pending_spawn.borrow_mut();
+        let pending_pos = pending.iter().position(|t| t.id == task_id);
+        if let Some(pos) = pending_pos {
+            pending.remove(pos);
+            return true;
+        }
+        drop(pending);
+
+        // Try to remove from active tasks
+        self.tasks.remove(&task_id).is_some()
+    }
+
+    /// Cancel multiple tasks by ID
+    ///
+    /// Returns the number of tasks that were actually cancelled.
+    pub fn cancel_tasks(&mut self, task_ids: &[TaskId]) -> usize {
+        task_ids.iter().filter(|&&id| self.cancel_task(id)).count()
+    }
+
     /// Create a waker that marks a task as ready
     fn create_waker(&self, task_id: TaskId) -> Waker {
         let state = Box::new(WakerState {
@@ -535,5 +564,87 @@ mod tests {
         // Third tick: all run again
         exec.tick();
         assert_eq!(counter.get(), 6);
+    }
+
+    #[test]
+    fn test_cancel_task() {
+        let mut exec = Executor::new();
+        let counter = Rc::new(Cell::new(0));
+        let counter_clone = counter.clone();
+
+        let task_id = exec.spawn(async move {
+            counter_clone.set(counter_clone.get() + 1);
+            futures::pending!(); // Yield
+            counter_clone.set(counter_clone.get() + 1); // Should never run
+        });
+
+        // First tick: runs until yield
+        exec.tick();
+        assert_eq!(counter.get(), 1);
+        assert!(exec.has_tasks());
+
+        // Cancel the task
+        assert!(exec.cancel_task(task_id));
+        assert!(!exec.has_tasks());
+
+        // Verify task is gone
+        assert!(!exec.cancel_task(task_id)); // Already cancelled
+    }
+
+    #[test]
+    fn test_cancel_pending_task() {
+        let mut exec = Executor::new();
+        let ran = Rc::new(Cell::new(false));
+        let ran_clone = ran.clone();
+
+        let task_id = exec.spawn(async move {
+            ran_clone.set(true);
+        });
+
+        // Cancel before first tick (task is still in pending_spawn)
+        assert!(exec.cancel_task(task_id));
+
+        // Run should do nothing - task was cancelled
+        exec.run();
+        assert!(!ran.get());
+    }
+
+    #[test]
+    fn test_cancel_nonexistent_task() {
+        let mut exec = Executor::new();
+        let fake_id = TaskId(9999);
+
+        assert!(!exec.cancel_task(fake_id));
+    }
+
+    #[test]
+    fn test_cancel_tasks_batch() {
+        let mut exec = Executor::new();
+        let counter = Rc::new(Cell::new(0));
+
+        let mut task_ids = Vec::new();
+        for _ in 0..5 {
+            let counter = counter.clone();
+            let id = exec.spawn(async move {
+                counter.set(counter.get() + 1);
+                futures::pending!();
+            });
+            task_ids.push(id);
+        }
+
+        // First tick: all run once
+        exec.tick();
+        assert_eq!(counter.get(), 5);
+        assert_eq!(exec.task_count(), 5);
+
+        // Cancel 3 of them
+        let cancelled = exec.cancel_tasks(&task_ids[0..3]);
+        assert_eq!(cancelled, 3);
+        assert_eq!(exec.task_count(), 2);
+
+        // Cancel including some already cancelled
+        let cancelled = exec.cancel_tasks(&task_ids);
+        assert_eq!(cancelled, 2); // Only 2 remaining
+        assert_eq!(exec.task_count(), 0);
     }
 }
