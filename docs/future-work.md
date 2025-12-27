@@ -14,7 +14,7 @@ Consolidated list of planned features and enhancements for axeberg.
 
 | Feature | Description | Complexity | Status |
 |---------|-------------|------------|--------|
-| Task cancellation | Cancel running tasks by ID | Low | Planned |
+| Task cancellation | Cancel running tasks by ID | Low | ✅ Done |
 | Timeouts | Automatic timeout for blocking operations | Medium | Planned |
 | Work stealing | Multi-threaded executor for parallelism | High | ✅ Done |
 | Task groups | Hierarchical task management | Medium | Planned |
@@ -23,6 +23,9 @@ Consolidated list of planned features and enhancements for axeberg.
 
 > **Work Stealing Implemented**: Lock-free Chase-Lev deque with TLA+ verification.
 > See `src/kernel/work_stealing/` and `specs/tla/WorkStealing.tla`.
+>
+> **Task Cancellation Implemented**: `cancel_task(task_id)` and `cancel_tasks(&[task_id])`
+> methods to remove tasks from the executor. See `src/kernel/executor.rs`.
 
 ## WASM Modules
 
@@ -50,7 +53,7 @@ Consolidated list of planned features and enhancements for axeberg.
 | Memory-mapped files | Map VFS files into memory regions | Medium | Planned |
 | Copy-on-write | Efficient fork via COW pages | High | ✅ Done |
 | Memory pools | Arena allocation for performance | Medium | Planned |
-| OPFS persistence | Persist memory regions to disk | Low | Planned |
+| OPFS persistence | Persist memory regions to disk | Low | ✅ Done |
 
 *Source: [docs/kernel/memory.md](kernel/memory.md)*
 
@@ -58,15 +61,25 @@ Consolidated list of planned features and enhancements for axeberg.
 > Fork syscall creates child processes with shared memory pages that are
 > copied only when written (copy-on-write semantics).
 > See `src/kernel/memory.rs` for Page, CowMemory, and cow_fork implementations.
+>
+> **OPFS Persistence Implemented**: Named data storage API for persisting memory
+> regions to browser's Origin Private File System. Supports save, load, list,
+> delete operations with full async support.
+> See `src/kernel/memory_persist.rs` for MemoryPersistence API.
 
 ## IPC
 
-| Feature | Description | Complexity |
-|---------|-------------|------------|
-| Bounded channels | Back-pressure for producers | Low |
-| Waker-based async | Register wakers for efficient wake-up | Medium |
+| Feature | Description | Complexity | Status |
+|---------|-------------|------------|--------|
+| Bounded channels | Back-pressure for producers | Low | ✅ Done |
+| Waker-based async | Register wakers for efficient wake-up | Medium | Planned |
 
 *Source: [docs/kernel/ipc.md](kernel/ipc.md)*
+
+> **Bounded Channels Implemented**: `bounded_channel(capacity)` creates channels
+> with capacity limits. `try_send` returns `TrySendError::Full` when full,
+> `send().await` yields until space is available.
+> See `src/kernel/ipc.rs` for BoundedSender/BoundedReceiver.
 
 ## Compositor
 
@@ -87,17 +100,20 @@ The core compositor is now implemented. These enhancements are planned:
 ## Priority Recommendations
 
 ### Quick Wins (Low Complexity)
-1. Task cancellation
-2. Bounded channels
-3. OPFS persistence for memory
+1. ~~Task cancellation~~ ✅ Done
+2. ~~Bounded channels~~ ✅ Done
+3. ~~OPFS persistence for memory~~ ✅ Done
 
 ### Medium Impact
 1. Timeouts for executor
 2. Memory-mapped files
 3. Port commands to WASM
+4. Waker-based async for IPC
 
 ### Major Features
 1. ~~Work stealing executor~~ ✅ Done
 2. ~~Copy-on-write memory~~ ✅ Done
 3. ~~Package manager~~ ✅ Done
 4. ~~Compositor implementation~~ ✅ Done (WebGPU)
+5. Task groups for hierarchical task management
+6. Text rendering for compositor
