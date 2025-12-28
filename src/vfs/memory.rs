@@ -103,6 +103,8 @@ impl MemoryFs {
     const MAX_PATH_LEN: usize = 4096;
     /// Maximum length for a single path component (filename)
     const MAX_NAME_LEN: usize = 255;
+    /// Maximum symlink recursion depth (POSIX standard: SYMLOOP_MAX = 40)
+    pub const MAX_SYMLINK_DEPTH: usize = 40;
 
     /// Validate a path for security and correctness
     pub fn validate_path(path: &str) -> io::Result<()> {
@@ -195,6 +197,134 @@ impl MemoryFs {
             ));
         }
         Ok(())
+    }
+
+    /// Resolve a path, following symlinks with loop detection
+    ///
+    /// This function resolves symlinks up to MAX_SYMLINK_DEPTH levels deep.
+    /// If the depth is exceeded (possible symlink loop), returns an error.
+    ///
+    /// # Arguments
+    /// * `path` - The path to resolve
+    ///
+    /// # Returns
+    /// * `Ok(String)` - The resolved path (may be the same if no symlinks)
+    /// * `Err` - If path not found or symlink loop detected
+    ///
+    /// # Example
+    /// ```ignore
+    /// // If /link -> /target and /target is a file:
+    /// fs.resolve_symlinks("/link") // Returns Ok("/target")
+    ///
+    /// // If /a -> /b and /b -> /a (loop):
+    /// fs.resolve_symlinks("/a") // Returns Err(TooManyLinks)
+    /// ```
+    pub fn resolve_symlinks(&self, path: &str) -> io::Result<String> {
+        self.resolve_symlinks_internal(path, 0)
+    }
+
+    /// Internal symlink resolution with depth tracking
+    fn resolve_symlinks_internal(&self, path: &str, depth: usize) -> io::Result<String> {
+        if depth > Self::MAX_SYMLINK_DEPTH {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "too many levels of symbolic links (possible loop)",
+            ));
+        }
+
+        let normalized = Self::normalize_path(path);
+
+        match self.nodes.get(&normalized) {
+            Some(Node::Symlink(target)) => {
+                // Resolve the symlink target
+                let resolved_target = if target.starts_with('/') {
+                    // Absolute symlink
+                    target.clone()
+                } else {
+                    // Relative symlink - resolve relative to symlink's parent
+                    match Self::parent_path(&normalized) {
+                        Some(parent) => format!("{}/{}", parent, target),
+                        None => format!("/{}", target),
+                    }
+                };
+
+                // Recursively resolve in case target is also a symlink
+                self.resolve_symlinks_internal(&resolved_target, depth + 1)
+            }
+            Some(_) => {
+                // Not a symlink, return the normalized path
+                Ok(normalized)
+            }
+            None => {
+                // Path doesn't exist - could be a path with symlinks in parent
+                // Try to resolve parent directories that might be symlinks
+                self.resolve_path_components(&normalized, depth)
+            }
+        }
+    }
+
+    /// Resolve a path component by component, following symlinks
+    fn resolve_path_components(&self, path: &str, depth: usize) -> io::Result<String> {
+        if depth > Self::MAX_SYMLINK_DEPTH {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "too many levels of symbolic links (possible loop)",
+            ));
+        }
+
+        let normalized = Self::normalize_path(path);
+        if normalized == "/" {
+            return Ok("/".to_string());
+        }
+
+        // Split into components and resolve each
+        let components: Vec<&str> = normalized.split('/').filter(|s| !s.is_empty()).collect();
+        let mut resolved = String::new();
+
+        for component in components {
+            let current_path = format!("{}/{}", resolved, component);
+
+            match self.nodes.get(&current_path) {
+                Some(Node::Symlink(target)) => {
+                    // Resolve the symlink
+                    let resolved_target = if target.starts_with('/') {
+                        target.clone()
+                    } else {
+                        if resolved.is_empty() {
+                            format!("/{}", target)
+                        } else {
+                            format!("{}/{}", resolved, target)
+                        }
+                    };
+
+                    // Recursively resolve the symlink target
+                    resolved = self.resolve_symlinks_internal(&resolved_target, depth + 1)?;
+                }
+                Some(_) => {
+                    // Regular file or directory
+                    resolved = current_path;
+                }
+                None => {
+                    // Path component doesn't exist
+                    return Err(io::Error::new(
+                        io::ErrorKind::NotFound,
+                        format!("path not found: {}", current_path),
+                    ));
+                }
+            }
+        }
+
+        if resolved.is_empty() {
+            Ok("/".to_string())
+        } else {
+            Ok(resolved)
+        }
+    }
+
+    /// Check if a path is a symlink (without following it)
+    pub fn is_symlink(&self, path: &str) -> bool {
+        let normalized = Self::normalize_path(path);
+        matches!(self.nodes.get(&normalized), Some(Node::Symlink(_)))
     }
 }
 
@@ -1279,5 +1409,124 @@ mod tests {
 
         let target = fs.read_link("/link2").unwrap();
         assert_eq!(target, "/original/target");
+    }
+
+    // ============ Symlink Loop Detection ============
+
+    /// Helper to create a file in tests
+    fn create_test_file(fs: &mut MemoryFs, path: &str) {
+        let handle = fs
+            .open(path, OpenOptions::new().write(true).create(true))
+            .unwrap();
+        fs.close(handle).unwrap();
+    }
+
+    #[test]
+    fn test_resolve_symlink_simple() {
+        let mut fs = MemoryFs::new();
+
+        // Create a file and a symlink to it
+        create_test_file(&mut fs, "/target.txt");
+        fs.symlink("/target.txt", "/link.txt").unwrap();
+
+        // Resolve the symlink
+        let resolved = fs.resolve_symlinks("/link.txt").unwrap();
+        assert_eq!(resolved, "/target.txt");
+    }
+
+    #[test]
+    fn test_resolve_symlink_chain() {
+        let mut fs = MemoryFs::new();
+
+        // Create a chain: link1 -> link2 -> link3 -> file
+        create_test_file(&mut fs, "/file.txt");
+        fs.symlink("/file.txt", "/link3").unwrap();
+        fs.symlink("/link3", "/link2").unwrap();
+        fs.symlink("/link2", "/link1").unwrap();
+
+        // Resolve the chain
+        let resolved = fs.resolve_symlinks("/link1").unwrap();
+        assert_eq!(resolved, "/file.txt");
+    }
+
+    #[test]
+    fn test_resolve_symlink_loop_direct() {
+        let mut fs = MemoryFs::new();
+
+        // Create a direct loop: a -> b -> a
+        fs.symlink("/b", "/a").unwrap();
+        fs.symlink("/a", "/b").unwrap();
+
+        // Should fail with loop detection
+        let result = fs.resolve_symlinks("/a");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("too many levels of symbolic links"));
+    }
+
+    #[test]
+    fn test_resolve_symlink_loop_self() {
+        let mut fs = MemoryFs::new();
+
+        // Create a self-referencing symlink: a -> a
+        fs.symlink("/a", "/a").unwrap();
+
+        // Should fail with loop detection
+        let result = fs.resolve_symlinks("/a");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_resolve_symlink_loop_long_chain() {
+        let mut fs = MemoryFs::new();
+
+        // Create a long chain that eventually loops back
+        // link0 -> link1 -> link2 -> ... -> link50 -> link0
+        for i in 0..50 {
+            let target = format!("/link{}", (i + 1) % 51);
+            let link = format!("/link{}", i);
+            fs.symlink(&target, &link).unwrap();
+        }
+        fs.symlink("/link0", "/link50").unwrap();
+
+        // Should fail with loop detection
+        let result = fs.resolve_symlinks("/link0");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_resolve_symlink_relative() {
+        let mut fs = MemoryFs::new();
+
+        // Create directory structure with relative symlink
+        fs.create_dir("/dir").unwrap();
+        create_test_file(&mut fs, "/dir/target.txt");
+        fs.symlink("target.txt", "/dir/link.txt").unwrap(); // relative symlink
+
+        // Resolve the relative symlink
+        let resolved = fs.resolve_symlinks("/dir/link.txt").unwrap();
+        assert_eq!(resolved, "/dir/target.txt");
+    }
+
+    #[test]
+    fn test_is_symlink() {
+        let mut fs = MemoryFs::new();
+
+        create_test_file(&mut fs, "/file.txt");
+        fs.create_dir("/dir").unwrap();
+        fs.symlink("/file.txt", "/link.txt").unwrap();
+
+        assert!(!fs.is_symlink("/file.txt"));
+        assert!(!fs.is_symlink("/dir"));
+        assert!(fs.is_symlink("/link.txt"));
+        assert!(!fs.is_symlink("/nonexistent"));
+    }
+
+    #[test]
+    fn test_max_symlink_depth_constant() {
+        // Verify the constant is set to POSIX standard
+        assert_eq!(MemoryFs::MAX_SYMLINK_DEPTH, 40);
     }
 }

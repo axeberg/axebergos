@@ -3,8 +3,15 @@
 //! Provides Unix-like user and group abstractions:
 //! - User database (like /etc/passwd)
 //! - Group database (like /etc/group)
-//! - Password hashing (simplified)
+//! - Password hashing with salted key stretching
 //! - User/group lookups
+//!
+//! # Security
+//!
+//! Passwords are hashed using a salted key-stretching algorithm:
+//! - 16-byte cryptographically random salt per password
+//! - 10,000 rounds of hashing to slow brute-force attacks
+//! - Stored as "salt_hex:hash_hex"
 
 use std::collections::HashMap;
 
@@ -185,17 +192,35 @@ impl User {
         }
     }
 
-    /// Check password (simplified hash)
+    /// Check password against stored hash
+    ///
+    /// Returns true if:
+    /// - No password is set (account allows passwordless login)
+    /// - The provided password matches the stored hash
     pub fn check_password(&self, password: &str) -> bool {
         match &self.password_hash {
             None => true, // No password set = allow
-            Some(hash) => simple_hash(password) == *hash,
+            Some(hash) => verify_password(password, hash),
         }
     }
 
-    /// Set password
+    /// Set password using secure salted hashing
+    ///
+    /// The password is hashed with:
+    /// - A cryptographically random 16-byte salt
+    /// - 10,000 rounds of key stretching
     pub fn set_password(&mut self, password: &str) {
-        self.password_hash = Some(simple_hash(password));
+        self.password_hash = Some(hash_password(password));
+    }
+
+    /// Lock the account (disable password login)
+    pub fn lock_account(&mut self) {
+        self.password_hash = Some("!".to_string());
+    }
+
+    /// Check if account is locked
+    pub fn is_locked(&self) -> bool {
+        matches!(&self.password_hash, Some(h) if h == "!" || h == "*")
     }
 }
 
@@ -296,8 +321,12 @@ impl UserDb {
         user.home = home.to_string();
         if name == "root" {
             user.shell = "/bin/sh".to_string();
-            // Set default root password to "root"
-            user.set_password("root");
+            // Root account starts with no password (passwordless login allowed)
+            // In a real system, you would either:
+            // 1. Lock the account until first boot setup
+            // 2. Require password setup during installation
+            // For this educational OS, we allow passwordless root initially
+            // Use `passwd root` to set a password
         }
         self.users.insert(uid, user);
         self.users_by_name.insert(name.to_string(), uid);
@@ -582,8 +611,147 @@ impl UserDb {
     }
 }
 
-/// Simple password hashing (NOT cryptographically secure, just for demo)
-fn simple_hash(password: &str) -> String {
+/// Password hashing configuration
+const HASH_ROUNDS: u32 = 10_000;
+const SALT_LENGTH: usize = 16;
+
+/// Generate cryptographically random bytes for salt
+fn generate_salt() -> [u8; SALT_LENGTH] {
+    let mut salt = [0u8; SALT_LENGTH];
+    // Use getrandom which works in both native and WASM environments
+    if getrandom::fill(&mut salt).is_err() {
+        // Fallback: use a timestamp-based seed (less secure, but better than nothing)
+        // This should rarely happen as getrandom supports WASM with wasm_js feature
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        for (i, byte) in salt.iter_mut().enumerate() {
+            *byte = ((now >> (i * 8)) & 0xff) as u8;
+        }
+    }
+    salt
+}
+
+/// Hash a password with a given salt using key stretching
+///
+/// Uses a simple but effective key-stretching approach:
+/// - Combines password and salt
+/// - Applies multiple rounds of hashing to slow brute-force attacks
+fn hash_with_salt(password: &str, salt: &[u8]) -> [u8; 32] {
+    // Initial state: combine password bytes and salt
+    let mut state = [0u8; 32];
+
+    // Mix in password
+    for (i, byte) in password.bytes().enumerate() {
+        state[i % 32] ^= byte;
+        state[(i + 17) % 32] = state[(i + 17) % 32].wrapping_add(byte);
+    }
+
+    // Mix in salt
+    for (i, byte) in salt.iter().enumerate() {
+        state[(i + 7) % 32] ^= byte;
+        state[(i + 23) % 32] = state[(i + 23) % 32].wrapping_add(*byte);
+    }
+
+    // Key stretching: multiple rounds of mixing
+    for round in 0..HASH_ROUNDS {
+        let round_byte = (round & 0xff) as u8;
+
+        // Forward pass
+        for i in 0..32 {
+            let prev = state[(i + 31) % 32];
+            let next = state[(i + 1) % 32];
+            state[i] = state[i]
+                .wrapping_add(prev)
+                .wrapping_mul(33)
+                .wrapping_add(next)
+                .wrapping_add(round_byte);
+        }
+
+        // Backward pass for better diffusion
+        for i in (0..32).rev() {
+            let prev = state[(i + 1) % 32];
+            let salt_byte = salt[i % salt.len()];
+            state[i] = state[i]
+                .wrapping_mul(17)
+                .wrapping_add(prev)
+                .wrapping_add(salt_byte);
+        }
+    }
+
+    state
+}
+
+/// Hash a password with a new random salt
+/// Returns the hash in format "salt_hex:hash_hex"
+fn hash_password(password: &str) -> String {
+    let salt = generate_salt();
+    let hash = hash_with_salt(password, &salt);
+
+    // Format: salt_hex:hash_hex
+    let salt_hex: String = salt.iter().map(|b| format!("{:02x}", b)).collect();
+    let hash_hex: String = hash.iter().map(|b| format!("{:02x}", b)).collect();
+
+    format!("{}:{}", salt_hex, hash_hex)
+}
+
+/// Verify a password against a stored hash
+/// Expects hash in format "salt_hex:hash_hex"
+fn verify_password(password: &str, stored_hash: &str) -> bool {
+    let parts: Vec<&str> = stored_hash.split(':').collect();
+
+    if parts.len() != 2 {
+        // Invalid format - check if this is a legacy DJB2 hash (16 hex chars)
+        // For backwards compatibility during migration
+        if stored_hash.len() == 16 && stored_hash.chars().all(|c| c.is_ascii_hexdigit()) {
+            return legacy_hash(password) == stored_hash;
+        }
+        return false;
+    }
+
+    let salt_hex = parts[0];
+    let expected_hash_hex = parts[1];
+
+    // Parse salt from hex
+    if salt_hex.len() != SALT_LENGTH * 2 {
+        return false;
+    }
+
+    let mut salt = [0u8; SALT_LENGTH];
+    for (i, chunk) in salt_hex.as_bytes().chunks(2).enumerate() {
+        if i >= SALT_LENGTH {
+            break;
+        }
+        let hex_str = std::str::from_utf8(chunk).unwrap_or("00");
+        salt[i] = u8::from_str_radix(hex_str, 16).unwrap_or(0);
+    }
+
+    // Compute hash with extracted salt
+    let computed_hash = hash_with_salt(password, &salt);
+    let computed_hex: String = computed_hash.iter().map(|b| format!("{:02x}", b)).collect();
+
+    // Constant-time comparison to prevent timing attacks
+    constant_time_compare(&computed_hex, expected_hash_hex)
+}
+
+/// Constant-time string comparison to prevent timing attacks
+fn constant_time_compare(a: &str, b: &str) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+
+    let mut result = 0u8;
+    for (byte_a, byte_b) in a.bytes().zip(b.bytes()) {
+        result |= byte_a ^ byte_b;
+    }
+
+    result == 0
+}
+
+/// Legacy DJB2 hash for backwards compatibility
+/// Only used to verify old passwords - new passwords use the secure hash
+fn legacy_hash(password: &str) -> String {
     let mut hash: u64 = 5381;
     for byte in password.bytes() {
         hash = hash.wrapping_mul(33).wrapping_add(byte as u64);
@@ -682,10 +850,57 @@ mod tests {
         // No password set
         assert!(user.check_password("anything"));
 
-        // Set password
+        // Set password with secure hashing
         user.set_password("secret");
         assert!(user.check_password("secret"));
         assert!(!user.check_password("wrong"));
+        assert!(!user.check_password("")); // Empty password should fail
+        assert!(!user.check_password("Secret")); // Case sensitive
+    }
+
+    #[test]
+    fn test_password_hash_format() {
+        // Test that password hashes have correct format (salt:hash)
+        let hash = hash_password("testpassword");
+        let parts: Vec<&str> = hash.split(':').collect();
+        assert_eq!(parts.len(), 2, "Hash should be in salt:hash format");
+        assert_eq!(parts[0].len(), 32, "Salt should be 32 hex chars (16 bytes)");
+        assert_eq!(parts[1].len(), 64, "Hash should be 64 hex chars (32 bytes)");
+    }
+
+    #[test]
+    fn test_password_uniqueness() {
+        // Same password should produce different hashes (due to random salt)
+        let hash1 = hash_password("samepassword");
+        let hash2 = hash_password("samepassword");
+        assert_ne!(hash1, hash2, "Same password should produce different hashes");
+
+        // But both should verify correctly
+        assert!(verify_password("samepassword", &hash1));
+        assert!(verify_password("samepassword", &hash2));
+    }
+
+    #[test]
+    fn test_account_locking() {
+        let mut user = User::new("test", Uid(1), Gid(1));
+
+        // Set password first
+        user.set_password("secret");
+        assert!(user.check_password("secret"));
+        assert!(!user.is_locked());
+
+        // Lock account
+        user.lock_account();
+        assert!(user.is_locked());
+        assert!(!user.check_password("secret")); // Can't login to locked account
+    }
+
+    #[test]
+    fn test_legacy_hash_compatibility() {
+        // Test that legacy DJB2 hashes still work for verification
+        let legacy = legacy_hash("oldpassword");
+        assert!(verify_password("oldpassword", &legacy));
+        assert!(!verify_password("wrongpassword", &legacy));
     }
 
     #[test]
