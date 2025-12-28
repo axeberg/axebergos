@@ -300,4 +300,4 @@ Benefits:
 
 - [Syscall Interface](../kernel/syscalls.md) - File syscalls
 - [Kernel Objects](../kernel/objects.md) - FileObject details
-- [Future Work](../future-work.md) - Planned enhancements
+- [Work Tracker](../WORK_TRACKER.md) - All work items and planned enhancements

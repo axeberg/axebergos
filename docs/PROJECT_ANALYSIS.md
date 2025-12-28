@@ -384,7 +384,7 @@ From `DOCUMENTATION_REVIEW.md`:
 - **Distributed filesystem** - Sync files across browser instances
 - **Containers** - Lightweight process isolation
 
-#### 6.7 Bare Metal Port (from future-work.md)
+#### 6.7 Bare Metal Port
 - **x86_64 bootloader** - Boot without browser
 - **Hardware abstraction layer** - Abstract browser/hardware differences
 - **Real interrupt handling** - Hardware timer, keyboard interrupts

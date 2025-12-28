@@ -499,6 +499,76 @@ This document tracks all identified issues, improvements, and feature work for A
 
 ---
 
+## Completed Features (Historical)
+
+The following features have been fully implemented. This section provides a reference to completed work.
+
+### Executor
+
+| Feature | Source | Status |
+|---------|--------|--------|
+| Task cancellation | `src/kernel/executor.rs` | ✅ Implemented |
+| Timeouts | `src/kernel/executor.rs` | ✅ Implemented |
+| Work stealing | `src/kernel/work_stealing/` | ✅ Implemented |
+| Task groups | `src/kernel/executor.rs` | ✅ Implemented |
+
+### IPC
+
+| Feature | Source | Status |
+|---------|--------|--------|
+| Bounded channels | `src/kernel/ipc.rs` | ✅ Implemented |
+| Waker-based async | `src/kernel/ipc.rs` | ✅ Implemented |
+
+### Memory
+
+| Feature | Source | Status |
+|---------|--------|--------|
+| Memory-mapped files | `src/kernel/memory.rs` | ✅ Implemented |
+| Copy-on-write | `src/kernel/memory.rs` | ✅ Implemented |
+| Memory pools | `src/kernel/memory.rs` | ✅ Implemented |
+| OPFS persistence | `src/kernel/memory_persist.rs` | ✅ Implemented |
+
+### VFS
+
+| Feature | Source | Status |
+|---------|--------|--------|
+| Layered filesystem | `src/vfs/layered.rs` | ✅ Implemented |
+
+### WASM
+
+| Feature | Source | Status |
+|---------|--------|--------|
+| Command ABI v1 | `src/kernel/wasm/abi.rs` | ✅ Implemented |
+| WASM loader/executor | `src/kernel/wasm/` | ✅ Implemented |
+| Package manager | `src/kernel/pkg/` | ✅ Implemented |
+| WASI Preview2 | `src/kernel/wasm/wasi_preview2.rs` | ✅ Implemented |
+
+### Compositor
+
+| Feature | Source | Status |
+|---------|--------|--------|
+| WebGPU rendering | `src/compositor/surface.rs` | ✅ Implemented |
+| BSP tiling layout | `src/compositor/layout.rs` | ✅ Implemented |
+| Text rendering | `src/compositor/text.rs` | ✅ Implemented |
+| Themes | `src/compositor/mod.rs` | ✅ Implemented |
+| Animations | `src/compositor/mod.rs` | ✅ Implemented |
+| Window decorations | `src/compositor/mod.rs` | ✅ Implemented |
+
+---
+
+## Implementation Notes
+
+For detailed documentation on each subsystem, see:
+
+- [Executor](kernel/executor.md)
+- [IPC](kernel/ipc.md)
+- [Memory](kernel/memory.md)
+- [VFS](userspace/vfs.md)
+- [WASM Modules](kernel/wasm-modules.md)
+- [Compositor](plans/compositor.md)
+
+---
+
 ## How to Update This Document
 
 When completing a task:
@@ -506,6 +576,7 @@ When completing a task:
 2. Add completion date
 3. Update Quick Stats table
 4. Add entry to Progress Log
+5. If a feature is fully implemented, move it to the "Completed Features" section
 
 Status Legend:
 - ⬜ TODO - Not started
