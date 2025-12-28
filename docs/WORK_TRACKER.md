@@ -1,0 +1,515 @@
+# AxebergOS Work Tracker
+
+**Created**: 2025-12-28
+**Last Updated**: 2025-12-28
+
+This document tracks all identified issues, improvements, and feature work for AxebergOS.
+
+---
+
+## Quick Stats
+
+| Category | Total | Done | In Progress | Remaining |
+|----------|-------|------|-------------|-----------|
+| Security (Critical) | 2 | 2 | 0 | 0 |
+| Security (High) | 5 | 2 | 0 | 3 |
+| Security (Medium) | 8 | 0 | 0 | 8 |
+| Code Quality | 10 | 0 | 0 | 10 |
+| Missing Features | 15 | 0 | 0 | 15 |
+| Documentation | 5 | 0 | 0 | 5 |
+| Future Features | 12 | 0 | 0 | 12 |
+| **TOTAL** | **57** | **4** | **0** | **53** |
+
+---
+
+## Phase 1: Security Critical (Do First)
+
+### SEC-001: Remove Hardcoded Root Password
+- **Priority**: 🔴 CRITICAL
+- **Status**: ✅ DONE (2025-12-28)
+- **File**: `src/kernel/users.rs:299-300`
+- **Issue**: Root password hardcoded as "root"
+- **Fix**: Root account now starts with no password (passwordless login). Users can set password with `passwd root`.
+- **Estimate**: Small
+
+### SEC-002: Implement Secure Password Hashing
+- **Priority**: 🔴 CRITICAL
+- **Status**: ✅ DONE (2025-12-28)
+- **File**: `src/kernel/users.rs:585-592`
+- **Issue**: Using DJB2 (non-cryptographic) with no salt
+- **Fix**: Implemented salted key-stretching hash with 16-byte random salt and 10,000 rounds. Includes legacy hash support for backwards compatibility.
+- **Estimate**: Medium
+
+---
+
+## Phase 2: Security High Priority
+
+### SEC-003: Fix Kernel Panic Points
+- **Priority**: 🟠 HIGH
+- **Status**: ✅ DONE (2025-12-28)
+- **File**: `src/kernel/syscall.rs` (50+ locations)
+- **Issue**: `.unwrap()` calls can crash kernel
+- **Fix**: Added `get_current_process()` and `get_current_process_mut()` helper methods that return `SyscallResult`. Replaced all `.unwrap()` calls with proper error handling.
+- **Estimate**: Medium
+
+### SEC-004: Add Symlink Loop Detection
+- **Priority**: 🟠 HIGH
+- **Status**: ✅ DONE (2025-12-28)
+- **File**: `src/vfs/memory.rs`
+- **Issue**: Recursive symlinks cause stack overflow
+- **Fix**: Added `resolve_symlinks()` method with MAX_SYMLINK_DEPTH=40 (POSIX standard). Includes component-by-component resolution for paths with symlinks.
+- **Estimate**: Small
+
+### SEC-005: Fix TOCTOU Race Conditions
+- **Priority**: 🟠 HIGH
+- **Status**: ⬜ TODO
+- **File**: `src/kernel/syscall.rs:1291-1322, 1386-1400`
+- **Issue**: Permission check and file access are separate operations
+- **Fix**: Implement atomic stat-and-open
+- **Estimate**: Medium
+
+### SEC-006: Implement Setuid/Setgid Bit Processing
+- **Priority**: 🟠 HIGH
+- **Status**: ⬜ TODO
+- **File**: `src/kernel/syscall.rs` (spawn/exec)
+- **Issue**: Setuid binaries don't change effective UID
+- **Fix**: Check bits during process creation, adjust euid/egid
+- **Estimate**: Medium
+
+### SEC-007: Add Privilege Dropping for Fork
+- **Priority**: 🟠 HIGH
+- **Status**: ⬜ TODO
+- **File**: `src/kernel/syscall.rs:663-699`
+- **Issue**: Child inherits all parent privileges
+- **Fix**: Implement setuid/setgid capability to drop privileges
+- **Estimate**: Medium
+
+---
+
+## Phase 3: Security Medium Priority
+
+### SEC-008: Add File Descriptor Limits
+- **Priority**: 🟡 MEDIUM
+- **Status**: ⬜ TODO
+- **File**: `src/kernel/process.rs:500-510`
+- **Issue**: Unlimited FDs per process (DoS risk)
+- **Fix**: Add MAX_FDS_PER_PROCESS (default 1024)
+- **Estimate**: Small
+
+### SEC-009: Implement Resource Limits (rlimit)
+- **Priority**: 🟡 MEDIUM
+- **Status**: ⬜ TODO
+- **File**: `src/kernel/process.rs`
+- **Issue**: No RLIMIT_* enforcement
+- **Fix**: Add RLIMIT_NPROC, RLIMIT_FSIZE, RLIMIT_STACK, RLIMIT_CPU
+- **Estimate**: Medium
+
+### SEC-010: Restrict /proc Information
+- **Priority**: 🟡 MEDIUM
+- **Status**: ⬜ TODO
+- **File**: `src/kernel/procfs.rs`
+- **Issue**: Sensitive info exposed (environ, cmdline, maps)
+- **Fix**: Only allow process to read its own /proc/self/*
+- **Estimate**: Small
+
+### SEC-011: Fix Path Traversal in Permission Checks
+- **Priority**: 🟡 MEDIUM
+- **Status**: ⬜ TODO
+- **File**: `src/kernel/syscall.rs:1324-1336`
+- **Issue**: Only checks parent, not full path
+- **Fix**: Check execute permission on ALL directories in path
+- **Estimate**: Medium
+
+### SEC-012: Add Capability Dropping
+- **Priority**: 🟡 MEDIUM
+- **Status**: ⬜ TODO
+- **File**: `src/kernel/syscall.rs:2169-2235`
+- **Issue**: Can't permanently drop privileges
+- **Fix**: Track saved-uid/saved-gid, prevent re-escalation
+- **Estimate**: Medium
+
+### SEC-013: Fix Group Change Logic
+- **Priority**: 🟡 MEDIUM
+- **Status**: ⬜ TODO
+- **File**: `src/kernel/syscall.rs:2344-2353`
+- **Issue**: Non-owners can change file groups
+- **Fix**: Require ownership for chown operations
+- **Estimate**: Small
+
+### SEC-014: Implement Umask
+- **Priority**: 🟡 MEDIUM
+- **Status**: ⬜ TODO
+- **File**: `src/vfs/memory.rs:295-296`
+- **Issue**: Files always created with 644
+- **Fix**: Apply umask during file creation
+- **Estimate**: Small
+
+### SEC-015: Implement Sticky Bit
+- **Priority**: 🟡 MEDIUM
+- **Status**: ⬜ TODO
+- **File**: `src/kernel/users.rs:56-58`
+- **Issue**: Stored but not enforced
+- **Fix**: Only owner can delete files in sticky directories
+- **Estimate**: Small
+
+---
+
+## Phase 4: Code Quality
+
+### CQ-001: Refactor Kernel God Object
+- **Priority**: 🟡 MEDIUM
+- **Status**: ⬜ TODO
+- **File**: `src/kernel/syscall.rs:401-444`
+- **Issue**: Kernel struct has 19 fields
+- **Fix**: Split into subsystems (ProcessManager, VfsManager, etc.)
+- **Estimate**: Large
+
+### CQ-002: Extract File Opening Helper
+- **Priority**: 🟢 LOW
+- **Status**: ⬜ TODO
+- **File**: `src/kernel/syscall.rs:820-930, 1386-1450`
+- **Issue**: File opening logic duplicated 3 times
+- **Fix**: Create `create_file_object()` helper
+- **Estimate**: Small
+
+### CQ-003: Fix Unsafe Integer Casts
+- **Priority**: 🟡 MEDIUM
+- **Status**: ⬜ TODO
+- **File**: `src/kernel/syscall.rs:1142, 1154, 2095`
+- **Issue**: Unchecked i32 to u32 casts
+- **Fix**: Use checked arithmetic or validate ranges
+- **Estimate**: Small
+
+### CQ-004: Refactor Complex Functions
+- **Priority**: 🟢 LOW
+- **Status**: ⬜ TODO
+- **Files**:
+  - `src/shell/executor.rs:85-219` (ProgramRegistry::new)
+  - `src/shell/executor.rs:640-742` (execute_piped)
+  - `src/kernel/syscall.rs:1125-1203` (sys_waitpid)
+- **Issue**: 100+ line functions
+- **Fix**: Break into smaller focused functions
+- **Estimate**: Medium
+
+### CQ-005: Use Builder Pattern for Process
+- **Priority**: 🟢 LOW
+- **Status**: ⬜ TODO
+- **File**: `src/kernel/process.rs:247`
+- **Issue**: `with_environ()` has 10 parameters
+- **Fix**: Replace with ProcessBuilder pattern
+- **Estimate**: Medium
+
+### CQ-006: Remove Dead Code
+- **Priority**: 🟢 LOW
+- **Status**: ⬜ TODO
+- **File**: `src/kernel/syscall.rs:861`
+- **Issue**: Unused environ clone
+- **Fix**: Remove dead code, fix any other instances
+- **Estimate**: Small
+
+### CQ-007: Replace Syscall Name Match with Macro
+- **Priority**: 🟢 LOW
+- **Status**: ⬜ TODO
+- **File**: `src/kernel/syscall.rs:144-212`
+- **Issue**: 68-line repetitive match statement
+- **Fix**: Use derive macro or const array lookup
+- **Estimate**: Small
+
+### CQ-008: Fix Event Handler Panics
+- **Priority**: 🟡 MEDIUM
+- **Status**: ⬜ TODO
+- **File**: `src/kernel/events.rs:181-297`
+- **Issue**: 5+ panic points in event handling
+- **Fix**: Return Result instead of panicking
+- **Estimate**: Small
+
+### CQ-009: Complete Async Pipeline Support
+- **Priority**: 🟡 MEDIUM
+- **Status**: ⬜ TODO
+- **File**: `src/shell/executor.rs:624`
+- **Issue**: TODO comment, falls back to sync
+- **Fix**: Implement full async pipeline execution
+- **Estimate**: Medium
+
+### CQ-010: Add FD_CLOEXEC Support
+- **Priority**: 🟢 LOW
+- **Status**: ⬜ TODO
+- **File**: `src/kernel/process.rs:500-510`
+- **Issue**: FDs leak to child processes
+- **Fix**: Add flags field to track close-on-exec
+- **Estimate**: Small
+
+---
+
+## Phase 5: Missing Features
+
+### FEAT-001: File Timestamps
+- **Priority**: 🟡 MEDIUM
+- **Status**: ⬜ TODO
+- **File**: `src/vfs/memory.rs`
+- **Issue**: No atime, mtime, ctime
+- **Fix**: Add timestamp fields to metadata, update on access/modify
+- **Estimate**: Medium
+
+### FEAT-002: Hard Links
+- **Priority**: 🟢 LOW
+- **Status**: ⬜ TODO
+- **File**: `src/vfs/memory.rs`
+- **Issue**: Only symlinks supported
+- **Fix**: Add inode tracking, link count
+- **Estimate**: Medium
+
+### FEAT-003: File Locking (fcntl/flock)
+- **Priority**: 🟡 MEDIUM
+- **Status**: ⬜ TODO
+- **File**: `src/kernel/syscall.rs`
+- **Issue**: No file locking mechanism
+- **Fix**: Implement advisory and mandatory locks
+- **Estimate**: Medium
+
+### FEAT-004: True Fork Semantics
+- **Priority**: 🟠 HIGH
+- **Status**: ⬜ TODO
+- **File**: `src/kernel/process.rs:423-465`
+- **Issue**: Fork is simulated, not real
+- **Fix**: Implement proper process spawning
+- **Estimate**: Large
+
+### FEAT-005: Complete exec() Family
+- **Priority**: 🟠 HIGH
+- **Status**: ⬜ TODO
+- **File**: `src/kernel/syscall.rs`
+- **Issue**: execve incomplete
+- **Fix**: Proper process image replacement
+- **Estimate**: Large
+
+### FEAT-006: Fix waitpid()
+- **Priority**: 🟠 HIGH
+- **Status**: ⬜ TODO
+- **File**: `src/kernel/syscall.rs:1200`
+- **Issue**: Often returns "no child"
+- **Fix**: Proper child process tracking and waiting
+- **Estimate**: Medium
+
+### FEAT-007: Signal Masking
+- **Priority**: 🟡 MEDIUM
+- **Status**: ⬜ TODO
+- **File**: `src/kernel/signal.rs`
+- **Issue**: No sigprocmask support
+- **Fix**: Implement signal mask per process
+- **Estimate**: Medium
+
+### FEAT-008: Complete Message Queues
+- **Priority**: 🟢 LOW
+- **Status**: ⬜ TODO
+- **File**: `src/kernel/msgqueue.rs`
+- **Issue**: Exists but incomplete
+- **Fix**: Full msgget/msgsnd/msgrcv implementation
+- **Estimate**: Medium
+
+### FEAT-009: Complete Semaphores
+- **Priority**: 🟢 LOW
+- **Status**: ⬜ TODO
+- **File**: `src/kernel/semaphore.rs`
+- **Issue**: Minimal implementation
+- **Fix**: Full sem_open/sem_wait/sem_post
+- **Estimate**: Medium
+
+### FEAT-010: Unix Domain Sockets
+- **Priority**: 🟢 LOW
+- **Status**: ⬜ TODO
+- **File**: New
+- **Issue**: No local socket IPC
+- **Fix**: Implement AF_UNIX socket family
+- **Estimate**: Large
+
+### FEAT-011: Shell Functions
+- **Priority**: 🟢 LOW
+- **Status**: ⬜ TODO
+- **File**: `src/shell/parser.rs`
+- **Issue**: No function definitions
+- **Fix**: Add function parsing and execution
+- **Estimate**: Medium
+
+### FEAT-012: Shell Arrays
+- **Priority**: 🟢 LOW
+- **Status**: ⬜ TODO
+- **File**: `src/shell/parser.rs`
+- **Issue**: No array support
+- **Fix**: Implement bash-like arrays
+- **Estimate**: Medium
+
+### FEAT-013: Process Substitution
+- **Priority**: 🟢 LOW
+- **Status**: ⬜ TODO
+- **File**: `src/shell/parser.rs`
+- **Issue**: No <() or >() support
+- **Fix**: Implement process substitution syntax
+- **Estimate**: Medium
+
+### FEAT-014: Heredocs
+- **Priority**: 🟢 LOW
+- **Status**: ⬜ TODO
+- **File**: `src/shell/parser.rs`
+- **Issue**: No << EOF support
+- **Fix**: Implement heredoc parsing
+- **Estimate**: Small
+
+### FEAT-015: Process Priority (nice)
+- **Priority**: 🟢 LOW
+- **Status**: ⬜ TODO
+- **File**: `src/kernel/process.rs`
+- **Issue**: No scheduling priority
+- **Fix**: Add nice/setpriority syscalls
+- **Estimate**: Small
+
+---
+
+## Phase 6: Documentation
+
+### DOC-001: Sync Documentation with Code
+- **Priority**: 🟡 MEDIUM
+- **Status**: ⬜ TODO
+- **File**: Various in `docs/`
+- **Issue**: 70+ documented issues in DOCUMENTATION_REVIEW.md
+- **Fix**: Address critical/high priority doc issues
+- **Estimate**: Medium
+
+### DOC-002: Document Work Stealing Scheduler
+- **Priority**: 🟢 LOW
+- **Status**: ⬜ TODO
+- **File**: `docs/kernel/work-stealing.md` (new)
+- **Issue**: No documentation
+- **Fix**: Write architecture and usage docs
+- **Estimate**: Small
+
+### DOC-003: Document Layered Filesystem
+- **Priority**: 🟢 LOW
+- **Status**: ⬜ TODO
+- **File**: `docs/userspace/layered-fs.md` (new)
+- **Issue**: Recently added, no docs
+- **Fix**: Write usage and architecture docs
+- **Estimate**: Small
+
+### DOC-004: Add Integration Guides
+- **Priority**: 🟢 LOW
+- **Status**: ⬜ TODO
+- **File**: `docs/guides/` (new directory)
+- **Issue**: No guides for extending OS
+- **Topics**: Custom commands, VFS backends, new syscalls
+- **Estimate**: Medium
+
+### DOC-005: Update Man Pages for Implemented Options
+- **Priority**: 🟢 LOW
+- **Status**: ⬜ TODO
+- **File**: `man/`
+- **Issue**: 30+ man pages describe unimplemented options
+- **Fix**: Remove or mark unimplemented features
+- **Estimate**: Medium
+
+---
+
+## Phase 7: Future Features (Nice to Have)
+
+### FUT-001: Package Registry Infrastructure
+- **Priority**: 🟢 LOW
+- **Status**: ⬜ TODO (RFD exists)
+- **Reference**: `rfd/0001-package-registry.md`
+- **Description**: Server infrastructure for WASM packages
+- **Estimate**: Large
+
+### FUT-002: Capability-Based Security
+- **Priority**: 🟡 MEDIUM
+- **Status**: ⬜ TODO
+- **Description**: Fine-grained permissions beyond rwx
+- **Estimate**: Large
+
+### FUT-003: Process Sandboxing/Jails
+- **Priority**: 🟡 MEDIUM
+- **Status**: ⬜ TODO
+- **Description**: chroot-like isolation
+- **Estimate**: Medium
+
+### FUT-004: Kernel Visualization
+- **Priority**: 🟢 LOW
+- **Status**: ⬜ TODO
+- **Description**: Real-time view of processes, memory, scheduling
+- **Estimate**: Large
+
+### FUT-005: Terminal Multiplexer
+- **Priority**: 🟢 LOW
+- **Status**: ⬜ TODO
+- **Description**: tmux-like functionality
+- **Estimate**: Medium
+
+### FUT-006: Widget Toolkit
+- **Priority**: 🟢 LOW
+- **Status**: ⬜ TODO
+- **Description**: Basic UI components for graphical apps
+- **Estimate**: Large
+
+### FUT-007: Built-in Debugger
+- **Priority**: 🟢 LOW
+- **Status**: ⬜ TODO
+- **Description**: Step through WASM modules
+- **Estimate**: Large
+
+### FUT-008: Performance Profiler
+- **Priority**: 🟢 LOW
+- **Status**: ⬜ TODO
+- **Description**: CPU and memory analysis tools
+- **Estimate**: Medium
+
+### FUT-009: Virtual Network Stack
+- **Priority**: 🟢 LOW
+- **Status**: ⬜ TODO
+- **Description**: Simulated TCP/IP for education
+- **Estimate**: Large
+
+### FUT-010: Inter-Tab Communication
+- **Priority**: 🟢 LOW
+- **Status**: ⬜ TODO
+- **Description**: SharedArrayBuffer for multi-window OS
+- **Estimate**: Medium
+
+### FUT-011: P2P WebRTC
+- **Priority**: 🟢 LOW
+- **Status**: ⬜ TODO
+- **Description**: Decentralized file sharing between instances
+- **Estimate**: Large
+
+### FUT-012: Bare Metal Port
+- **Priority**: 🟢 LOW
+- **Status**: ⬜ TODO
+- **Description**: x86_64 bootloader, real hardware support
+- **Estimate**: Very Large
+
+---
+
+## Progress Log
+
+### 2025-12-28
+- Created work tracker document
+- Identified 57 work items across 7 categories
+- **SEC-001**: Removed hardcoded root password - root now starts with no password
+- **SEC-002**: Implemented secure password hashing with salted key-stretching (10,000 rounds)
+- **SEC-003**: Fixed 32+ kernel panic points by adding safe process accessor methods
+- **SEC-004**: Added symlink loop detection with POSIX standard 40-level depth limit
+- Total: 4 issues resolved, 53 remaining
+
+---
+
+## How to Update This Document
+
+When completing a task:
+1. Change status from `⬜ TODO` to `✅ DONE`
+2. Add completion date
+3. Update Quick Stats table
+4. Add entry to Progress Log
+
+Status Legend:
+- ⬜ TODO - Not started
+- 🔄 IN PROGRESS - Currently working on
+- ✅ DONE - Completed
+- ⏸️ BLOCKED - Waiting on something
+- ❌ WONTFIX - Decided not to fix

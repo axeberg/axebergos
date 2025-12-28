@@ -570,6 +570,31 @@ impl Kernel {
         self.current.and_then(|pid| self.processes.get_mut(&pid))
     }
 
+    /// Get the current process or return an error
+    ///
+    /// This is the safe version of `current_process()` for syscall handlers.
+    /// Returns `SyscallError::NoProcess` if no process is running.
+    fn get_current_process(&self) -> SyscallResult<&Process> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        self.processes.get(&current).ok_or(SyscallError::NoProcess)
+    }
+
+    /// Get the current process mutably or return an error
+    ///
+    /// This is the safe version of `current_process_mut()` for syscall handlers.
+    /// Returns `SyscallError::NoProcess` if no process is running.
+    fn get_current_process_mut(&mut self) -> SyscallResult<&mut Process> {
+        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        self.processes
+            .get_mut(&current)
+            .ok_or(SyscallError::NoProcess)
+    }
+
+    /// Get the current PID or return an error
+    fn get_current_pid(&self) -> SyscallResult<Pid> {
+        self.current.ok_or(SyscallError::NoProcess)
+    }
+
     pub fn set_current(&mut self, pid: Pid) {
         self.current = Some(pid);
     }
@@ -702,8 +727,7 @@ impl Kernel {
     /// The calling process becomes the session leader and process group leader.
     /// Returns the new session ID on success.
     pub fn sys_setsid(&mut self) -> SyscallResult<u32> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get_mut(&current).unwrap();
+        let process = self.get_current_process_mut()?;
 
         // Cannot create new session if already a process group leader
         if process.pgid.0 == process.pid.0 && process.is_session_leader {
@@ -711,9 +735,10 @@ impl Kernel {
         }
 
         // Create new session
-        let new_sid = Sid::from_pid(current);
+        let pid = process.pid;
+        let new_sid = Sid::from_pid(pid);
         process.sid = new_sid;
-        process.pgid = Pgid::from_pid(current);
+        process.pgid = Pgid::from_pid(pid);
         process.is_session_leader = true;
         process.ctty = None; // Lose controlling terminal
 
@@ -722,7 +747,10 @@ impl Kernel {
 
     /// getsid - Get session ID (like Linux getsid(2))
     pub fn sys_getsid(&self, pid: Option<Pid>) -> SyscallResult<u32> {
-        let target_pid = pid.unwrap_or_else(|| self.current.unwrap());
+        let target_pid = match pid {
+            Some(p) => p,
+            None => self.get_current_pid()?,
+        };
         let process = self
             .processes
             .get(&target_pid)
@@ -811,7 +839,10 @@ impl Kernel {
         };
 
         // Add to process file table
-        let process = self.processes.get_mut(&current).unwrap();
+        let process = self
+            .processes
+            .get_mut(&current)
+            .ok_or(SyscallError::NoProcess)?;
         let fd = process.files.alloc(handle);
         Ok(fd)
     }
@@ -945,8 +976,7 @@ impl Kernel {
 
     /// Close a file descriptor
     pub fn sys_close(&mut self, fd: Fd) -> SyscallResult<()> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get_mut(&current).unwrap();
+        let process = self.get_current_process_mut()?;
 
         let handle = process.files.remove(fd).ok_or(SyscallError::BadFd)?;
 
@@ -984,7 +1014,10 @@ impl Kernel {
 
         // Allocate two fds pointing to same pipe
         // (In a real OS these would be separate read/write ends)
-        let process = self.processes.get_mut(&current).unwrap();
+        let process = self
+            .processes
+            .get_mut(&current)
+            .ok_or(SyscallError::NoProcess)?;
         let read_fd = process.files.alloc(handle);
         let write_fd = process.files.alloc(handle);
 
@@ -1003,7 +1036,10 @@ impl Kernel {
         let window = WindowObject::new(window_id);
         let handle = self.objects.insert(KernelObject::Window(window));
 
-        let process = self.processes.get_mut(&current).unwrap();
+        let process = self
+            .processes
+            .get_mut(&current)
+            .ok_or(SyscallError::NoProcess)?;
         let fd = process.files.alloc(handle);
 
         Ok(fd)
@@ -1011,11 +1047,11 @@ impl Kernel {
 
     /// Duplicate a file descriptor
     pub fn sys_dup(&mut self, fd: Fd) -> SyscallResult<Fd> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get_mut(&current).unwrap();
-
-        // Get the handle for the existing fd
-        let handle = process.files.get(fd).ok_or(SyscallError::BadFd)?;
+        // Get the handle for the existing fd (using scoped borrow)
+        let handle = {
+            let process = self.get_current_process()?;
+            process.files.get(fd).ok_or(SyscallError::BadFd)?
+        };
 
         // Retain the object (increment refcount)
         if !self.objects.retain(handle) {
@@ -1023,14 +1059,14 @@ impl Kernel {
         }
 
         // Allocate a new fd pointing to the same handle
+        let process = self.get_current_process_mut()?;
         let new_fd = process.files.alloc(handle);
         Ok(new_fd)
     }
 
     /// Get current working directory
     pub fn sys_getcwd(&self) -> SyscallResult<PathBuf> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get(&current).unwrap();
+        let process = self.get_current_process()?;
         Ok(process.cwd.clone())
     }
 
@@ -1049,15 +1085,17 @@ impl Kernel {
         // Check execute permission on directory (required to cd into it)
         self.check_file_permission(path_str, false, false, true)?;
 
-        let process = self.processes.get_mut(&current).unwrap();
+        let process = self
+            .processes
+            .get_mut(&current)
+            .ok_or(SyscallError::NoProcess)?;
         process.cwd = resolved;
         Ok(())
     }
 
     /// Exit the current process
     pub fn sys_exit(&mut self, code: i32) -> SyscallResult<()> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get_mut(&current).unwrap();
+        let process = self.get_current_process_mut()?;
         process.state = ProcessState::Zombie(code);
         Ok(())
     }
@@ -1069,8 +1107,7 @@ impl Kernel {
 
     /// Get parent process ID
     pub fn sys_getppid(&self) -> SyscallResult<Option<Pid>> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get(&current).unwrap();
+        let process = self.get_current_process()?;
         Ok(process.parent)
     }
 
@@ -1079,8 +1116,7 @@ impl Kernel {
 
     /// Get an environment variable
     pub fn sys_getenv(&self, name: &str) -> SyscallResult<Option<String>> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get(&current).unwrap();
+        let process = self.get_current_process()?;
         Ok(process.getenv(name).map(|s| s.to_string()))
     }
 
@@ -1089,23 +1125,20 @@ impl Kernel {
         if name.is_empty() || name.contains('=') {
             return Err(SyscallError::InvalidArgument);
         }
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get_mut(&current).unwrap();
+        let process = self.get_current_process_mut()?;
         process.setenv(name, value);
         Ok(())
     }
 
     /// Remove an environment variable
     pub fn sys_unsetenv(&mut self, name: &str) -> SyscallResult<bool> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get_mut(&current).unwrap();
+        let process = self.get_current_process_mut()?;
         Ok(process.unsetenv(name))
     }
 
     /// Get all environment variables
     pub fn sys_environ(&self) -> SyscallResult<Vec<(String, String)>> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get(&current).unwrap();
+        let process = self.get_current_process()?;
         Ok(process
             .environ()
             .iter()
@@ -1269,8 +1302,7 @@ impl Kernel {
 
     /// Get a handle from the current process's file table
     fn get_handle(&self, fd: Fd) -> SyscallResult<Handle> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get(&current).unwrap();
+        let process = self.get_current_process()?;
         process.files.get(fd).ok_or(SyscallError::BadFd)
     }
 
@@ -1295,8 +1327,7 @@ impl Kernel {
         want_write: bool,
         want_exec: bool,
     ) -> SyscallResult<()> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get(&current).unwrap();
+        let process = self.get_current_process()?;
 
         // Get file metadata
         let meta = self.vfs.metadata(path)?;
@@ -1338,15 +1369,13 @@ impl Kernel {
 
     /// Get the current process's effective UID (for setting file ownership)
     fn current_euid(&self) -> SyscallResult<Uid> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get(&current).unwrap();
+        let process = self.get_current_process()?;
         Ok(process.euid)
     }
 
     /// Get the current process's effective GID
     fn current_egid(&self) -> SyscallResult<Gid> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get(&current).unwrap();
+        let process = self.get_current_process()?;
         Ok(process.egid)
     }
 
@@ -2132,43 +2161,37 @@ impl Kernel {
 
     /// Get real user ID
     pub fn sys_getuid(&self) -> SyscallResult<Uid> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get(&current).unwrap();
+        let process = self.get_current_process()?;
         Ok(process.uid)
     }
 
     /// Get effective user ID
     pub fn sys_geteuid(&self) -> SyscallResult<Uid> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get(&current).unwrap();
+        let process = self.get_current_process()?;
         Ok(process.euid)
     }
 
     /// Get real group ID
     pub fn sys_getgid(&self) -> SyscallResult<Gid> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get(&current).unwrap();
+        let process = self.get_current_process()?;
         Ok(process.gid)
     }
 
     /// Get effective group ID
     pub fn sys_getegid(&self) -> SyscallResult<Gid> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get(&current).unwrap();
+        let process = self.get_current_process()?;
         Ok(process.egid)
     }
 
     /// Get supplementary group list
     pub fn sys_getgroups(&self) -> SyscallResult<Vec<Gid>> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get(&current).unwrap();
+        let process = self.get_current_process()?;
         Ok(process.groups.clone())
     }
 
     /// Set real user ID (requires root or setting to own uid)
     pub fn sys_setuid(&mut self, uid: Uid) -> SyscallResult<()> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get_mut(&current).unwrap();
+        let process = self.get_current_process_mut()?;
 
         // Only root can set arbitrary uid
         if process.euid != Uid::ROOT && uid != process.uid {
@@ -2182,8 +2205,7 @@ impl Kernel {
 
     /// Set effective user ID
     pub fn sys_seteuid(&mut self, euid: Uid) -> SyscallResult<()> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get_mut(&current).unwrap();
+        let process = self.get_current_process_mut()?;
 
         // Can set euid to real uid, saved uid (we don't track saved), or if root any uid
         if process.euid != Uid::ROOT && euid != process.uid {
@@ -2196,8 +2218,7 @@ impl Kernel {
 
     /// Set real group ID (requires root or setting to own gid)
     pub fn sys_setgid(&mut self, gid: Gid) -> SyscallResult<()> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get_mut(&current).unwrap();
+        let process = self.get_current_process_mut()?;
 
         if process.euid != Uid::ROOT && gid != process.gid {
             return Err(SyscallError::PermissionDenied);
@@ -2210,8 +2231,7 @@ impl Kernel {
 
     /// Set effective group ID
     pub fn sys_setegid(&mut self, egid: Gid) -> SyscallResult<()> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get_mut(&current).unwrap();
+        let process = self.get_current_process_mut()?;
 
         if process.euid != Uid::ROOT && egid != process.gid {
             return Err(SyscallError::PermissionDenied);
@@ -2223,8 +2243,7 @@ impl Kernel {
 
     /// Set supplementary group list (requires root)
     pub fn sys_setgroups(&mut self, groups: Vec<Gid>) -> SyscallResult<()> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get_mut(&current).unwrap();
+        let process = self.get_current_process_mut()?;
 
         if process.euid != Uid::ROOT {
             return Err(SyscallError::PermissionDenied);
@@ -2311,8 +2330,7 @@ impl Kernel {
     /// Change file permissions
     pub fn sys_chmod(&mut self, path: &str, mode: u16) -> SyscallResult<()> {
         // Check if caller owns the file or is root
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get(&current).unwrap();
+        let process = self.get_current_process()?;
         let euid = process.euid;
 
         // Get file metadata to check ownership
@@ -2335,8 +2353,7 @@ impl Kernel {
         gid: Option<u32>,
     ) -> SyscallResult<()> {
         // Check if caller is root (only root can chown)
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
-        let process = self.processes.get(&current).unwrap();
+        let process = self.get_current_process()?;
         let euid = process.euid;
 
         // Only root can change ownership
