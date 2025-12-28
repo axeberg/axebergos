@@ -12,13 +12,13 @@ This document tracks all identified issues, improvements, and feature work for A
 | Category | Total | Done | In Progress | Remaining |
 |----------|-------|------|-------------|-----------|
 | Security (Critical) | 2 | 2 | 0 | 0 |
-| Security (High) | 5 | 4 | 0 | 1 |
-| Security (Medium) | 8 | 0 | 0 | 8 |
+| Security (High) | 5 | 5 | 0 | 0 |
+| Security (Medium) | 8 | 1 | 0 | 7 |
 | Code Quality | 10 | 0 | 0 | 10 |
 | Missing Features | 15 | 0 | 0 | 15 |
 | Documentation | 5 | 0 | 0 | 5 |
 | Future Features | 12 | 0 | 0 | 12 |
-| **TOTAL** | **57** | **6** | **0** | **51** |
+| **TOTAL** | **57** | **8** | **0** | **49** |
 
 ---
 
@@ -78,10 +78,10 @@ This document tracks all identified issues, improvements, and feature work for A
 
 ### SEC-007: Add Privilege Dropping for Fork
 - **Priority**: 🟠 HIGH
-- **Status**: ⬜ TODO
-- **File**: `src/kernel/syscall.rs:663-699`
-- **Issue**: Child inherits all parent privileges
-- **Fix**: Implement setuid/setgid capability to drop privileges
+- **Status**: ✅ DONE (2025-12-28)
+- **File**: `src/kernel/process.rs`, `src/kernel/syscall.rs`
+- **Issue**: Child inherits all parent privileges, no saved UID/GID tracking
+- **Fix**: Added `suid` (saved user ID) and `sgid` (saved group ID) fields to Process struct. Updated all Process constructors (new, with_environ, with_memory_limit, new_login_shell, cow_fork) to initialize and copy saved IDs. Updated setuid/seteuid/setgid/setegid syscalls to properly use saved IDs per POSIX semantics: root can set all IDs, non-root can only switch between real and saved IDs.
 - **Estimate**: Medium
 
 ---
@@ -90,10 +90,10 @@ This document tracks all identified issues, improvements, and feature work for A
 
 ### SEC-008: Add File Descriptor Limits
 - **Priority**: 🟡 MEDIUM
-- **Status**: ⬜ TODO
-- **File**: `src/kernel/process.rs:500-510`
+- **Status**: ✅ DONE (2025-12-28)
+- **File**: `src/kernel/process.rs`
 - **Issue**: Unlimited FDs per process (DoS risk)
-- **Fix**: Add MAX_FDS_PER_PROCESS (default 1024)
+- **Fix**: Added `MAX_FDS_PER_PROCESS = 1024` constant and `max_fds` field to `FileTable`. The `alloc()` method now returns `Option<Fd>` and returns `None` when the limit is reached. All syscalls (open, pipe, dup, window_create) now return `TooManyOpenFiles` error when limit is exceeded. Added `with_limit()`, `len()`, `max_fds()`, `set_max_fds()` methods to FileTable.
 - **Estimate**: Small
 
 ### SEC-009: Implement Resource Limits (rlimit)

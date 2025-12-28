@@ -453,7 +453,7 @@ mod fd_invariants {
         let mut ft = FileTable::new();
         let handle = Handle(100);
 
-        let fd = ft.alloc(handle);
+        let fd = ft.alloc(handle).expect("should allocate fd");
         assert!(ft.contains(fd));
 
         // Remove (close)
@@ -471,11 +471,11 @@ mod fd_invariants {
         let mut ft = FileTable::new();
 
         let handle = table.insert(make_file());
-        let fd1 = ft.alloc(handle);
+        let fd1 = ft.alloc(handle).expect("should allocate fd");
 
         // Dup creates new fd to same handle
         table.retain(handle); // Simulate what dup syscall does
-        let fd2 = ft.alloc(handle);
+        let fd2 = ft.alloc(handle).expect("should allocate fd");
 
         assert_ne!(fd1, fd2);
         assert_eq!(ft.get(fd1), ft.get(fd2));

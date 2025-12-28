@@ -336,6 +336,8 @@ pub enum SyscallError {
     IsADirectory,
     /// Already exists
     AlreadyExists,
+    /// Too many open files (EMFILE)
+    TooManyOpenFiles,
 }
 
 impl std::fmt::Display for SyscallError {
@@ -357,6 +359,7 @@ impl std::fmt::Display for SyscallError {
             SyscallError::NotADirectory => write!(f, "not a directory"),
             SyscallError::IsADirectory => write!(f, "is a directory"),
             SyscallError::AlreadyExists => write!(f, "already exists"),
+            SyscallError::TooManyOpenFiles => write!(f, "too many open files"),
         }
     }
 }
@@ -851,7 +854,10 @@ impl Kernel {
             .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)?;
-        let fd = process.files.alloc(handle);
+        let fd = process
+            .files
+            .alloc(handle)
+            .ok_or(SyscallError::TooManyOpenFiles)?;
         Ok(fd)
     }
 
@@ -1026,8 +1032,18 @@ impl Kernel {
             .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)?;
-        let read_fd = process.files.alloc(handle);
-        let write_fd = process.files.alloc(handle);
+        let read_fd = process
+            .files
+            .alloc(handle)
+            .ok_or(SyscallError::TooManyOpenFiles)?;
+        let write_fd = match process.files.alloc(handle) {
+            Some(fd) => fd,
+            None => {
+                // Clean up the read fd if we can't allocate write fd
+                process.files.remove(read_fd);
+                return Err(SyscallError::TooManyOpenFiles);
+            }
+        };
 
         Ok((read_fd, write_fd))
     }
@@ -1048,7 +1064,10 @@ impl Kernel {
             .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)?;
-        let fd = process.files.alloc(handle);
+        let fd = process
+            .files
+            .alloc(handle)
+            .ok_or(SyscallError::TooManyOpenFiles)?;
 
         Ok(fd)
     }
@@ -1068,7 +1087,10 @@ impl Kernel {
 
         // Allocate a new fd pointing to the same handle
         let process = self.get_current_process_mut()?;
-        let new_fd = process.files.alloc(handle);
+        let new_fd = process
+            .files
+            .alloc(handle)
+            .ok_or(SyscallError::TooManyOpenFiles)?;
         Ok(new_fd)
     }
 
@@ -2265,13 +2287,18 @@ impl Kernel {
     pub fn sys_setuid(&mut self, uid: Uid) -> SyscallResult<()> {
         let process = self.get_current_process_mut()?;
 
-        // Only root can set arbitrary uid
-        if process.euid != Uid::ROOT && uid != process.uid {
-            return Err(SyscallError::PermissionDenied);
+        if process.euid == Uid::ROOT {
+            // Root: set all three IDs (real, effective, saved)
+            process.uid = uid;
+            process.euid = uid;
+            process.suid = uid;
+        } else {
+            // Non-root: can only set effective UID to real or saved UID
+            if uid != process.uid && uid != process.suid {
+                return Err(SyscallError::PermissionDenied);
+            }
+            process.euid = uid;
         }
-
-        process.uid = uid;
-        process.euid = uid;
         Ok(())
     }
 
@@ -2279,8 +2306,8 @@ impl Kernel {
     pub fn sys_seteuid(&mut self, euid: Uid) -> SyscallResult<()> {
         let process = self.get_current_process_mut()?;
 
-        // Can set euid to real uid, saved uid (we don't track saved), or if root any uid
-        if process.euid != Uid::ROOT && euid != process.uid {
+        // Can set euid to real uid, saved uid, or if root any uid
+        if process.euid != Uid::ROOT && euid != process.uid && euid != process.suid {
             return Err(SyscallError::PermissionDenied);
         }
 
@@ -2292,12 +2319,18 @@ impl Kernel {
     pub fn sys_setgid(&mut self, gid: Gid) -> SyscallResult<()> {
         let process = self.get_current_process_mut()?;
 
-        if process.euid != Uid::ROOT && gid != process.gid {
-            return Err(SyscallError::PermissionDenied);
+        if process.euid == Uid::ROOT {
+            // Root: set all three IDs (real, effective, saved)
+            process.gid = gid;
+            process.egid = gid;
+            process.sgid = gid;
+        } else {
+            // Non-root: can only set effective GID to real or saved GID
+            if gid != process.gid && gid != process.sgid {
+                return Err(SyscallError::PermissionDenied);
+            }
+            process.egid = gid;
         }
-
-        process.gid = gid;
-        process.egid = gid;
         Ok(())
     }
 
@@ -2305,7 +2338,8 @@ impl Kernel {
     pub fn sys_setegid(&mut self, egid: Gid) -> SyscallResult<()> {
         let process = self.get_current_process_mut()?;
 
-        if process.euid != Uid::ROOT && egid != process.gid {
+        // Can set egid to real gid, saved gid, or if root any gid
+        if process.euid != Uid::ROOT && egid != process.gid && egid != process.sgid {
             return Err(SyscallError::PermissionDenied);
         }
 

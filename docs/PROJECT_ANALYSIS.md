@@ -414,10 +414,10 @@ From `DOCUMENTATION_REVIEW.md`:
 | Severity | Total | Fixed | Remaining | Status |
 |----------|-------|-------|-----------|--------|
 | CRITICAL | 2 | 2 | 0 | ✅ All fixed |
-| HIGH | 5 | 4 | 1 | 🔄 In progress |
-| MEDIUM | 8 | 0 | 8 | ⬜ TODO |
+| HIGH | 5 | 5 | 0 | ✅ All fixed |
+| MEDIUM | 8 | 1 | 7 | 🔄 In progress |
 | LOW | 5 | 0 | 5 | ⬜ TODO |
-| **TOTAL** | **20** | **6** | **14** | |
+| **TOTAL** | **20** | **8** | **12** | |
 
 ### Fixed Issues (2025-12-28)
 - ✅ SEC-001: Hardcoded root password removed
@@ -426,6 +426,8 @@ From `DOCUMENTATION_REVIEW.md`:
 - ✅ SEC-004: Symlink loop detection added
 - ✅ SEC-005: TOCTOU race conditions fixed with atomic fstat()
 - ✅ SEC-006: Setuid/setgid bit processing implemented
+- ✅ SEC-007: Privilege dropping with saved UID/GID implemented
+- ✅ SEC-008: File descriptor limits added (MAX_FDS_PER_PROCESS = 1024)
 
 ---
 
