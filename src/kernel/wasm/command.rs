@@ -9,6 +9,8 @@ use super::executor::WasmExecutor;
 #[cfg(target_arch = "wasm32")]
 use super::loader::ModuleValidator;
 use crate::kernel::syscall;
+#[cfg(target_arch = "wasm32")]
+use crate::kernel::users::{FileMode, Gid, Uid};
 use std::collections::HashMap;
 
 /// Default paths to search for WASM commands
@@ -115,6 +117,8 @@ impl WasmCommandRunner {
     /// Run a WASM command with arguments and stdin
     ///
     /// This is the main entry point for executing WASM commands.
+    /// Handles setuid/setgid bits: if the executable has these bits set,
+    /// the command runs with the file owner's effective uid/gid.
     #[cfg(target_arch = "wasm32")]
     pub async fn run(
         &mut self,
@@ -126,6 +130,9 @@ impl WasmCommandRunner {
         let path = self.find_command(name).ok_or(WasmError::CommandNotFound {
             name: name.to_string(),
         })?;
+
+        // Check setuid/setgid bits and apply privilege changes
+        let (saved_euid, saved_egid) = self.apply_setuid_setgid(&path);
 
         // Load the module
         let module_bytes = self.load_module(&path)?;
@@ -145,9 +152,62 @@ impl WasmCommandRunner {
         executor.set_cwd(&self.cwd);
 
         // Execute
-        executor
+        let result = executor
             .execute(&module_bytes, &full_args, stdin.as_bytes())
-            .await
+            .await;
+
+        // Restore original euid/egid after execution
+        self.restore_privileges(saved_euid, saved_egid);
+
+        result
+    }
+
+    /// Apply setuid/setgid bits from executable file
+    ///
+    /// If the executable has setuid bit set, changes effective UID to file owner.
+    /// If the executable has setgid bit set, changes effective GID to file group.
+    /// Returns the original (euid, egid) for later restoration.
+    #[cfg(target_arch = "wasm32")]
+    fn apply_setuid_setgid(&self, path: &str) -> (Option<Uid>, Option<Gid>) {
+        let mut saved_euid = None;
+        let mut saved_egid = None;
+
+        if let Ok(meta) = syscall::metadata(path) {
+            let mode = FileMode::new(meta.mode);
+
+            // Check setuid bit
+            if mode.is_setuid() {
+                // Save current euid
+                if let Ok(euid) = syscall::geteuid() {
+                    saved_euid = Some(euid);
+                }
+                // Set euid to file owner
+                let _ = syscall::seteuid(Uid(meta.uid));
+            }
+
+            // Check setgid bit
+            if mode.is_setgid() {
+                // Save current egid
+                if let Ok(egid) = syscall::getegid() {
+                    saved_egid = Some(egid);
+                }
+                // Set egid to file group
+                let _ = syscall::setegid(Gid(meta.gid));
+            }
+        }
+
+        (saved_euid, saved_egid)
+    }
+
+    /// Restore original effective uid/gid after setuid/setgid execution
+    #[cfg(target_arch = "wasm32")]
+    fn restore_privileges(&self, saved_euid: Option<Uid>, saved_egid: Option<Gid>) {
+        if let Some(euid) = saved_euid {
+            let _ = syscall::seteuid(euid);
+        }
+        if let Some(egid) = saved_egid {
+            let _ = syscall::setegid(egid);
+        }
     }
 
     /// Run a WASM command (synchronous wrapper for non-WASM targets)

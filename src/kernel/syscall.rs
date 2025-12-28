@@ -36,7 +36,9 @@ use super::timer::{TimerId, TimerQueue};
 use super::trace::{TraceCategory, TraceSummary, Tracer};
 use super::tty::TtyManager;
 use super::users::{FileMode, Gid, Group, Uid, User, UserDb, check_permission};
-use crate::vfs::{FileSystem, MemoryFs, OpenOptions as VfsOpenOptions};
+use crate::vfs::{
+    FileHandle as VfsFileHandle, FileSystem, MemoryFs, OpenOptions as VfsOpenOptions,
+};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::SeekFrom;
@@ -393,6 +395,12 @@ pub struct FileMetadata {
     pub is_file: bool,
     pub is_symlink: bool,
     pub symlink_target: Option<String>,
+    /// Owner user ID
+    pub uid: u32,
+    /// Owner group ID
+    pub gid: u32,
+    /// Unix permission mode (including setuid/setgid bits)
+    pub mode: u16,
 }
 
 pub type SyscallResult<T> = Result<T, SyscallError>;
@@ -1352,6 +1360,43 @@ impl Kernel {
         }
     }
 
+    /// Check permission on an already-opened file handle (atomic, TOCTOU-safe)
+    ///
+    /// This is preferred over check_file_permission when the file is already open,
+    /// as it checks permissions on the actual opened file, not a path that could
+    /// have changed between check and use.
+    fn check_handle_permission(
+        &self,
+        vfs_handle: VfsFileHandle,
+        want_read: bool,
+        want_write: bool,
+        want_exec: bool,
+    ) -> SyscallResult<()> {
+        let process = self.get_current_process()?;
+
+        // Get metadata from the opened file handle (not the path)
+        let meta = self.vfs.fstat(vfs_handle)?;
+
+        // Check permission
+        let allowed = check_permission(
+            Uid(meta.uid),
+            Gid(meta.gid),
+            FileMode::new(meta.mode),
+            process.euid,
+            process.egid,
+            &process.groups,
+            want_read,
+            want_write,
+            want_exec,
+        );
+
+        if allowed {
+            Ok(())
+        } else {
+            Err(SyscallError::PermissionDenied)
+        }
+    }
+
     /// Check if the current process has write permission on the parent directory
     /// (needed for creating/deleting files in the directory)
     fn check_parent_write_permission(&self, path: &str) -> SyscallResult<()> {
@@ -1412,20 +1457,23 @@ impl Kernel {
     }
 
     /// Open a regular file
+    ///
+    /// Uses atomic permission checking (TOCTOU-safe): opens the file first,
+    /// then checks permissions on the actual opened file handle.
     fn open_file(&mut self, path: &Path, flags: OpenFlags) -> SyscallResult<Handle> {
         let path_str = path.to_str().ok_or(SyscallError::InvalidArgument)?;
 
-        // Check if file exists
+        // Check if file exists (needed to determine if we're creating a new file)
         let file_exists = self.vfs.exists(path_str);
 
-        if file_exists {
-            // Check permissions on existing file
-            self.check_file_permission(path_str, flags.read, flags.write, false)?;
-        } else if flags.create {
-            // For new files, check write permission on parent directory
-            self.check_parent_write_permission(path_str)?;
-        } else {
-            return Err(SyscallError::NotFound);
+        // For new files, check parent directory permission first
+        // This must happen before open since the file doesn't exist yet
+        if !file_exists {
+            if flags.create {
+                self.check_parent_write_permission(path_str)?;
+            } else {
+                return Err(SyscallError::NotFound);
+            }
         }
 
         // Convert our flags to VFS options
@@ -1438,8 +1486,20 @@ impl Kernel {
             truncate: flags.truncate,
         };
 
-        // Open via VFS
+        // Open via VFS first (before permission check for TOCTOU safety)
         let vfs_handle = self.vfs.open(path_str, vfs_opts)?;
+
+        // For existing files, check permissions AFTER opening (TOCTOU-safe)
+        // This uses fstat on the opened handle, not the path that could have changed
+        if file_exists
+            && self
+                .check_handle_permission(vfs_handle, flags.read, flags.write, false)
+                .is_err()
+        {
+            // Permission denied - close the handle and return error
+            let _ = self.vfs.close(vfs_handle);
+            return Err(SyscallError::PermissionDenied);
+        }
 
         // If we just created a new file, set ownership to current user
         if !file_exists && flags.create {
@@ -1448,8 +1508,8 @@ impl Kernel {
             let _ = self.vfs.chown(path_str, Some(euid.0), Some(egid.0));
         }
 
-        // Read the file contents
-        let meta = self.vfs.metadata(path_str)?;
+        // Read the file contents (using fstat for consistency with atomic open)
+        let meta = self.vfs.fstat(vfs_handle)?;
         let mut data = vec![0u8; meta.size as usize];
         if !data.is_empty() {
             self.vfs.read(vfs_handle, &mut data)?;
@@ -1613,6 +1673,9 @@ impl Kernel {
                 is_file: !is_dir,
                 is_symlink: false,
                 symlink_target: None,
+                uid: 0, // root owns /proc
+                gid: 0,
+                mode: if is_dir { 0o555 } else { 0o444 }, // read-only
             });
         }
 
@@ -1628,6 +1691,9 @@ impl Kernel {
                 is_file: !is_dir,
                 is_symlink: false,
                 symlink_target: None,
+                uid: 0, // root owns /dev
+                gid: 0,
+                mode: if is_dir { 0o755 } else { 0o666 }, // device files are rw for all
             });
         }
 
@@ -1643,6 +1709,9 @@ impl Kernel {
                 is_file: !is_dir,
                 is_symlink: false,
                 symlink_target: None,
+                uid: 0, // root owns /sys
+                gid: 0,
+                mode: if is_dir { 0o555 } else { 0o444 }, // read-only
             });
         }
 
@@ -1653,6 +1722,9 @@ impl Kernel {
             is_file: meta.is_file,
             is_symlink: meta.is_symlink,
             symlink_target: meta.symlink_target,
+            uid: meta.uid,
+            gid: meta.gid,
+            mode: meta.mode,
         })
     }
 

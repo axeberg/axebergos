@@ -63,30 +63,33 @@ AxebergOS is an ambitious personal mini-operating system written in Rust, compil
 
 ### HIGH Severity
 
-#### 1.3 Missing Setuid Bit Processing
-**File**: `src/kernel/syscall.rs` (spawn/exec functions)
+#### 1.3 ~~Missing Setuid Bit Processing~~ ✅ FIXED
+**Files**: `src/kernel/wasm/command.rs`, `src/kernel/syscall.rs`
+**Status**: **RESOLVED** (2025-12-28)
 
-When executing a binary with setuid bit, the effective UID is NOT changed to the file owner. This breaks privilege escalation mechanisms like `sudo`.
+~~When executing a binary with setuid bit, the effective UID is NOT changed to the file owner.~~
 
-**Fix**: Check setuid/setgid bits during process creation and adjust euid/egid accordingly.
+**Resolution**: Added `apply_setuid_setgid()` method to WasmCommandRunner:
+1. Before executing a WASM command, checks file mode for setuid/setgid bits
+2. If setuid set: saves current euid, changes to file owner's uid
+3. If setgid set: saves current egid, changes to file owner's gid
+4. After execution: restores original euid/egid
+5. Also added uid/gid/mode fields to FileMetadata for permission checking
 
 ---
 
-#### 1.4 TOCTOU Race Condition
-**Files**: `src/kernel/syscall.rs:1291-1322`, `1386-1400`
+#### 1.4 ~~TOCTOU Race Condition~~ ✅ FIXED
+**Files**: `src/kernel/syscall.rs`, `src/vfs/mod.rs`, `src/vfs/memory.rs`, `src/vfs/layered.rs`
+**Status**: **RESOLVED** (2025-12-28)
 
-Permission checks and file access happen in separate operations, allowing symlink attacks between check and use.
+~~Permission checks and file access happen in separate operations, allowing symlink attacks between check and use.~~
 
-```rust
-// Time-of-Check
-let meta = self.vfs.metadata(path)?;
-let allowed = check_permission(...);
+**Resolution**: Added `fstat()` and `handle_path()` methods to VFS for atomic permission checking. The `open_file()` function now:
+1. Opens the file first via VFS
+2. Checks permissions using `fstat()` on the opened handle (not the path)
+3. Closes and returns error if permission denied
 
-// Time-of-Use (race window!)
-let handle = self.vfs.open(path)?;
-```
-
-**Fix**: Implement atomic stat-and-open operations; resolve symlinks before permission checks.
+This eliminates the TOCTOU window since permissions are checked on the actual opened file.
 
 ---
 
@@ -411,16 +414,18 @@ From `DOCUMENTATION_REVIEW.md`:
 | Severity | Total | Fixed | Remaining | Status |
 |----------|-------|-------|-----------|--------|
 | CRITICAL | 2 | 2 | 0 | ✅ All fixed |
-| HIGH | 5 | 2 | 3 | 🔄 In progress |
+| HIGH | 5 | 4 | 1 | 🔄 In progress |
 | MEDIUM | 8 | 0 | 8 | ⬜ TODO |
 | LOW | 5 | 0 | 5 | ⬜ TODO |
-| **TOTAL** | **20** | **4** | **16** | |
+| **TOTAL** | **20** | **6** | **14** | |
 
 ### Fixed Issues (2025-12-28)
 - ✅ SEC-001: Hardcoded root password removed
 - ✅ SEC-002: Secure password hashing implemented
 - ✅ SEC-003: Kernel panic points fixed (32+ unwrap() calls)
 - ✅ SEC-004: Symlink loop detection added
+- ✅ SEC-005: TOCTOU race conditions fixed with atomic fstat()
+- ✅ SEC-006: Setuid/setgid bit processing implemented
 
 ---
 

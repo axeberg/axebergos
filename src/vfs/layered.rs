@@ -834,6 +834,30 @@ impl FileSystem for LayeredFs {
             Err(io::Error::new(io::ErrorKind::NotFound, "Path not found"))
         }
     }
+
+    fn fstat(&self, handle: FileHandle) -> io::Result<Metadata> {
+        let layer_handle = self
+            .handles
+            .get(handle)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Invalid file handle"))?;
+
+        match layer_handle.layer {
+            Layer::Upper => self.upper.fstat(layer_handle.inner_handle),
+            Layer::Lower => self.lower.fstat(layer_handle.inner_handle),
+        }
+    }
+
+    fn handle_path(&self, handle: FileHandle) -> io::Result<String> {
+        let layer_handle = self
+            .handles
+            .get(handle)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Invalid file handle"))?;
+
+        match layer_handle.layer {
+            Layer::Upper => self.upper.handle_path(layer_handle.inner_handle),
+            Layer::Lower => self.lower.handle_path(layer_handle.inner_handle),
+        }
+    }
 }
 
 #[cfg(test)]

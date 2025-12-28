@@ -934,6 +934,26 @@ impl FileSystem for MemoryFs {
 
         Ok(())
     }
+
+    fn fstat(&self, handle: FileHandle) -> io::Result<Metadata> {
+        let file = self
+            .handles
+            .get(handle)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Invalid file handle"))?;
+
+        // Get metadata for the path stored in the handle
+        // This is the resolved path after symlink resolution during open
+        self.metadata(&file.path)
+    }
+
+    fn handle_path(&self, handle: FileHandle) -> io::Result<String> {
+        let file = self
+            .handles
+            .get(handle)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Invalid file handle"))?;
+
+        Ok(file.path.clone())
+    }
 }
 
 #[cfg(test)]
@@ -1526,5 +1546,63 @@ mod tests {
     fn test_max_symlink_depth_constant() {
         // Verify the constant is set to POSIX standard
         assert_eq!(MemoryFs::MAX_SYMLINK_DEPTH, 40);
+    }
+
+    // ============ fstat (TOCTOU-safe metadata) ============
+
+    #[test]
+    fn test_fstat_basic() {
+        let mut fs = MemoryFs::new();
+
+        // Create a file with some content
+        let handle = fs
+            .open("/test.txt", OpenOptions::new().write(true).create(true))
+            .unwrap();
+        fs.write(handle, b"hello world").unwrap();
+        fs.close(handle).unwrap();
+
+        // Set custom permissions
+        fs.chmod("/test.txt", 0o755).unwrap();
+        fs.chown("/test.txt", Some(1000), Some(1001)).unwrap();
+
+        // Open and check fstat
+        let handle = fs.open("/test.txt", OpenOptions::new().read(true)).unwrap();
+        let meta = fs.fstat(handle).unwrap();
+
+        assert_eq!(meta.size, 11); // "hello world".len()
+        assert!(meta.is_file);
+        assert!(!meta.is_dir);
+        assert!(!meta.is_symlink);
+        assert_eq!(meta.mode, 0o755);
+        assert_eq!(meta.uid, 1000);
+        assert_eq!(meta.gid, 1001);
+
+        fs.close(handle).unwrap();
+    }
+
+    #[test]
+    fn test_fstat_invalid_handle() {
+        let fs = MemoryFs::new();
+
+        // Try to fstat with invalid handle
+        let result = fs.fstat(999);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_handle_path() {
+        let mut fs = MemoryFs::new();
+
+        // Create and open a file
+        create_test_file(&mut fs, "/myfile.txt");
+        let handle = fs
+            .open("/myfile.txt", OpenOptions::new().read(true))
+            .unwrap();
+
+        // Get path from handle
+        let path = fs.handle_path(handle).unwrap();
+        assert_eq!(path, "/myfile.txt");
+
+        fs.close(handle).unwrap();
     }
 }

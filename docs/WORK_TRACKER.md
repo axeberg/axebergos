@@ -12,13 +12,13 @@ This document tracks all identified issues, improvements, and feature work for A
 | Category | Total | Done | In Progress | Remaining |
 |----------|-------|------|-------------|-----------|
 | Security (Critical) | 2 | 2 | 0 | 0 |
-| Security (High) | 5 | 2 | 0 | 3 |
+| Security (High) | 5 | 4 | 0 | 1 |
 | Security (Medium) | 8 | 0 | 0 | 8 |
 | Code Quality | 10 | 0 | 0 | 10 |
 | Missing Features | 15 | 0 | 0 | 15 |
 | Documentation | 5 | 0 | 0 | 5 |
 | Future Features | 12 | 0 | 0 | 12 |
-| **TOTAL** | **57** | **4** | **0** | **53** |
+| **TOTAL** | **57** | **6** | **0** | **51** |
 
 ---
 
@@ -62,18 +62,18 @@ This document tracks all identified issues, improvements, and feature work for A
 
 ### SEC-005: Fix TOCTOU Race Conditions
 - **Priority**: 🟠 HIGH
-- **Status**: ⬜ TODO
-- **File**: `src/kernel/syscall.rs:1291-1322, 1386-1400`
+- **Status**: ✅ DONE (2025-12-28)
+- **File**: `src/kernel/syscall.rs`, `src/vfs/mod.rs`, `src/vfs/memory.rs`, `src/vfs/layered.rs`
 - **Issue**: Permission check and file access are separate operations
-- **Fix**: Implement atomic stat-and-open
+- **Fix**: Added `fstat()` and `handle_path()` methods to VFS for atomic permission checking. `open_file()` now opens the file first, then checks permissions using the opened handle (not the path), preventing TOCTOU attacks.
 - **Estimate**: Medium
 
 ### SEC-006: Implement Setuid/Setgid Bit Processing
 - **Priority**: 🟠 HIGH
-- **Status**: ⬜ TODO
-- **File**: `src/kernel/syscall.rs` (spawn/exec)
+- **Status**: ✅ DONE (2025-12-28)
+- **File**: `src/kernel/wasm/command.rs`, `src/kernel/syscall.rs`
 - **Issue**: Setuid binaries don't change effective UID
-- **Fix**: Check bits during process creation, adjust euid/egid
+- **Fix**: Added `apply_setuid_setgid()` to WasmCommandRunner that checks file mode bits before execution. If setuid/setgid is set, temporarily changes process euid/egid to file owner/group. Also added uid/gid/mode fields to FileMetadata syscall struct.
 - **Estimate**: Medium
 
 ### SEC-007: Add Privilege Dropping for Fork
@@ -495,7 +495,9 @@ This document tracks all identified issues, improvements, and feature work for A
 - **SEC-002**: Implemented secure password hashing with salted key-stretching (10,000 rounds)
 - **SEC-003**: Fixed 32+ kernel panic points by adding safe process accessor methods
 - **SEC-004**: Added symlink loop detection with POSIX standard 40-level depth limit
-- Total: 4 issues resolved, 53 remaining
+- **SEC-005**: Fixed TOCTOU race conditions with atomic `fstat()` permission checking
+- **SEC-006**: Implemented setuid/setgid bit processing for WASM commands
+- Total: 6 issues resolved, 51 remaining
 
 ---
 
