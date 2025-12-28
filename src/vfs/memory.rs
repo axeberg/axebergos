@@ -226,8 +226,7 @@ impl MemoryFs {
     /// Internal symlink resolution with depth tracking
     fn resolve_symlinks_internal(&self, path: &str, depth: usize) -> io::Result<String> {
         if depth > Self::MAX_SYMLINK_DEPTH {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
+            return Err(io::Error::other(
                 "too many levels of symbolic links (possible loop)",
             ));
         }
@@ -266,8 +265,7 @@ impl MemoryFs {
     /// Resolve a path component by component, following symlinks
     fn resolve_path_components(&self, path: &str, depth: usize) -> io::Result<String> {
         if depth > Self::MAX_SYMLINK_DEPTH {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
+            return Err(io::Error::other(
                 "too many levels of symbolic links (possible loop)",
             ));
         }
@@ -289,12 +287,10 @@ impl MemoryFs {
                     // Resolve the symlink
                     let resolved_target = if target.starts_with('/') {
                         target.clone()
+                    } else if resolved.is_empty() {
+                        format!("/{}", target)
                     } else {
-                        if resolved.is_empty() {
-                            format!("/{}", target)
-                        } else {
-                            format!("{}/{}", resolved, target)
-                        }
+                        format!("{}/{}", resolved, target)
                     };
 
                     // Recursively resolve the symlink target
@@ -1460,10 +1456,12 @@ mod tests {
         // Should fail with loop detection
         let result = fs.resolve_symlinks("/a");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("too many levels of symbolic links"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("too many levels of symbolic links")
+        );
     }
 
     #[test]

@@ -576,9 +576,7 @@ impl Kernel {
     /// Returns `SyscallError::NoProcess` if no process is running.
     fn get_current_process(&self) -> SyscallResult<&Process> {
         let current = self.current.ok_or(SyscallError::NoProcess)?;
-        self.processes
-            .get(&current)
-            .ok_or(SyscallError::NoProcess)
+        self.processes.get(&current).ok_or(SyscallError::NoProcess)
     }
 
     /// Get the current process mutably or return an error

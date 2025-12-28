@@ -873,7 +873,10 @@ mod tests {
         // Same password should produce different hashes (due to random salt)
         let hash1 = hash_password("samepassword");
         let hash2 = hash_password("samepassword");
-        assert_ne!(hash1, hash2, "Same password should produce different hashes");
+        assert_ne!(
+            hash1, hash2,
+            "Same password should produce different hashes"
+        );
 
         // But both should verify correctly
         assert!(verify_password("samepassword", &hash1));
