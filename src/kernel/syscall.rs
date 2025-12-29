@@ -29,7 +29,7 @@ use super::object::{
 pub use super::process::{Fd, Handle, OpenFlags, Pgid, Pid, Process, ProcessState, Sid};
 use super::procfs::{ProcContext, ProcFs, SystemContext, generate_proc_content};
 use super::semaphore::SemaphoreManager;
-use super::signal::{Signal, SignalAction, SignalError, resolve_action};
+use super::signal::{SigProcMaskHow, Signal, SignalAction, SignalError, resolve_action};
 use super::sysfs::SysFs;
 use super::task::TaskId;
 use super::timer::{TimerId, TimerQueue};
@@ -1414,10 +1414,17 @@ impl Kernel {
 
         // Look for a child that has changed state
         for child_pid in children {
-            if let Some(child) = self.proc.processes.get(&child_pid) {
-                match &child.state {
+            // First check state without mutable borrow
+            let state_info = self
+                .proc
+                .processes
+                .get(&child_pid)
+                .map(|child| (child.state.clone(), child.was_continued));
+
+            if let Some((state, was_continued)) = state_info {
+                match state {
                     ProcessState::Zombie(exit_code) => {
-                        let status = WaitStatus::Exited(*exit_code);
+                        let status = WaitStatus::Exited(exit_code);
                         // Reap the zombie
                         self.proc.processes.remove(&child_pid);
                         // Remove from parent's children list
@@ -1429,9 +1436,12 @@ impl Kernel {
                     ProcessState::Stopped if flags.untraced => {
                         return Ok((child_pid, WaitStatus::Stopped));
                     }
-                    ProcessState::Running if flags.continued => {
-                        // Check if it was recently continued
-                        // (In a full implementation, we'd track this separately)
+                    ProcessState::Running if flags.continued && was_continued => {
+                        // Child was recently continued - clear flag and report
+                        if let Some(child) = self.proc.processes.get_mut(&child_pid) {
+                            child.was_continued = false;
+                        }
+                        return Ok((child_pid, WaitStatus::Continued));
                     }
                     _ => {}
                 }
@@ -2574,6 +2584,112 @@ impl Kernel {
         Ok(process.signals.has_pending())
     }
 
+    /// Get pending signals as a bitmask
+    pub fn sys_sigpending_mask(&self) -> SyscallResult<u16> {
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .proc
+            .processes
+            .get(&current)
+            .ok_or(SyscallError::NoProcess)?;
+        Ok(process.signals.get_pending_mask())
+    }
+
+    /// sigprocmask - examine and change blocked signals
+    ///
+    /// # Arguments
+    /// * `how` - How to modify the mask (Block, Unblock, SetMask)
+    /// * `mask` - Bitmask of signals (bit N = signal N)
+    ///
+    /// # Returns
+    /// The old signal mask before modification
+    pub fn sys_sigprocmask(&mut self, how: SigProcMaskHow, mask: u16) -> SyscallResult<u16> {
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .proc
+            .processes
+            .get_mut(&current)
+            .ok_or(SyscallError::NoProcess)?;
+        Ok(process.signals.sigprocmask(how, mask))
+    }
+
+    /// Get current signal mask
+    pub fn sys_siggetmask(&self) -> SyscallResult<u16> {
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .proc
+            .processes
+            .get(&current)
+            .ok_or(SyscallError::NoProcess)?;
+        Ok(process.signals.get_blocked_mask())
+    }
+
+    // ========== Process Priority ==========
+
+    /// nice - adjust process scheduling priority
+    ///
+    /// Adds the increment to the current nice value (clamped to -20..19).
+    /// Returns the new nice value.
+    ///
+    /// Note: In real POSIX, only root can decrease nice (increase priority).
+    /// We allow any user to adjust priority for simplicity.
+    pub fn sys_nice(&mut self, increment: i8) -> SyscallResult<i8> {
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .proc
+            .processes
+            .get_mut(&current)
+            .ok_or(SyscallError::NoProcess)?;
+
+        let new_nice = (process.nice as i16 + increment as i16).clamp(-20, 19) as i8;
+        process.nice = new_nice;
+        Ok(new_nice)
+    }
+
+    /// getpriority - get process scheduling priority
+    ///
+    /// Returns the nice value for the specified process.
+    /// Use pid=0 for current process.
+    pub fn sys_getpriority(&self, pid: Pid) -> SyscallResult<i8> {
+        let target_pid = if pid.0 == 0 {
+            self.proc.current.ok_or(SyscallError::NoProcess)?
+        } else {
+            pid
+        };
+
+        let process = self
+            .proc
+            .processes
+            .get(&target_pid)
+            .ok_or(SyscallError::NoProcess)?;
+
+        Ok(process.nice)
+    }
+
+    /// setpriority - set process scheduling priority
+    ///
+    /// Sets the nice value for the specified process.
+    /// Use pid=0 for current process.
+    ///
+    /// Note: In real POSIX, only root can decrease nice (increase priority).
+    /// We allow any user to adjust priority for simplicity.
+    pub fn sys_setpriority(&mut self, pid: Pid, priority: i8) -> SyscallResult<()> {
+        let target_pid = if pid.0 == 0 {
+            self.proc.current.ok_or(SyscallError::NoProcess)?
+        } else {
+            pid
+        };
+
+        let process = self
+            .proc
+            .processes
+            .get_mut(&target_pid)
+            .ok_or(SyscallError::NoProcess)?;
+
+        process.nice = priority.clamp(-20, 19);
+        Ok(())
+    }
+
     /// Process pending signals for a process, returns action to take
     pub fn process_signals(&mut self, pid: Pid) -> Option<(Signal, SignalAction)> {
         let process = self.proc.processes.get_mut(&pid)?;
@@ -2596,6 +2712,7 @@ impl Kernel {
             SignalAction::Continue => {
                 if process.state == ProcessState::Stopped {
                     process.state = ProcessState::Running;
+                    process.was_continued = true; // Set flag for WCONTINUED
                 }
                 process.signals.cont();
             }
@@ -3362,6 +3479,52 @@ pub fn sigunblock(sig: Signal) -> SyscallResult<()> {
 /// Check for pending signals
 pub fn sigpending() -> SyscallResult<bool> {
     KERNEL.with(|k| k.borrow().sys_sigpending())
+}
+
+/// Get pending signals as a bitmask
+pub fn sigpending_mask() -> SyscallResult<u16> {
+    KERNEL.with(|k| k.borrow().sys_sigpending_mask())
+}
+
+/// Examine and change blocked signals (sigprocmask)
+///
+/// # Arguments
+/// * `how` - How to modify the mask (Block, Unblock, SetMask)
+/// * `mask` - Bitmask of signals (bit N = signal N)
+///
+/// # Returns
+/// The old signal mask before modification
+pub fn sigprocmask(how: SigProcMaskHow, mask: u16) -> SyscallResult<u16> {
+    KERNEL.with(|k| k.borrow_mut().sys_sigprocmask(how, mask))
+}
+
+/// Get current signal mask
+pub fn siggetmask() -> SyscallResult<u16> {
+    KERNEL.with(|k| k.borrow().sys_siggetmask())
+}
+
+/// Adjust process scheduling priority (nice)
+///
+/// Adds the increment to the current nice value and returns the new value.
+/// The result is clamped to the range -20 to +19.
+pub fn nice(increment: i8) -> SyscallResult<i8> {
+    KERNEL.with(|k| k.borrow_mut().sys_nice(increment))
+}
+
+/// Get process scheduling priority
+///
+/// Returns the nice value for the specified process.
+/// Use pid=0 for current process.
+pub fn getpriority(pid: Pid) -> SyscallResult<i8> {
+    KERNEL.with(|k| k.borrow().sys_getpriority(pid))
+}
+
+/// Set process scheduling priority
+///
+/// Sets the nice value for the specified process.
+/// Use pid=0 for current process.
+pub fn setpriority(pid: Pid, priority: i8) -> SyscallResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_setpriority(pid, priority))
 }
 
 /// Process signals for a process (call from runtime)

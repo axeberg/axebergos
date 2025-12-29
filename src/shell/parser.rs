@@ -24,6 +24,8 @@ pub struct SimpleCommand {
     pub stdout: Option<Redirect>,
     /// Error redirection: 2> file or 2>> file
     pub stderr: Option<Redirect>,
+    /// Heredoc input: << DELIMITER or <<- DELIMITER
+    pub heredoc: Option<Heredoc>,
 }
 
 impl SimpleCommand {
@@ -34,7 +36,13 @@ impl SimpleCommand {
             stdin: None,
             stdout: None,
             stderr: None,
+            heredoc: None,
         }
+    }
+
+    /// Check if this command has a pending heredoc that needs content
+    pub fn needs_heredoc(&self) -> bool {
+        self.heredoc.as_ref().is_some_and(|h| h.content.is_none())
     }
 
     pub fn arg(mut self, arg: impl Into<String>) -> Self {
@@ -67,6 +75,64 @@ impl Redirect {
             path: path.into(),
             append,
         }
+    }
+}
+
+/// Heredoc specification
+///
+/// Represents a here-document input redirection (<<DELIMITER).
+/// The content is filled in after parsing when the heredoc lines are read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Heredoc {
+    /// Delimiter that ends the heredoc (e.g., "EOF")
+    pub delimiter: String,
+    /// Strip leading tabs from content (<<- vs <<)
+    pub strip_tabs: bool,
+    /// The heredoc content (filled in after parsing)
+    pub content: Option<String>,
+}
+
+impl Heredoc {
+    /// Create a new heredoc with delimiter
+    pub fn new(delimiter: impl Into<String>, strip_tabs: bool) -> Self {
+        Self {
+            delimiter: delimiter.into(),
+            strip_tabs,
+            content: None,
+        }
+    }
+
+    /// Set the heredoc content
+    pub fn with_content(mut self, content: impl Into<String>) -> Self {
+        self.content = Some(content.into());
+        self
+    }
+
+    /// Read heredoc content from lines until delimiter is found
+    ///
+    /// Returns true if delimiter was found, false if input ended
+    pub fn read_content(&mut self, lines: &mut impl Iterator<Item = String>) -> bool {
+        let mut content = String::new();
+        for line in lines {
+            let trimmed = if self.strip_tabs {
+                line.trim_start_matches('\t')
+            } else {
+                line.as_str()
+            };
+
+            if trimmed == self.delimiter {
+                self.content = Some(content);
+                return true;
+            }
+
+            if !content.is_empty() {
+                content.push('\n');
+            }
+            content.push_str(trimmed);
+        }
+        // Delimiter not found - treat rest as content (shell behavior)
+        self.content = Some(content);
+        false
     }
 }
 
@@ -180,6 +246,10 @@ enum Token {
     RedirectErr,
     /// Error append redirect: 2>>
     RedirectErrAppend,
+    /// Heredoc: <<
+    HeredocStart,
+    /// Heredoc with tab stripping: <<-
+    HeredocStripStart,
     /// Background: &
     Background,
     /// AND: &&
@@ -252,7 +322,18 @@ impl<'a> Lexer<'a> {
             }
             '<' => {
                 self.chars.next();
-                Ok(Some(Token::RedirectIn))
+                if self.chars.peek() == Some(&'<') {
+                    self.chars.next();
+                    // Check for <<- (tab stripping heredoc)
+                    if self.chars.peek() == Some(&'-') {
+                        self.chars.next();
+                        Ok(Some(Token::HeredocStripStart))
+                    } else {
+                        Ok(Some(Token::HeredocStart))
+                    }
+                } else {
+                    Ok(Some(Token::RedirectIn))
+                }
             }
             '>' => {
                 self.chars.next();
@@ -368,6 +449,7 @@ fn parse_pipeline_internal(
     let mut stdin = None;
     let mut stdout = None;
     let mut stderr = None;
+    let mut heredoc = None;
     let mut background = false;
     let mut trailing_op: Option<LogicalOp> = None;
     let mut expecting_command = true; // True at start and after pipe
@@ -407,6 +489,7 @@ fn parse_pipeline_internal(
                     stdin.take(),
                     stdout.take(),
                     stderr.take(),
+                    heredoc.take(),
                 );
                 commands.push(cmd);
                 expecting_command = true; // Expect command after pipe
@@ -433,6 +516,14 @@ fn parse_pipeline_internal(
             Token::RedirectErrAppend => {
                 let target = expect_word(lexer)?;
                 stderr = Some(Redirect::new(target, true));
+            }
+            Token::HeredocStart => {
+                let delimiter = expect_word(lexer)?;
+                heredoc = Some(Heredoc::new(delimiter, false));
+            }
+            Token::HeredocStripStart => {
+                let delimiter = expect_word(lexer)?;
+                heredoc = Some(Heredoc::new(delimiter, true));
             }
             // Stop at logical operators - return them for the caller
             Token::And => {
@@ -469,7 +560,7 @@ fn parse_pipeline_internal(
             return Err(ParseError::EmptyCommand);
         }
     } else {
-        let cmd = build_command(&mut current_words, stdin, stdout, stderr);
+        let cmd = build_command(&mut current_words, stdin, stdout, stderr, heredoc);
         commands.push(cmd);
     }
 
@@ -501,6 +592,7 @@ fn build_command(
     stdin: Option<Redirect>,
     stdout: Option<Redirect>,
     stderr: Option<Redirect>,
+    heredoc: Option<Heredoc>,
 ) -> SimpleCommand {
     let program = words.remove(0);
     let args = std::mem::take(words);
@@ -510,6 +602,7 @@ fn build_command(
         stdin,
         stdout,
         stderr,
+        heredoc,
     }
 }
 
@@ -874,5 +967,69 @@ mod tests {
     fn test_or_no_space() {
         let result = parse_command_list("false||echo ok").unwrap();
         assert_eq!(result.rest[0].0, LogicalOp::Or);
+    }
+
+    // ============ Heredocs ============
+
+    #[test]
+    fn test_heredoc_basic() {
+        let result = parse("cat <<EOF").unwrap();
+        assert_eq!(result.commands[0].program, "cat");
+        let heredoc = result.commands[0].heredoc.as_ref().unwrap();
+        assert_eq!(heredoc.delimiter, "EOF");
+        assert!(!heredoc.strip_tabs);
+        assert!(heredoc.content.is_none()); // Content not yet filled
+    }
+
+    #[test]
+    fn test_heredoc_strip_tabs() {
+        let result = parse("cat <<-END").unwrap();
+        assert_eq!(result.commands[0].program, "cat");
+        let heredoc = result.commands[0].heredoc.as_ref().unwrap();
+        assert_eq!(heredoc.delimiter, "END");
+        assert!(heredoc.strip_tabs);
+    }
+
+    #[test]
+    fn test_heredoc_with_args() {
+        let result = parse("cat -n <<EOF file.txt").unwrap();
+        assert_eq!(result.commands[0].program, "cat");
+        assert_eq!(result.commands[0].args, vec!["-n", "file.txt"]);
+        let heredoc = result.commands[0].heredoc.as_ref().unwrap();
+        assert_eq!(heredoc.delimiter, "EOF");
+    }
+
+    #[test]
+    fn test_heredoc_needs_content() {
+        let result = parse("cat <<EOF").unwrap();
+        assert!(result.commands[0].needs_heredoc());
+    }
+
+    #[test]
+    fn test_heredoc_read_content() {
+        let mut heredoc = Heredoc::new("EOF", false);
+        let lines = vec!["line1".to_string(), "line2".to_string(), "EOF".to_string()];
+        let found = heredoc.read_content(&mut lines.into_iter());
+        assert!(found);
+        assert_eq!(heredoc.content, Some("line1\nline2".to_string()));
+    }
+
+    #[test]
+    fn test_heredoc_read_content_strip_tabs() {
+        let mut heredoc = Heredoc::new("EOF", true);
+        let lines = vec![
+            "\tindented".to_string(),
+            "\t\tmore indented".to_string(),
+            "\tEOF".to_string(),
+        ];
+        let found = heredoc.read_content(&mut lines.into_iter());
+        assert!(found);
+        assert_eq!(heredoc.content, Some("indented\nmore indented".to_string()));
+    }
+
+    #[test]
+    fn test_heredoc_with_content() {
+        let heredoc = Heredoc::new("EOF", false).with_content("hello\nworld");
+        assert_eq!(heredoc.content, Some("hello\nworld".to_string()));
     }
 }

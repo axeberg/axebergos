@@ -299,18 +299,18 @@ This document tracks all identified issues, improvements, and feature work for A
 
 ### FEAT-006: Fix waitpid()
 - **Priority**: 🟠 HIGH
-- **Status**: ⬜ TODO
-- **File**: `src/kernel/syscall.rs:1200`
-- **Issue**: Often returns "no child"
-- **Fix**: Proper child process tracking and waiting
+- **Status**: ✅ DONE (2025-12-29)
+- **File**: `src/kernel/syscall.rs`, `src/kernel/process.rs`
+- **Issue**: No WCONTINUED support for detecting resumed processes
+- **Fix**: Added `was_continued` flag to Process struct, set when SIGCONT resumes a stopped process, cleared and reported via waitpid with WCONTINUED flag. Updated all Process constructors including fork().
 - **Estimate**: Medium
 
 ### FEAT-007: Signal Masking
 - **Priority**: 🟡 MEDIUM
-- **Status**: ⬜ TODO
-- **File**: `src/kernel/signal.rs`
+- **Status**: ✅ DONE (2025-12-29)
+- **File**: `src/kernel/signal.rs`, `src/kernel/syscall.rs`
 - **Issue**: No sigprocmask support
-- **Fix**: Implement signal mask per process
+- **Fix**: Added `SigProcMaskHow` enum (Block/Unblock/SetMask), `sigprocmask()` method to ProcessSignals, `get_blocked_mask()`, `get_pending_mask()`, and syscalls: `sys_sigprocmask`, `sys_siggetmask`, `sys_sigpending_mask`. Respects SIGKILL/SIGSTOP unblockable invariant. 6 unit tests added.
 - **Estimate**: Medium
 
 ### FEAT-008: Complete Message Queues
@@ -363,18 +363,18 @@ This document tracks all identified issues, improvements, and feature work for A
 
 ### FEAT-014: Heredocs
 - **Priority**: 🟢 LOW
-- **Status**: ⬜ TODO
+- **Status**: ✅ DONE (2025-12-29)
 - **File**: `src/shell/parser.rs`
 - **Issue**: No << EOF support
-- **Fix**: Implement heredoc parsing
+- **Fix**: Added `Heredoc` struct with delimiter, strip_tabs, and content fields. Added `HeredocStart` and `HeredocStripStart` tokens. Parser recognizes `<<DELIM` and `<<-DELIM` syntax. Added `heredoc` field to `SimpleCommand`. Added `needs_heredoc()` and `read_content()` methods for shell to read heredoc lines. 7 tests added.
 - **Estimate**: Small
 
 ### FEAT-015: Process Priority (nice)
 - **Priority**: 🟢 LOW
-- **Status**: ⬜ TODO
-- **File**: `src/kernel/process.rs`
+- **Status**: ✅ DONE (2025-12-29)
+- **File**: `src/kernel/process.rs`, `src/kernel/syscall.rs`
 - **Issue**: No scheduling priority
-- **Fix**: Add nice/setpriority syscalls
+- **Fix**: Added `nice: i8` field to Process struct (range -20 to +19). Added `nice()` method to ProcessBuilder. Implemented syscalls: `sys_nice` (adjust priority), `sys_getpriority`, `sys_setpriority`. Child processes inherit nice value on fork.
 - **Estimate**: Small
 
 ---

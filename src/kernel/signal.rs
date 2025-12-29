@@ -306,6 +306,76 @@ impl ProcessSignals {
     pub fn pending_count(&self) -> usize {
         self.pending.len()
     }
+
+    /// Get blocked signals as a bitmask (bit N = signal N is blocked)
+    pub fn get_blocked_mask(&self) -> u16 {
+        let mut mask = 0u16;
+        for &signal in &self.blocked {
+            mask |= 1 << signal.num();
+        }
+        mask
+    }
+
+    /// Set blocked signals from a bitmask
+    ///
+    /// Returns the old mask. Ignores attempts to block SIGKILL/SIGSTOP.
+    fn set_blocked_mask(&mut self, mask: u16) -> u16 {
+        let old_mask = self.get_blocked_mask();
+        self.blocked.clear();
+        for i in 1..=12 {
+            if let Some(signal) = Signal::from_num(i)
+                && mask & (1 << i) != 0
+                && signal.can_catch()
+            {
+                self.blocked.insert(signal);
+            }
+        }
+        old_mask
+    }
+
+    /// sigprocmask - modify the signal mask
+    ///
+    /// Returns the old mask before modification.
+    pub fn sigprocmask(&mut self, how: SigProcMaskHow, mask: u16) -> u16 {
+        let old_mask = self.get_blocked_mask();
+        match how {
+            SigProcMaskHow::Block => {
+                // Add signals to blocked set
+                for i in 1..=12 {
+                    if let Some(signal) = Signal::from_num(i)
+                        && mask & (1 << i) != 0
+                        && signal.can_catch()
+                    {
+                        self.blocked.insert(signal);
+                    }
+                }
+            }
+            SigProcMaskHow::Unblock => {
+                // Remove signals from blocked set
+                for i in 1..=12 {
+                    if let Some(signal) = Signal::from_num(i)
+                        && mask & (1 << i) != 0
+                    {
+                        self.blocked.remove(&signal);
+                    }
+                }
+            }
+            SigProcMaskHow::SetMask => {
+                // Replace blocked set entirely
+                self.set_blocked_mask(mask);
+            }
+        }
+        old_mask
+    }
+
+    /// Get pending signals as a bitmask (for sigpending syscall)
+    pub fn get_pending_mask(&self) -> u16 {
+        let mut mask = 0u16;
+        for &signal in &self.pending {
+            mask |= 1 << signal.num();
+        }
+        mask
+    }
 }
 
 impl Default for ProcessSignals {
@@ -327,6 +397,38 @@ pub enum SignalError {
     ProcessNotFound(Pid),
     /// Permission denied
     PermissionDenied,
+}
+
+/// How to modify the signal mask in sigprocmask
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SigProcMaskHow {
+    /// Add signals to the blocked mask (union)
+    Block,
+    /// Remove signals from the blocked mask
+    Unblock,
+    /// Replace the blocked mask entirely
+    SetMask,
+}
+
+impl SigProcMaskHow {
+    /// Create from numeric value (POSIX-style)
+    pub fn from_num(n: u8) -> Option<Self> {
+        match n {
+            0 => Some(SigProcMaskHow::Block),
+            1 => Some(SigProcMaskHow::Unblock),
+            2 => Some(SigProcMaskHow::SetMask),
+            _ => None,
+        }
+    }
+
+    /// Get numeric value
+    pub fn num(&self) -> u8 {
+        match self {
+            SigProcMaskHow::Block => 0,
+            SigProcMaskHow::Unblock => 1,
+            SigProcMaskHow::SetMask => 2,
+        }
+    }
 }
 
 impl std::fmt::Display for SignalError {
@@ -493,5 +595,92 @@ mod tests {
         disp.set_action(Signal::SIGTERM, SignalAction::Ignore)
             .unwrap();
         assert_eq!(resolve_action(Signal::SIGTERM, &disp), SignalAction::Ignore);
+    }
+
+    #[test]
+    fn test_sigprocmask_how_from_num() {
+        assert_eq!(SigProcMaskHow::from_num(0), Some(SigProcMaskHow::Block));
+        assert_eq!(SigProcMaskHow::from_num(1), Some(SigProcMaskHow::Unblock));
+        assert_eq!(SigProcMaskHow::from_num(2), Some(SigProcMaskHow::SetMask));
+        assert_eq!(SigProcMaskHow::from_num(3), None);
+    }
+
+    #[test]
+    fn test_sigprocmask_block() {
+        let mut ps = ProcessSignals::new();
+
+        // Initially no signals blocked
+        assert_eq!(ps.get_blocked_mask(), 0);
+
+        // Block SIGTERM (signal 1) and SIGINT (signal 5)
+        let mask = (1 << Signal::SIGTERM.num()) | (1 << Signal::SIGINT.num());
+        let old = ps.sigprocmask(SigProcMaskHow::Block, mask);
+        assert_eq!(old, 0);
+
+        // Verify they're blocked
+        let blocked = ps.get_blocked_mask();
+        assert!(blocked & (1 << Signal::SIGTERM.num()) != 0);
+        assert!(blocked & (1 << Signal::SIGINT.num()) != 0);
+    }
+
+    #[test]
+    fn test_sigprocmask_unblock() {
+        let mut ps = ProcessSignals::new();
+
+        // Block some signals first
+        ps.sigprocmask(
+            SigProcMaskHow::Block,
+            (1 << Signal::SIGTERM.num()) | (1 << Signal::SIGINT.num()),
+        );
+
+        // Unblock SIGTERM
+        ps.sigprocmask(SigProcMaskHow::Unblock, 1 << Signal::SIGTERM.num());
+
+        // Verify SIGTERM unblocked, SIGINT still blocked
+        let blocked = ps.get_blocked_mask();
+        assert!(blocked & (1 << Signal::SIGTERM.num()) == 0);
+        assert!(blocked & (1 << Signal::SIGINT.num()) != 0);
+    }
+
+    #[test]
+    fn test_sigprocmask_setmask() {
+        let mut ps = ProcessSignals::new();
+
+        // Block SIGTERM
+        ps.sigprocmask(SigProcMaskHow::Block, 1 << Signal::SIGTERM.num());
+
+        // Replace with SIGINT only
+        let old = ps.sigprocmask(SigProcMaskHow::SetMask, 1 << Signal::SIGINT.num());
+        assert!(old & (1 << Signal::SIGTERM.num()) != 0);
+
+        // Verify SIGTERM unblocked, SIGINT blocked
+        let blocked = ps.get_blocked_mask();
+        assert!(blocked & (1 << Signal::SIGTERM.num()) == 0);
+        assert!(blocked & (1 << Signal::SIGINT.num()) != 0);
+    }
+
+    #[test]
+    fn test_sigprocmask_cannot_block_sigkill() {
+        let mut ps = ProcessSignals::new();
+
+        // Try to block SIGKILL
+        ps.sigprocmask(SigProcMaskHow::Block, 1 << Signal::SIGKILL.num());
+
+        // Verify it's not blocked
+        assert!(ps.get_blocked_mask() & (1 << Signal::SIGKILL.num()) == 0);
+    }
+
+    #[test]
+    fn test_get_pending_mask() {
+        let mut ps = ProcessSignals::new();
+
+        // Send some signals
+        ps.send(Signal::SIGTERM);
+        ps.send(Signal::SIGUSR1);
+
+        let pending = ps.get_pending_mask();
+        assert!(pending & (1 << Signal::SIGTERM.num()) != 0);
+        assert!(pending & (1 << Signal::SIGUSR1.num()) != 0);
+        assert!(pending & (1 << Signal::SIGINT.num()) == 0);
     }
 }
