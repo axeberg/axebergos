@@ -596,6 +596,217 @@ impl Executor {
         self.execute_single(cmd)
     }
 
+    /// Execute a pipeline of commands asynchronously
+    #[cfg(target_arch = "wasm32")]
+    pub async fn execute_piped_async(&mut self, commands: &[SimpleCommand]) -> ExecResult {
+        let mut pipe_input = String::new();
+        let mut final_stdout = String::new();
+        let mut final_stderr = String::new();
+        let mut last_code = 0;
+
+        for (i, cmd) in commands.iter().enumerate() {
+            let is_first = i == 0;
+            let is_last = i == commands.len() - 1;
+
+            // Handle input redirection on first command
+            if is_first {
+                if let Some(ref redir) = cmd.stdin {
+                    match self.read_file(&redir.path) {
+                        Ok(content) => pipe_input = content,
+                        Err(e) => return ExecResult::success().with_error(e),
+                    }
+                }
+            }
+
+            // Execute the command
+            let mut stdout = String::new();
+            let mut stderr = String::new();
+
+            // Expand glob patterns in arguments
+            let expanded_args = self.expand_args(&cmd.args);
+
+            if builtins::is_builtin(&cmd.program) {
+                // Builtins in a pipeline get the pipe input as implicit stdin
+                let result = builtins::execute(&cmd.program, &expanded_args, &self.state);
+                match result {
+                    BuiltinResult::Success(s) => {
+                        stdout = s;
+                        last_code = 0;
+                    }
+                    BuiltinResult::Ok => {
+                        last_code = 0;
+                    }
+                    BuiltinResult::Error(e) => {
+                        stderr = e;
+                        last_code = 1;
+                    }
+                    BuiltinResult::Exit(code) => {
+                        return ExecResult::exit(code);
+                    }
+                    BuiltinResult::Cd(path) => {
+                        self.change_directory(&path);
+                        last_code = 0;
+                    }
+                    BuiltinResult::Export(pairs) => {
+                        for (name, value) in pairs {
+                            self.state.set_env(&name, &value);
+                        }
+                        last_code = 0;
+                    }
+                    BuiltinResult::Alias { name, value } => {
+                        self.state.set_alias(&name, &value);
+                        last_code = 0;
+                    }
+                    BuiltinResult::Unalias(name) => {
+                        self.state.remove_alias(&name);
+                        last_code = 0;
+                    }
+                    BuiltinResult::Source(path) => {
+                        let result = self.source_file(&path);
+                        last_code = result.code;
+                        stdout = result.output;
+                        stderr = result.error;
+                    }
+                }
+            } else if let Some(prog) = self.registry.get(&cmd.program) {
+                // Registry program - pass pipe_input as stdin
+                let args_ref: Vec<&str> = expanded_args.iter().map(|s| s.as_str()).collect();
+                match prog.run(&args_ref, &pipe_input) {
+                    Ok(output) => {
+                        stdout = output;
+                        last_code = 0;
+                    }
+                    Err(e) => {
+                        stderr = format!("{}: {}", cmd.program, e);
+                        last_code = 1;
+                    }
+                }
+            } else if self.is_wasm_command(&cmd.program) {
+                // WASM command - execute async with pipe_input
+                let result = self.execute_wasm_command(&cmd.program, &expanded_args, &pipe_input).await;
+                stdout = result.output;
+                stderr = result.error;
+                last_code = result.code;
+            } else {
+                // Command not found
+                stderr = format!("{}: command not found", cmd.program);
+                last_code = 127;
+            }
+
+            // Collect stderr
+            if !stderr.is_empty() {
+                final_stderr.push_str(&stderr);
+                if !final_stderr.ends_with('\n') {
+                    final_stderr.push('\n');
+                }
+            }
+
+            // Handle output redirection on last command
+            if is_last {
+                if let Some(ref redir) = cmd.stdout {
+                    if let Err(e) = self.write_file(&redir.path, &stdout, redir.append) {
+                        return ExecResult::success().with_error(e);
+                    }
+                } else {
+                    final_stdout = stdout;
+                }
+            } else {
+                // Pass stdout to next command's stdin
+                pipe_input = stdout;
+            }
+        }
+
+        self.state.last_status = last_code;
+
+        ExecResult {
+            code: last_code,
+            output: final_stdout,
+            error: final_stderr,
+            should_exit: false,
+        }
+    }
+
+    /// Execute a pipeline of commands asynchronously (non-WASM stub)
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn execute_piped_async(&mut self, commands: &[SimpleCommand]) -> ExecResult {
+        self.execute_piped(commands)
+    }
+
+    /// Execute a parsed pipeline asynchronously
+    #[cfg(target_arch = "wasm32")]
+    pub async fn execute_pipeline_async(&mut self, pipeline: &Pipeline) -> ExecResult {
+        if pipeline.commands.is_empty() {
+            return ExecResult::success();
+        }
+
+        // For single commands, execute directly
+        if pipeline.commands.len() == 1 {
+            return self.execute_single_async(&pipeline.commands[0]).await;
+        }
+
+        // For pipelines, chain the commands
+        self.execute_piped_async(&pipeline.commands).await
+    }
+
+    /// Execute a parsed pipeline asynchronously (non-WASM stub)
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn execute_pipeline_async(&mut self, pipeline: &Pipeline) -> ExecResult {
+        self.execute_pipeline(pipeline)
+    }
+
+    /// Execute a command list asynchronously (multiple pipelines with &&, ||, ;)
+    #[cfg(target_arch = "wasm32")]
+    pub async fn execute_command_list_async(&mut self, cmd_list: &CommandList) -> ExecResult {
+        // Execute the first pipeline
+        let mut result = self.execute_pipeline_async(&cmd_list.first).await;
+
+        // Short-circuit on exit
+        if result.should_exit {
+            return result;
+        }
+
+        // Execute remaining pipelines based on logical operators
+        for (op, pipeline) in &cmd_list.rest {
+            let should_execute = match op {
+                LogicalOp::Sequence => true,        // Always execute
+                LogicalOp::And => result.code == 0, // Execute if previous succeeded
+                LogicalOp::Or => result.code != 0,  // Execute if previous failed
+            };
+
+            if should_execute {
+                let next_result = self.execute_pipeline_async(pipeline).await;
+
+                // Combine outputs
+                if !result.output.is_empty() && !next_result.output.is_empty() {
+                    result.output.push('\n');
+                }
+                result.output.push_str(&next_result.output);
+
+                if !result.error.is_empty() && !next_result.error.is_empty() {
+                    result.error.push('\n');
+                }
+                result.error.push_str(&next_result.error);
+
+                // Update exit code to the last executed command
+                result.code = next_result.code;
+
+                // Short-circuit on exit
+                if next_result.should_exit {
+                    result.should_exit = true;
+                    return result;
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Execute a command list asynchronously (non-WASM stub)
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn execute_command_list_async(&mut self, cmd_list: &CommandList) -> ExecResult {
+        self.execute_command_list(cmd_list)
+    }
+
     /// Execute a command line asynchronously (supports WASM commands)
     #[cfg(target_arch = "wasm32")]
     pub async fn execute_line_async(&mut self, line: &str) -> ExecResult {
@@ -620,14 +831,8 @@ impl Executor {
             Err(e) => return ExecResult::success().with_error(format!("parse error: {}", e)),
         };
 
-        // For now, handle simple single commands asynchronously
-        // TODO: Full async pipeline support
-        if cmd_list.rest.is_empty() && cmd_list.first.commands.len() == 1 {
-            return self.execute_single_async(&cmd_list.first.commands[0]).await;
-        }
-
-        // Fall back to sync execution for complex commands
-        self.execute_command_list(&cmd_list)
+        // Execute the command list asynchronously (full pipeline support)
+        self.execute_command_list_async(&cmd_list).await
     }
 
     /// Execute a command line asynchronously (non-WASM stub)

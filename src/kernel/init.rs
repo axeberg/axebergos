@@ -244,10 +244,14 @@ impl InitSystem {
         // Now get the length before borrowing mutably
         let pid = 1000 + self.services.len() as u32;
 
-        // Now get mutable reference and update
-        let service = self.services.get_mut(name).unwrap();
-        service.state = ServiceState::Running;
-        service.pid = Some(pid);
+        // Get mutable reference and update
+        // Safety: service existence was verified above and nothing removes it between checks
+        if let Some(service) = self.services.get_mut(name) {
+            service.state = ServiceState::Running;
+            service.pid = Some(pid);
+        } else {
+            return Err(format!("Service '{}' disappeared unexpectedly", name));
+        }
 
         Ok(())
     }

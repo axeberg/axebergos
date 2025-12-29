@@ -61,7 +61,10 @@ impl FifoBuffer {
 
         let to_read = buf.len().min(self.data.len());
         for byte in buf.iter_mut().take(to_read) {
-            *byte = self.data.pop_front().unwrap();
+            // Safety: to_read is bounded by data.len(), so pop_front always succeeds
+            if let Some(b) = self.data.pop_front() {
+                *byte = b;
+            }
         }
 
         Ok(to_read)

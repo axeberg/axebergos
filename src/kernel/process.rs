@@ -345,6 +345,198 @@ pub struct Process {
     pub umask: u16,
 }
 
+/// Builder pattern for creating Process instances
+///
+/// This provides a more ergonomic way to create processes with many optional parameters.
+///
+/// # Example
+/// ```ignore
+/// let process = ProcessBuilder::new(pid, "my_process")
+///     .parent(Some(parent_pid))
+///     .uid(Uid::ROOT)
+///     .gid(Gid::ROOT)
+///     .cwd("/root")
+///     .build();
+/// ```
+pub struct ProcessBuilder {
+    pid: Pid,
+    name: String,
+    parent: Option<Pid>,
+    pgid: Option<Pgid>,
+    sid: Option<Sid>,
+    uid: Uid,
+    gid: Gid,
+    euid: Option<Uid>,
+    egid: Option<Gid>,
+    groups: Vec<Gid>,
+    environ: HashMap<String, String>,
+    cwd: PathBuf,
+    memory_limit: Option<usize>,
+    is_session_leader: bool,
+    umask: u16,
+    ctty: Option<String>,
+}
+
+impl ProcessBuilder {
+    /// Create a new process builder with required parameters
+    pub fn new(pid: Pid, name: impl Into<String>) -> Self {
+        Self {
+            pid,
+            name: name.into(),
+            parent: None,
+            pgid: None,
+            sid: None,
+            uid: Uid(1000),
+            gid: Gid(1000),
+            euid: None,
+            egid: None,
+            groups: Vec::new(),
+            environ: HashMap::new(),
+            cwd: PathBuf::from("/"),
+            memory_limit: None,
+            is_session_leader: true,
+            umask: 0o022,
+            ctty: None,
+        }
+    }
+
+    /// Set the parent process
+    pub fn parent(mut self, parent: Option<Pid>) -> Self {
+        self.parent = parent;
+        self
+    }
+
+    /// Set the process group ID
+    pub fn pgid(mut self, pgid: Pgid) -> Self {
+        self.pgid = Some(pgid);
+        self
+    }
+
+    /// Set the session ID
+    pub fn sid(mut self, sid: Sid) -> Self {
+        self.sid = Some(sid);
+        self
+    }
+
+    /// Set the real user ID
+    pub fn uid(mut self, uid: Uid) -> Self {
+        self.uid = uid;
+        self
+    }
+
+    /// Set the real group ID
+    pub fn gid(mut self, gid: Gid) -> Self {
+        self.gid = gid;
+        self
+    }
+
+    /// Set the effective user ID (defaults to uid if not set)
+    pub fn euid(mut self, euid: Uid) -> Self {
+        self.euid = Some(euid);
+        self
+    }
+
+    /// Set the effective group ID (defaults to gid if not set)
+    pub fn egid(mut self, egid: Gid) -> Self {
+        self.egid = Some(egid);
+        self
+    }
+
+    /// Set supplementary groups
+    pub fn groups(mut self, groups: Vec<Gid>) -> Self {
+        self.groups = groups;
+        self
+    }
+
+    /// Set the environment variables
+    pub fn environ(mut self, environ: HashMap<String, String>) -> Self {
+        self.environ = environ;
+        self
+    }
+
+    /// Add a single environment variable
+    pub fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.environ.insert(key.into(), value.into());
+        self
+    }
+
+    /// Set the current working directory
+    pub fn cwd(mut self, cwd: impl Into<PathBuf>) -> Self {
+        self.cwd = cwd.into();
+        self
+    }
+
+    /// Set the memory limit
+    pub fn memory_limit(mut self, limit: usize) -> Self {
+        self.memory_limit = Some(limit);
+        self
+    }
+
+    /// Set whether this is a session leader
+    pub fn session_leader(mut self, is_leader: bool) -> Self {
+        self.is_session_leader = is_leader;
+        self
+    }
+
+    /// Set the file creation mask (umask)
+    pub fn umask(mut self, umask: u16) -> Self {
+        self.umask = umask;
+        self
+    }
+
+    /// Set the controlling TTY
+    pub fn ctty(mut self, ctty: impl Into<String>) -> Self {
+        self.ctty = Some(ctty.into());
+        self
+    }
+
+    /// Build the Process instance
+    pub fn build(self) -> Process {
+        let pgid = self.pgid.unwrap_or_else(|| Pgid::from_pid(self.pid));
+        let sid = self.sid.unwrap_or_else(|| Sid::from_pid(self.pid));
+        let euid = self.euid.unwrap_or(self.uid);
+        let egid = self.egid.unwrap_or(self.gid);
+        let groups = if self.groups.is_empty() {
+            vec![self.gid]
+        } else {
+            self.groups
+        };
+
+        let memory = if let Some(limit) = self.memory_limit {
+            ProcessMemory::with_limit(limit)
+        } else {
+            ProcessMemory::new()
+        };
+
+        Process {
+            pid: self.pid,
+            parent: self.parent,
+            pgid,
+            sid,
+            uid: self.uid,
+            gid: self.gid,
+            euid,
+            egid,
+            suid: self.uid,
+            sgid: self.gid,
+            groups,
+            state: ProcessState::Running,
+            files: FileTable::new(),
+            memory,
+            signals: ProcessSignals::new(),
+            rlimits: ResourceLimits::new(),
+            environ: self.environ,
+            cwd: self.cwd,
+            task: None,
+            name: self.name,
+            children: Vec::new(),
+            ctty: self.ctty,
+            is_session_leader: self.is_session_leader,
+            umask: self.umask,
+        }
+    }
+}
+
 impl Process {
     /// Create a new process (defaults to user 1000)
     pub fn new(pid: Pid, name: String, parent: Option<Pid>) -> Self {
@@ -630,12 +822,35 @@ impl Process {
 /// Maximum file descriptors per process (POSIX default is often 1024)
 pub const MAX_FDS_PER_PROCESS: usize = 1024;
 
+/// File descriptor flags (for fcntl F_GETFD/F_SETFD)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FdFlags {
+    /// Close file descriptor on exec (FD_CLOEXEC)
+    pub cloexec: bool,
+}
+
+impl FdFlags {
+    pub const CLOEXEC: u32 = 1;
+
+    pub fn from_bits(bits: u32) -> Self {
+        Self {
+            cloexec: bits & Self::CLOEXEC != 0,
+        }
+    }
+
+    pub fn to_bits(self) -> u32 {
+        if self.cloexec { Self::CLOEXEC } else { 0 }
+    }
+}
+
 /// A process's file descriptor table
 pub struct FileTable {
     /// Next fd to allocate
     next_fd: u32,
     /// Map from fd to kernel object handle
     table: HashMap<Fd, Handle>,
+    /// Map from fd to fd flags (FD_CLOEXEC, etc.)
+    flags: HashMap<Fd, FdFlags>,
     /// Maximum number of file descriptors (can be adjusted per-process)
     max_fds: usize,
 }
@@ -645,6 +860,7 @@ impl FileTable {
         Self {
             next_fd: 3, // 0, 1, 2 reserved for stdin/stdout/stderr
             table: HashMap::new(),
+            flags: HashMap::new(),
             max_fds: MAX_FDS_PER_PROCESS,
         }
     }
@@ -654,6 +870,7 @@ impl FileTable {
         Self {
             next_fd: 3,
             table: HashMap::new(),
+            flags: HashMap::new(),
             max_fds,
         }
     }
@@ -661,6 +878,12 @@ impl FileTable {
     /// Allocate a new file descriptor for a handle
     /// Returns None if the fd limit has been reached
     pub fn alloc(&mut self, handle: Handle) -> Option<Fd> {
+        self.alloc_with_flags(handle, FdFlags::default())
+    }
+
+    /// Allocate a new file descriptor for a handle with specific flags
+    /// Returns None if the fd limit has been reached
+    pub fn alloc_with_flags(&mut self, handle: Handle, fd_flags: FdFlags) -> Option<Fd> {
         // Check if we've hit the limit
         if self.table.len() >= self.max_fds {
             return None;
@@ -668,6 +891,7 @@ impl FileTable {
         let fd = Fd(self.next_fd);
         self.next_fd += 1;
         self.table.insert(fd, handle);
+        self.flags.insert(fd, fd_flags);
         Some(fd)
     }
 
@@ -693,6 +917,7 @@ impl FileTable {
 
     pub fn insert(&mut self, fd: Fd, handle: Handle) {
         self.table.insert(fd, handle);
+        self.flags.insert(fd, FdFlags::default());
     }
 
     pub fn get(&self, fd: Fd) -> Option<Handle> {
@@ -700,6 +925,7 @@ impl FileTable {
     }
 
     pub fn remove(&mut self, fd: Fd) -> Option<Handle> {
+        self.flags.remove(&fd);
         self.table.remove(&fd)
     }
 
@@ -707,12 +933,50 @@ impl FileTable {
         self.table.contains_key(&fd)
     }
 
+    /// Get the flags for a file descriptor
+    pub fn get_flags(&self, fd: Fd) -> Option<FdFlags> {
+        self.flags.get(&fd).copied()
+    }
+
+    /// Set the flags for a file descriptor
+    pub fn set_flags(&mut self, fd: Fd, fd_flags: FdFlags) -> bool {
+        if self.table.contains_key(&fd) {
+            self.flags.insert(fd, fd_flags);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Clone the file table for fork
-    /// Returns a new FileTable with the same mappings and fd limit
+    /// Returns a new FileTable with the same mappings, flags, and fd limit
     pub fn clone_for_fork(&self) -> Self {
         Self {
             next_fd: self.next_fd,
             table: self.table.clone(),
+            flags: self.flags.clone(),
+            max_fds: self.max_fds,
+        }
+    }
+
+    /// Clone the file table for exec, excluding FDs with FD_CLOEXEC set
+    /// Returns a new FileTable with only non-CLOEXEC file descriptors
+    pub fn clone_for_exec(&self) -> Self {
+        let mut new_table = HashMap::new();
+        let mut new_flags = HashMap::new();
+
+        for (fd, handle) in &self.table {
+            let fd_flags = self.flags.get(fd).copied().unwrap_or_default();
+            if !fd_flags.cloexec {
+                new_table.insert(*fd, *handle);
+                new_flags.insert(*fd, fd_flags);
+            }
+        }
+
+        Self {
+            next_fd: self.next_fd,
+            table: new_table,
+            flags: new_flags,
             max_fds: self.max_fds,
         }
     }

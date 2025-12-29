@@ -141,82 +141,105 @@ pub enum SyscallNr {
     Chown = 311,
 }
 
-impl SyscallNr {
-    /// Get the syscall name (for tracing/debugging)
-    pub fn name(&self) -> &'static str {
-        match self {
-            SyscallNr::Read => "read",
-            SyscallNr::Write => "write",
-            SyscallNr::Open => "open",
-            SyscallNr::Close => "close",
-            SyscallNr::Seek => "seek",
-            SyscallNr::Pipe => "pipe",
-            SyscallNr::Dup => "dup",
-            SyscallNr::Mkdir => "mkdir",
-            SyscallNr::Readdir => "readdir",
-            SyscallNr::Unlink => "unlink",
-            SyscallNr::Rmdir => "rmdir",
-            SyscallNr::Rename => "rename",
-            SyscallNr::Symlink => "symlink",
-            SyscallNr::Readlink => "readlink",
-            SyscallNr::Stat => "stat",
-            SyscallNr::Copy => "copy",
-            SyscallNr::Exit => "exit",
-            SyscallNr::Getpid => "getpid",
-            SyscallNr::Getppid => "getppid",
-            SyscallNr::Spawn => "spawn",
-            SyscallNr::Waitpid => "waitpid",
-            SyscallNr::Getcwd => "getcwd",
-            SyscallNr::Chdir => "chdir",
-            SyscallNr::Getpgid => "getpgid",
-            SyscallNr::Setpgid => "setpgid",
-            SyscallNr::Getenv => "getenv",
-            SyscallNr::Setenv => "setenv",
-            SyscallNr::Unsetenv => "unsetenv",
-            SyscallNr::Environ => "environ",
-            SyscallNr::MemAlloc => "mem_alloc",
-            SyscallNr::MemFree => "mem_free",
-            SyscallNr::MemRead => "mem_read",
-            SyscallNr::MemWrite => "mem_write",
-            SyscallNr::Shmget => "shmget",
-            SyscallNr::Shmat => "shmat",
-            SyscallNr::Shmdt => "shmdt",
-            SyscallNr::ShmSync => "shm_sync",
-            SyscallNr::ShmRefresh => "shm_refresh",
-            SyscallNr::Kill => "kill",
-            SyscallNr::Signal => "signal",
-            SyscallNr::Sigblock => "sigblock",
-            SyscallNr::Sigunblock => "sigunblock",
-            SyscallNr::Sigpending => "sigpending",
-            SyscallNr::TimerSet => "timer_set",
-            SyscallNr::TimerInterval => "timer_interval",
-            SyscallNr::TimerCancel => "timer_cancel",
-            SyscallNr::Alarm => "alarm",
-            SyscallNr::Now => "now",
-            SyscallNr::Ioctl => "ioctl",
-            SyscallNr::WindowCreate => "window_create",
-            SyscallNr::TraceEnable => "trace_enable",
-            SyscallNr::TraceDisable => "trace_disable",
-            SyscallNr::TraceSummary => "trace_summary",
-            SyscallNr::Getuid => "getuid",
-            SyscallNr::Geteuid => "geteuid",
-            SyscallNr::Getgid => "getgid",
-            SyscallNr::Getegid => "getegid",
-            SyscallNr::Setuid => "setuid",
-            SyscallNr::Seteuid => "seteuid",
-            SyscallNr::Setgid => "setgid",
-            SyscallNr::Setegid => "setegid",
-            SyscallNr::Getgroups => "getgroups",
-            SyscallNr::Setgroups => "setgroups",
-            SyscallNr::Chmod => "chmod",
-            SyscallNr::Chown => "chown",
-        }
-    }
+/// Macro to generate syscall name lookup
+///
+/// This reduces the repetitive match statement by using a const array lookup.
+/// Each syscall variant maps to its lowercase string name.
+macro_rules! syscall_names {
+    ($($variant:ident => $name:expr),* $(,)?) => {
+        impl SyscallNr {
+            /// Get the syscall name (for tracing/debugging)
+            pub fn name(&self) -> &'static str {
+                match self {
+                    $(SyscallNr::$variant => $name,)*
+                }
+            }
 
-    /// Get the syscall number
-    pub fn num(&self) -> u32 {
-        *self as u32
-    }
+            /// Get the syscall number
+            pub fn num(&self) -> u32 {
+                *self as u32
+            }
+        }
+    };
+}
+
+// Define syscall names using the macro
+syscall_names! {
+    // File I/O
+    Read => "read",
+    Write => "write",
+    Open => "open",
+    Close => "close",
+    Seek => "seek",
+    Pipe => "pipe",
+    Dup => "dup",
+    // Filesystem
+    Mkdir => "mkdir",
+    Readdir => "readdir",
+    Unlink => "unlink",
+    Rmdir => "rmdir",
+    Rename => "rename",
+    Symlink => "symlink",
+    Readlink => "readlink",
+    Stat => "stat",
+    Copy => "copy",
+    // Process
+    Exit => "exit",
+    Getpid => "getpid",
+    Getppid => "getppid",
+    Spawn => "spawn",
+    Waitpid => "waitpid",
+    Getcwd => "getcwd",
+    Chdir => "chdir",
+    Getpgid => "getpgid",
+    Setpgid => "setpgid",
+    // Environment
+    Getenv => "getenv",
+    Setenv => "setenv",
+    Unsetenv => "unsetenv",
+    Environ => "environ",
+    // Memory
+    MemAlloc => "mem_alloc",
+    MemFree => "mem_free",
+    MemRead => "mem_read",
+    MemWrite => "mem_write",
+    Shmget => "shmget",
+    Shmat => "shmat",
+    Shmdt => "shmdt",
+    ShmSync => "shm_sync",
+    ShmRefresh => "shm_refresh",
+    // Signals
+    Kill => "kill",
+    Signal => "signal",
+    Sigblock => "sigblock",
+    Sigunblock => "sigunblock",
+    Sigpending => "sigpending",
+    // Timers
+    TimerSet => "timer_set",
+    TimerInterval => "timer_interval",
+    TimerCancel => "timer_cancel",
+    Alarm => "alarm",
+    Now => "now",
+    // Device/ioctl
+    Ioctl => "ioctl",
+    WindowCreate => "window_create",
+    // Tracing
+    TraceEnable => "trace_enable",
+    TraceDisable => "trace_disable",
+    TraceSummary => "trace_summary",
+    // Users/Security
+    Getuid => "getuid",
+    Geteuid => "geteuid",
+    Getgid => "getgid",
+    Getegid => "getegid",
+    Setuid => "setuid",
+    Seteuid => "seteuid",
+    Setgid => "setgid",
+    Setegid => "setegid",
+    Getgroups => "getgroups",
+    Setgroups => "setgroups",
+    Chmod => "chmod",
+    Chown => "chown",
 }
 
 impl std::fmt::Display for SyscallNr {
@@ -338,6 +361,8 @@ pub enum SyscallError {
     AlreadyExists,
     /// Too many open files (EMFILE)
     TooManyOpenFiles,
+    /// Value too big for data type (E2BIG/EFBIG)
+    TooBig,
 }
 
 impl std::fmt::Display for SyscallError {
@@ -360,6 +385,7 @@ impl std::fmt::Display for SyscallError {
             SyscallError::IsADirectory => write!(f, "is a directory"),
             SyscallError::AlreadyExists => write!(f, "already exists"),
             SyscallError::TooManyOpenFiles => write!(f, "too many open files"),
+            SyscallError::TooBig => write!(f, "value too large for data type"),
         }
     }
 }
@@ -925,7 +951,6 @@ impl Kernel {
         // Generate process context if needed
         let proc_ctx = target_pid.and_then(|pid| {
             self.processes.get(&pid).map(|p| {
-                let _environ: Vec<(String, String)> = p.environ.clone().into_iter().collect();
                 ProcContext {
                     pid: p.pid.0,
                     ppid: p.parent.map(|pp| pp.0),
@@ -953,15 +978,7 @@ impl Kernel {
             .ok_or(SyscallError::NotFound)?;
 
         // Create a file object with the generated content
-        let file = FileObject {
-            path: PathBuf::from(path),
-            position: 0,
-            data: content,
-            readable: true,
-            writable: false,
-        };
-
-        let handle = self.objects.insert(KernelObject::File(file));
+        let handle = self.create_file_object(PathBuf::from(path), content, true, false);
         Ok(handle)
     }
 
@@ -984,15 +1001,7 @@ impl Kernel {
             .ok_or(SyscallError::NotFound)?;
 
         // Create a file object with the generated content
-        let file = FileObject {
-            path: PathBuf::from(path),
-            position: 0,
-            data: content,
-            readable: true,
-            writable: false,
-        };
-
-        let handle = self.objects.insert(KernelObject::File(file));
+        let handle = self.create_file_object(PathBuf::from(path), content, true, false);
         Ok(handle)
     }
 
@@ -1224,7 +1233,10 @@ impl Kernel {
                 .filter(|&child_pid| {
                     if pid > 0 {
                         // Wait for specific child
-                        child_pid.0 == pid as u32
+                        // Safe: pid > 0 guarantees positive value fits in u32
+                        u32::try_from(pid)
+                            .map(|p| child_pid.0 == p)
+                            .unwrap_or(false)
                     } else if pid == -1 {
                         // Wait for any child
                         true
@@ -1236,10 +1248,15 @@ impl Kernel {
                             .unwrap_or(false)
                     } else {
                         // Wait for any child in specified process group
-                        let target_pgid = Pgid((-pid) as u32);
-                        self.processes
-                            .get(child_pid)
-                            .map(|p| p.pgid == target_pgid)
+                        // Safe: pid < -1 means -pid > 1, use checked negation for i32::MIN
+                        let target_pgid = pid
+                            .checked_neg()
+                            .and_then(|n| u32::try_from(n).ok())
+                            .map(Pgid);
+                        target_pgid
+                            .and_then(|tpg| {
+                                self.processes.get(child_pid).map(|p| p.pgid == tpg)
+                            })
                             .unwrap_or(false)
                     }
                 })
@@ -1599,6 +1616,14 @@ impl Kernel {
         Ok(process.egid)
     }
 
+    /// Create a file object and insert it into the kernel object store
+    ///
+    /// This is a helper to reduce duplication across open_device, open_proc, open_sysfs, etc.
+    fn create_file_object(&mut self, path: PathBuf, data: Vec<u8>, readable: bool, writable: bool) -> Handle {
+        let file = FileObject::new(path, data, readable, writable);
+        self.objects.insert(KernelObject::File(file))
+    }
+
     /// Open a device (paths starting with /dev/)
     fn open_device(&mut self, path: &Path, _flags: OpenFlags) -> SyscallResult<Handle> {
         let name = path
@@ -1610,22 +1635,17 @@ impl Kernel {
             "console" => Ok(self.console_handle),
             "null" => {
                 // /dev/null - discard all writes, return EOF on read
-                // For now, just return a file object that does nothing special
-                let file = FileObject::new(path.to_path_buf(), Vec::new(), true, true);
-                Ok(self.objects.insert(KernelObject::File(file)))
+                Ok(self.create_file_object(path.to_path_buf(), Vec::new(), true, true))
             }
             "zero" => {
                 // /dev/zero - returns infinite zeros
-                // For now, return a file with some zeros
-                let file = FileObject::new(path.to_path_buf(), vec![0; 4096], true, false);
-                Ok(self.objects.insert(KernelObject::File(file)))
+                Ok(self.create_file_object(path.to_path_buf(), vec![0; 4096], true, false))
             }
             "random" | "urandom" => {
                 // /dev/random and /dev/urandom - return cryptographically secure random bytes
                 // Uses Web Crypto API in WASM environments
                 let random_data = generate_random_bytes(4096);
-                let file = FileObject::new(path.to_path_buf(), random_data, true, false);
-                Ok(self.objects.insert(KernelObject::File(file)))
+                Ok(self.create_file_object(path.to_path_buf(), random_data, true, false))
             }
             _ => Err(SyscallError::NotFound),
         }
@@ -1691,7 +1711,8 @@ impl Kernel {
 
         // Read the file contents (using fstat for consistency with atomic open)
         let meta = self.vfs.fstat(vfs_handle)?;
-        let mut data = vec![0u8; meta.size as usize];
+        let file_size = usize::try_from(meta.size).map_err(|_| SyscallError::TooBig)?;
+        let mut data = vec![0u8; file_size];
         if !data.is_empty() {
             self.vfs.read(vfs_handle, &mut data)?;
         }
