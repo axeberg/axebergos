@@ -15,10 +15,10 @@ This document tracks all identified issues, improvements, and feature work for A
 | Security (High) | 5 | 5 | 0 | 0 |
 | Security (Medium) | 8 | 8 | 0 | 0 |
 | Code Quality | 10 | 10 | 0 | 0 |
-| Missing Features | 15 | 6 | 0 | 9 |
+| Missing Features | 15 | 7 | 0 | 8 |
 | Documentation | 5 | 0 | 0 | 5 |
 | Future Features | 12 | 0 | 0 | 12 |
-| **TOTAL** | **57** | **31** | **0** | **26** |
+| **TOTAL** | **57** | **32** | **0** | **25** |
 
 ---
 
@@ -315,10 +315,10 @@ This document tracks all identified issues, improvements, and feature work for A
 
 ### FEAT-008: Complete Message Queues
 - **Priority**: 🟢 LOW
-- **Status**: ⬜ TODO
-- **File**: `src/kernel/msgqueue.rs`
-- **Issue**: Exists but incomplete
-- **Fix**: Full msgget/msgsnd/msgrcv implementation
+- **Status**: ✅ DONE (2025-12-29)
+- **File**: `src/kernel/msgqueue.rs`, `src/kernel/syscall.rs`
+- **Issue**: Exists but incomplete (missing IPC_SET)
+- **Fix**: Added `msgctl_set()` method to MsgQueueManager for IPC_SET. Added `get()` method for permission checking. Added full syscall support: `sys_msgget`, `sys_msgsnd`, `sys_msgrcv`, `sys_msgctl_rmid`, `sys_msgctl_stat`, `sys_msgctl_set`. Syscalls include proper permission checking based on queue owner/mode. Added 2 unit tests for msgctl_set.
 - **Estimate**: Medium
 
 ### FEAT-009: Complete Semaphores
@@ -503,6 +503,14 @@ This document tracks all identified issues, improvements, and feature work for A
 ## Progress Log
 
 ### 2025-12-29 (Phase 5 Continuing)
+- **FEAT-008**: Completed message queues with IPC_SET:
+  - Added `msgctl_set()` method for changing queue attributes
+  - Added `get()` method for permission checking
+  - Added 6 syscalls: msgget, msgsnd, msgrcv, msgctl_rmid, msgctl_stat, msgctl_set
+  - Added SyscallNr enum variants for message queue operations
+  - All syscalls include proper permission checks
+  - Added 2 unit tests for msgctl_set
+
 - **FEAT-002**: Implemented hard links:
   - Added `link()` method to FileSystem trait
   - Added `nlink` field to Metadata struct (link count)

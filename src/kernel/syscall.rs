@@ -22,7 +22,7 @@ use super::memory::{
     SystemMemoryStats,
 };
 use super::mount::MountTable;
-use super::msgqueue::MsgQueueManager;
+use super::msgqueue::{MsgQueueError, MsgQueueId, MsgQueueManager, MsgQueueStats};
 use super::object::{
     ConsoleObject, FileObject, KernelObject, ObjectTable, PipeObject, WindowId, WindowObject,
 };
@@ -139,6 +139,12 @@ pub enum SyscallNr {
     Setgroups = 309,
     Chmod = 310,
     Chown = 311,
+
+    // Message Queues (325-349)
+    Msgget = 325,
+    Msgsnd = 326,
+    Msgrcv = 327,
+    Msgctl = 328,
 }
 
 /// Macro to generate syscall name lookup
@@ -240,6 +246,11 @@ syscall_names! {
     Setgroups => "setgroups",
     Chmod => "chmod",
     Chown => "chown",
+    // Message Queues
+    Msgget => "msgget",
+    Msgsnd => "msgsnd",
+    Msgrcv => "msgrcv",
+    Msgctl => "msgctl",
 }
 
 impl std::fmt::Display for SyscallNr {
@@ -2725,6 +2736,263 @@ impl Kernel {
         }
 
         Some((signal, action))
+    }
+
+    // ========== MESSAGE QUEUE SYSCALLS ==========
+
+    /// msgget - get or create a message queue
+    ///
+    /// # Arguments
+    /// * `key` - Queue key. Negative = create private queue, non-negative = get/create by key
+    /// * `create` - If true, create queue if it doesn't exist
+    ///
+    /// # Returns
+    /// Queue ID on success
+    pub fn sys_msgget(&mut self, key: i32, create: bool) -> SyscallResult<u32> {
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .proc
+            .processes
+            .get(&current)
+            .ok_or(SyscallError::NoProcess)?;
+
+        let uid = process.euid.0;
+        let gid = process.egid.0;
+
+        let id = self
+            .ipc
+            .msgqueues
+            .msgget(key, uid, gid, create)
+            .map_err(|e| match e {
+                MsgQueueError::NotFound => SyscallError::NotFound,
+                MsgQueueError::AlreadyExists => SyscallError::AlreadyExists,
+                _ => SyscallError::Io("message queue error".into()),
+            })?;
+
+        Ok(id.0)
+    }
+
+    /// msgsnd - send a message to a queue
+    ///
+    /// # Arguments
+    /// * `queue_id` - Queue identifier
+    /// * `mtype` - Message type (must be > 0)
+    /// * `data` - Message data
+    ///
+    /// # Returns
+    /// () on success
+    pub fn sys_msgsnd(&mut self, queue_id: u32, mtype: i64, data: Vec<u8>) -> SyscallResult<()> {
+        use super::msgqueue::Message;
+
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .proc
+            .processes
+            .get(&current)
+            .ok_or(SyscallError::NoProcess)?;
+
+        // Check write permission
+        let queue = self
+            .ipc
+            .msgqueues
+            .get(MsgQueueId(queue_id))
+            .ok_or(SyscallError::NotFound)?;
+
+        if process.euid.0 != 0 && process.euid.0 != queue.uid {
+            // Check mode for write permission
+            let can_write = if process.euid.0 == queue.uid {
+                queue.mode & 0o200 != 0
+            } else if process.egid.0 == queue.gid {
+                queue.mode & 0o020 != 0
+            } else {
+                queue.mode & 0o002 != 0
+            };
+            if !can_write {
+                return Err(SyscallError::PermissionDenied);
+            }
+        }
+
+        let now = self.time.now;
+        let msg = Message::new(mtype, data);
+
+        self.ipc
+            .msgqueues
+            .msgsnd(MsgQueueId(queue_id), msg, now)
+            .map_err(|e| match e {
+                MsgQueueError::InvalidType => SyscallError::InvalidArgument,
+                MsgQueueError::QueueFull => SyscallError::WouldBlock,
+                MsgQueueError::NotFound => SyscallError::NotFound,
+                _ => SyscallError::Io("message queue error".into()),
+            })
+    }
+
+    /// msgrcv - receive a message from a queue
+    ///
+    /// # Arguments
+    /// * `queue_id` - Queue identifier
+    /// * `mtype` - Message type selector:
+    ///   - 0: receive first message
+    ///   - >0: receive first message with matching type
+    ///   - <0: receive first message with type <= |mtype|
+    ///
+    /// # Returns
+    /// (mtype, data) on success
+    pub fn sys_msgrcv(&mut self, queue_id: u32, mtype: i64) -> SyscallResult<(i64, Vec<u8>)> {
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .proc
+            .processes
+            .get(&current)
+            .ok_or(SyscallError::NoProcess)?;
+
+        // Check read permission
+        let queue = self
+            .ipc
+            .msgqueues
+            .get(MsgQueueId(queue_id))
+            .ok_or(SyscallError::NotFound)?;
+
+        if process.euid.0 != 0 && process.euid.0 != queue.uid {
+            // Check mode for read permission
+            let can_read = if process.euid.0 == queue.uid {
+                queue.mode & 0o400 != 0
+            } else if process.egid.0 == queue.gid {
+                queue.mode & 0o040 != 0
+            } else {
+                queue.mode & 0o004 != 0
+            };
+            if !can_read {
+                return Err(SyscallError::PermissionDenied);
+            }
+        }
+
+        let now = self.time.now;
+
+        let msg = self
+            .ipc
+            .msgqueues
+            .msgrcv(MsgQueueId(queue_id), mtype, now)
+            .map_err(|e| match e {
+                MsgQueueError::NoMessage => SyscallError::WouldBlock,
+                MsgQueueError::NotFound => SyscallError::NotFound,
+                _ => SyscallError::Io("message queue error".into()),
+            })?;
+
+        Ok((msg.mtype, msg.data))
+    }
+
+    /// msgctl - message queue control operations
+    ///
+    /// # Arguments
+    /// * `queue_id` - Queue identifier
+    /// * `cmd` - Command:
+    ///   - 0 (IPC_RMID): Remove queue
+    ///   - 1 (IPC_STAT): Get queue stats (returns via separate method)
+    ///   - 2 (IPC_SET): Set queue attributes
+    /// * `uid`, `gid`, `mode`, `max_bytes` - Values for IPC_SET
+    ///
+    /// # Returns
+    /// () on success, stats for IPC_STAT
+    pub fn sys_msgctl_rmid(&mut self, queue_id: u32) -> SyscallResult<()> {
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .proc
+            .processes
+            .get(&current)
+            .ok_or(SyscallError::NoProcess)?;
+
+        // Check owner or root
+        let queue = self
+            .ipc
+            .msgqueues
+            .get(MsgQueueId(queue_id))
+            .ok_or(SyscallError::NotFound)?;
+
+        if process.euid.0 != 0 && process.euid.0 != queue.uid {
+            return Err(SyscallError::PermissionDenied);
+        }
+
+        self.ipc
+            .msgqueues
+            .msgctl_rmid(MsgQueueId(queue_id))
+            .map_err(|_| SyscallError::NotFound)
+    }
+
+    /// msgctl IPC_STAT - get queue statistics
+    pub fn sys_msgctl_stat(&self, queue_id: u32) -> SyscallResult<MsgQueueStats> {
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .proc
+            .processes
+            .get(&current)
+            .ok_or(SyscallError::NoProcess)?;
+
+        // Check read permission
+        let queue = self
+            .ipc
+            .msgqueues
+            .get(MsgQueueId(queue_id))
+            .ok_or(SyscallError::NotFound)?;
+
+        if process.euid.0 != 0 && process.euid.0 != queue.uid {
+            let can_read = if process.euid.0 == queue.uid {
+                queue.mode & 0o400 != 0
+            } else if process.egid.0 == queue.gid {
+                queue.mode & 0o040 != 0
+            } else {
+                queue.mode & 0o004 != 0
+            };
+            if !can_read {
+                return Err(SyscallError::PermissionDenied);
+            }
+        }
+
+        self.ipc
+            .msgqueues
+            .msgctl_stat(MsgQueueId(queue_id))
+            .map_err(|_| SyscallError::NotFound)
+    }
+
+    /// msgctl IPC_SET - set queue attributes
+    pub fn sys_msgctl_set(
+        &mut self,
+        queue_id: u32,
+        uid: Option<u32>,
+        gid: Option<u32>,
+        mode: Option<u16>,
+        max_bytes: Option<usize>,
+    ) -> SyscallResult<()> {
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .proc
+            .processes
+            .get(&current)
+            .ok_or(SyscallError::NoProcess)?;
+
+        // Check owner or root
+        let queue = self
+            .ipc
+            .msgqueues
+            .get(MsgQueueId(queue_id))
+            .ok_or(SyscallError::NotFound)?;
+
+        if process.euid.0 != 0 && process.euid.0 != queue.uid {
+            return Err(SyscallError::PermissionDenied);
+        }
+
+        // Non-root can only set uid/gid to themselves
+        if process.euid.0 != 0
+            && let Some(u) = uid
+            && u != process.euid.0
+            && u != queue.uid
+        {
+            return Err(SyscallError::PermissionDenied);
+        }
+
+        self.ipc
+            .msgqueues
+            .msgctl_set(MsgQueueId(queue_id), uid, gid, mode, max_bytes)
+            .map_err(|_| SyscallError::NotFound)
     }
 
     /// Get process state

@@ -274,6 +274,41 @@ impl MsgQueueManager {
         Ok(())
     }
 
+    /// Set queue attributes (IPC_SET)
+    ///
+    /// Allows changing uid, gid, mode, and max_bytes of a message queue.
+    /// Caller must have appropriate permissions (owner or root).
+    pub fn msgctl_set(
+        &mut self,
+        id: MsgQueueId,
+        uid: Option<u32>,
+        gid: Option<u32>,
+        mode: Option<u16>,
+        max_bytes: Option<usize>,
+    ) -> Result<(), MsgQueueError> {
+        let queue = self.queues.get_mut(&id).ok_or(MsgQueueError::NotFound)?;
+
+        if let Some(u) = uid {
+            queue.uid = u;
+        }
+        if let Some(g) = gid {
+            queue.gid = g;
+        }
+        if let Some(m) = mode {
+            queue.mode = m & 0o777; // Only permission bits
+        }
+        if let Some(mb) = max_bytes {
+            queue.max_bytes = mb;
+        }
+
+        Ok(())
+    }
+
+    /// Get a queue for permission checking
+    pub fn get(&self, id: MsgQueueId) -> Option<&MessageQueue> {
+        self.queues.get(&id)
+    }
+
     /// List all queue IDs
     pub fn list(&self) -> Vec<MsgQueueId> {
         self.queues.keys().copied().collect()
@@ -357,5 +392,43 @@ mod tests {
         let id1 = mgr.msgget(-1, 1000, 1000, true).unwrap();
         let id2 = mgr.msgget(-1, 1000, 1000, true).unwrap();
         assert_ne!(id1, id2); // Private queues get unique IDs
+    }
+
+    #[test]
+    fn test_msgctl_set() {
+        let mut mgr = MsgQueueManager::new();
+        let id = mgr.msgget(200, 1000, 1000, true).unwrap();
+
+        // Get initial state
+        let stats = mgr.msgctl_stat(id).unwrap();
+        assert_eq!(stats.msg_qbytes, 16384); // default max bytes
+
+        // Change attributes
+        mgr.msgctl_set(id, Some(2000), Some(2000), Some(0o600), Some(8192))
+            .unwrap();
+
+        // Verify changes via queue
+        let queue = mgr.get(id).unwrap();
+        assert_eq!(queue.uid, 2000);
+        assert_eq!(queue.gid, 2000);
+        assert_eq!(queue.mode, 0o600);
+
+        // Verify max_bytes via stats
+        let stats = mgr.msgctl_stat(id).unwrap();
+        assert_eq!(stats.msg_qbytes, 8192);
+    }
+
+    #[test]
+    fn test_msgctl_set_partial() {
+        let mut mgr = MsgQueueManager::new();
+        let id = mgr.msgget(201, 1000, 1000, true).unwrap();
+
+        // Only change mode
+        mgr.msgctl_set(id, None, None, Some(0o660), None).unwrap();
+
+        let queue = mgr.get(id).unwrap();
+        assert_eq!(queue.uid, 1000); // unchanged
+        assert_eq!(queue.gid, 1000); // unchanged
+        assert_eq!(queue.mode, 0o660); // changed
     }
 }
