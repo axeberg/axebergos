@@ -659,6 +659,7 @@ impl FileSystem for MemoryFs {
                 atime: meta.atime,
                 mtime: meta.mtime,
                 ctime: meta.ctime,
+                nlink: 1,
             }),
             Some(Node::Directory) => Ok(Metadata {
                 size: 0,
@@ -672,6 +673,7 @@ impl FileSystem for MemoryFs {
                 atime: meta.atime,
                 mtime: meta.mtime,
                 ctime: meta.ctime,
+                nlink: 2, // Directories have at least 2 (. and parent)
             }),
             Some(Node::Symlink(target)) => Ok(Metadata {
                 size: target.len() as u64,
@@ -685,6 +687,7 @@ impl FileSystem for MemoryFs {
                 atime: meta.atime,
                 mtime: meta.mtime,
                 ctime: meta.ctime,
+                nlink: 1,
             }),
             None => Err(io::Error::new(io::ErrorKind::NotFound, "Path not found")),
         }
@@ -960,6 +963,64 @@ impl FileSystem for MemoryFs {
             )),
             None => Err(io::Error::new(io::ErrorKind::NotFound, "Path not found")),
         }
+    }
+
+    fn link(&mut self, source: &str, dest: &str) -> io::Result<()> {
+        // Note: True hard links require inode-based storage.
+        // For now, we copy the file content to simulate a hard link.
+        // This is a simplified implementation that doesn't share inode state.
+        let source = Self::normalize_path(source);
+        let dest = Self::normalize_path(dest);
+
+        // Check source exists and is a file
+        let content = match self.nodes.get(&source) {
+            Some(Node::File(data)) => data.clone(),
+            Some(Node::Directory) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "Cannot hard link directories",
+                ));
+            }
+            Some(Node::Symlink(_)) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Cannot hard link symlinks",
+                ));
+            }
+            None => return Err(io::Error::new(io::ErrorKind::NotFound, "Source not found")),
+        };
+
+        // Check dest doesn't exist
+        if self.nodes.contains_key(&dest) {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "Destination already exists",
+            ));
+        }
+
+        // Check dest parent exists
+        if let Some(dest_parent) = Self::parent_path(&dest)
+            && !self.nodes.contains_key(&dest_parent)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "Destination parent not found",
+            ));
+        }
+
+        // Create the link (copy content)
+        self.nodes.insert(dest.clone(), Node::File(content));
+
+        // Copy metadata from source
+        if let Some(source_meta) = self.meta.get(&source).cloned() {
+            let mut dest_meta = source_meta;
+            dest_meta.ctime = self.clock; // Update ctime for new entry
+            self.meta.insert(dest, dest_meta);
+        } else {
+            self.meta.insert(dest, NodeMeta::file_default(self.clock));
+        }
+
+        Ok(())
     }
 
     fn chmod(&mut self, path: &str, mode: u16) -> io::Result<()> {

@@ -15,10 +15,10 @@ This document tracks all identified issues, improvements, and feature work for A
 | Security (High) | 5 | 5 | 0 | 0 |
 | Security (Medium) | 8 | 8 | 0 | 0 |
 | Code Quality | 10 | 10 | 0 | 0 |
-| Missing Features | 15 | 1 | 0 | 14 |
+| Missing Features | 15 | 6 | 0 | 9 |
 | Documentation | 5 | 0 | 0 | 5 |
 | Future Features | 12 | 0 | 0 | 12 |
-| **TOTAL** | **57** | **26** | **0** | **31** |
+| **TOTAL** | **57** | **31** | **0** | **26** |
 
 ---
 
@@ -267,10 +267,10 @@ This document tracks all identified issues, improvements, and feature work for A
 
 ### FEAT-002: Hard Links
 - **Priority**: 🟢 LOW
-- **Status**: ⬜ TODO
-- **File**: `src/vfs/memory.rs`
+- **Status**: ✅ DONE (2025-12-29)
+- **File**: `src/vfs/mod.rs`, `src/vfs/memory.rs`, `src/vfs/layered.rs`
 - **Issue**: Only symlinks supported
-- **Fix**: Add inode tracking, link count
+- **Fix**: Added `link()` method to FileSystem trait and `nlink` field to Metadata. Implemented in MemoryFs using copy-based approach (copies content to maintain file independence). Implemented in LayeredFs with copy-up semantics. Note: True inode-based hard links would require architectural refactoring.
 - **Estimate**: Medium
 
 ### FEAT-003: File Locking (fcntl/flock)
@@ -501,6 +501,19 @@ This document tracks all identified issues, improvements, and feature work for A
 ---
 
 ## Progress Log
+
+### 2025-12-29 (Phase 5 Continuing)
+- **FEAT-002**: Implemented hard links:
+  - Added `link()` method to FileSystem trait
+  - Added `nlink` field to Metadata struct (link count)
+  - MemoryFs uses copy-based approach (files start with same content)
+  - LayeredFs delegates to appropriate layer with copy-up
+  - Default nlink: 1 for files/symlinks, 2 for directories
+- **FEAT-006**: Fixed waitpid() WCONTINUED support
+- **FEAT-007**: Implemented signal masking (sigprocmask syscall)
+- **FEAT-014**: Implemented heredocs (<<DELIM and <<-DELIM syntax)
+- **FEAT-015**: Implemented process priority (nice/getpriority/setpriority)
+- Overall: 31 total issues resolved, 26 remaining
 
 ### 2025-12-29 (Phase 5 Started!)
 - **FEAT-001**: Implemented file timestamps (atime, mtime, ctime):

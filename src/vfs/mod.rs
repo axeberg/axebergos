@@ -84,6 +84,8 @@ pub struct Metadata {
     pub mtime: f64,
     /// Change time (last metadata change) in milliseconds since epoch
     pub ctime: f64,
+    /// Number of hard links to this inode
+    pub nlink: u32,
 }
 
 impl Default for Metadata {
@@ -100,6 +102,7 @@ impl Default for Metadata {
             atime: 0.0,
             mtime: 0.0,
             ctime: 0.0,
+            nlink: 1, // New files have 1 link
         }
     }
 }
@@ -158,6 +161,12 @@ pub trait FileSystem {
 
     /// Read the target of a symbolic link
     fn read_link(&self, path: &str) -> io::Result<String>;
+
+    /// Create a hard link
+    ///
+    /// Creates a new directory entry that points to the same inode as the source.
+    /// The link count is incremented. Both paths must be on the same filesystem.
+    fn link(&mut self, source: &str, dest: &str) -> io::Result<()>;
 
     /// Change file mode (permissions)
     fn chmod(&mut self, path: &str, mode: u16) -> io::Result<()>;

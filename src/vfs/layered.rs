@@ -795,6 +795,39 @@ impl FileSystem for LayeredFs {
         }
     }
 
+    fn link(&mut self, source: &str, dest: &str) -> io::Result<()> {
+        let source = Self::normalize_path(source);
+        let dest = Self::normalize_path(dest);
+
+        // Check source exists
+        if self.is_whiteout(&source) || !self.exists(&source) {
+            return Err(io::Error::new(io::ErrorKind::NotFound, "Source not found"));
+        }
+
+        // Check dest doesn't exist
+        if self.exists(&dest) {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "Destination already exists",
+            ));
+        }
+
+        // Remove whiteout if exists
+        self.remove_whiteout(&dest)?;
+
+        // Copy up source if needed
+        if !self.upper.exists(&source) && self.lower.exists(&source) {
+            self.copy_up(&source)?;
+        }
+
+        // Ensure parent exists in upper
+        if let Some(parent) = Self::parent_path(&dest) {
+            self.ensure_upper_path(&parent)?;
+        }
+
+        self.upper.link(&source, &dest)
+    }
+
     fn chmod(&mut self, path: &str, mode: u16) -> io::Result<()> {
         let path = Self::normalize_path(path);
 
