@@ -307,6 +307,22 @@ impl ProcessSignals {
         self.pending.len()
     }
 
+    /// Reset all signal handlers to default (for exec)
+    ///
+    /// After exec, all signal handlers are reset to SIG_DFL.
+    pub fn reset_handlers(&mut self) {
+        self.disposition = SignalDisposition::new();
+    }
+
+    /// Clear all pending signals (for exec)
+    ///
+    /// After exec, pending signals are cleared (except SIGKILL/SIGSTOP which
+    /// cannot be cleared, but they also cannot be pending in practice).
+    pub fn clear_pending(&mut self) {
+        self.pending.clear();
+        self.blocked.clear();
+    }
+
     /// Get blocked signals as a bitmask (bit N = signal N is blocked)
     pub fn get_blocked_mask(&self) -> u16 {
         let mut mask = 0u16;

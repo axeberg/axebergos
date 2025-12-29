@@ -249,6 +249,31 @@ impl ShellFunction {
     }
 }
 
+/// Process substitution: <(cmd) or >(cmd)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProcessSubstitution {
+    /// The command to run
+    pub command: String,
+    /// True for input (<(cmd)), false for output (>(cmd))
+    pub is_input: bool,
+}
+
+impl ProcessSubstitution {
+    pub fn input(command: impl Into<String>) -> Self {
+        Self {
+            command: command.into(),
+            is_input: true,
+        }
+    }
+
+    pub fn output(command: impl Into<String>) -> Self {
+        Self {
+            command: command.into(),
+            is_input: false,
+        }
+    }
+}
+
 /// An array assignment
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArrayAssignment {
@@ -583,36 +608,37 @@ fn try_parse_array(input: &str) -> Result<Option<ArrayAssignment>, ParseError> {
     }
 
     // Check for arr+=(
-    if let Some(name) = first_word.strip_suffix("+=(") {
-        if !name.is_empty() {
-            let elements = collect_array_elements(&mut lexer)?;
-            return Ok(Some(ArrayAssignment::append(name, elements)));
-        }
+    if let Some(name) = first_word.strip_suffix("+=(")
+        && !name.is_empty()
+    {
+        let elements = collect_array_elements(&mut lexer)?;
+        return Ok(Some(ArrayAssignment::append(name, elements)));
     }
 
     // Check for arr= followed by ( - first word ends with =
-    if let Some(name) = first_word.strip_suffix('=') {
-        if !name.is_empty() && !name.contains('+') {
-            match lexer.next_token()? {
-                Some(Token::LeftParen) => {
-                    let elements = collect_array_elements(&mut lexer)?;
-                    return Ok(Some(ArrayAssignment::definition(name, elements)));
-                }
-                _ => return Ok(None), // Regular assignment like FOO=bar
+    if let Some(name) = first_word.strip_suffix('=')
+        && !name.is_empty()
+        && !name.contains('+')
+    {
+        match lexer.next_token()? {
+            Some(Token::LeftParen) => {
+                let elements = collect_array_elements(&mut lexer)?;
+                return Ok(Some(ArrayAssignment::definition(name, elements)));
             }
+            _ => return Ok(None), // Regular assignment like FOO=bar
         }
     }
 
     // Check for arr+= followed by (
-    if let Some(name) = first_word.strip_suffix("+=") {
-        if !name.is_empty() {
-            match lexer.next_token()? {
-                Some(Token::LeftParen) => {
-                    let elements = collect_array_elements(&mut lexer)?;
-                    return Ok(Some(ArrayAssignment::append(name, elements)));
-                }
-                _ => return Ok(None),
+    if let Some(name) = first_word.strip_suffix("+=")
+        && !name.is_empty()
+    {
+        match lexer.next_token()? {
+            Some(Token::LeftParen) => {
+                let elements = collect_array_elements(&mut lexer)?;
+                return Ok(Some(ArrayAssignment::append(name, elements)));
             }
+            _ => return Ok(None),
         }
     }
 
@@ -1600,5 +1626,18 @@ mod tests {
 
         let append = ArrayAssignment::append("arr", vec!["x".into()]);
         assert!(append.append);
+    }
+
+    // ============ Process Substitution ============
+
+    #[test]
+    fn test_process_substitution_struct() {
+        let input = ProcessSubstitution::input("ls -la");
+        assert_eq!(input.command, "ls -la");
+        assert!(input.is_input);
+
+        let output = ProcessSubstitution::output("wc -l");
+        assert_eq!(output.command, "wc -l");
+        assert!(!output.is_input);
     }
 }

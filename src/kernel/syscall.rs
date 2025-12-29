@@ -918,6 +918,193 @@ impl Kernel {
         Ok(child_pid)
     }
 
+    /// execve - Replace current process image with a new program (like Linux execve(2))
+    ///
+    /// In a traditional Unix, execve replaces the entire process memory with the new
+    /// program. In our browser-based OS, we:
+    /// 1. Store the command, args, and environment for later execution
+    /// 2. Close CLOEXEC file descriptors
+    /// 3. Reset signal handlers to default
+    /// 4. Return, allowing the caller to actually run the WASM module
+    ///
+    /// This is a "prepare for exec" syscall - the actual execution happens
+    /// via the WASM runtime separately.
+    pub fn sys_execve(
+        &mut self,
+        path: &str,
+        args: Vec<String>,
+        envp: Option<HashMap<String, String>>,
+    ) -> SyscallResult<()> {
+        let current_pid = self.proc.current.ok_or(SyscallError::NoProcess)?;
+
+        // Verify the file exists and is executable
+        let resolved = self.resolve_path(current_pid, path)?;
+        let resolved_str = resolved.to_string_lossy();
+        let meta = self
+            .fs
+            .vfs
+            .metadata(&resolved_str)
+            .map_err(|_| SyscallError::NotFound)?;
+        if meta.is_dir {
+            return Err(SyscallError::IsADirectory);
+        }
+
+        // Get the process
+        let process = self
+            .proc
+            .processes
+            .get_mut(&current_pid)
+            .ok_or(SyscallError::NoProcess)?;
+
+        // Find CLOEXEC file descriptors
+        let cloexec_fds: Vec<Fd> = process
+            .files
+            .iter()
+            .filter(|(fd, _)| process.files.get_flags(*fd).is_some_and(|f| f.cloexec))
+            .map(|(fd, _)| fd)
+            .collect();
+
+        for fd in cloexec_fds {
+            if let Some(handle) = process.files.remove(fd) {
+                // Release the handle
+                if self.objects.release(handle).is_some() {
+                    // Clean up VFS handle if present
+                    if let Some(vh) = self.fs.vfs_handles.remove(&handle) {
+                        let _ = self.fs.vfs.close(vh);
+                    }
+                }
+            }
+        }
+
+        // Get mutable reference again after closing fds
+        let process = self
+            .proc
+            .processes
+            .get_mut(&current_pid)
+            .ok_or(SyscallError::NoProcess)?;
+
+        // Update process name to the executable
+        process.name = path.rsplit('/').next().unwrap_or(path).to_string();
+
+        // Update environment if provided
+        if let Some(new_env) = envp {
+            process.environ = new_env;
+        }
+
+        // Reset signal handlers to default (SIG_DFL)
+        process.signals.reset_handlers();
+
+        // Clear pending signals (except those that can't be caught)
+        process.signals.clear_pending();
+
+        // Store args in process environment for retrieval
+        // (Convention: EXEC_ARGS_N for each argument)
+        for (i, arg) in args.iter().enumerate() {
+            process
+                .environ
+                .insert(format!("_EXEC_ARG_{}", i), arg.clone());
+        }
+        process
+            .environ
+            .insert("_EXEC_ARGC".to_string(), args.len().to_string());
+        process.environ.insert(
+            "_EXEC_PATH".to_string(),
+            resolved.to_string_lossy().to_string(),
+        );
+
+        Ok(())
+    }
+
+    /// Set the async task associated with a process
+    ///
+    /// This links a process to an executor task so that when the task completes,
+    /// the process can be marked as zombie.
+    pub fn sys_set_process_task(&mut self, pid: Pid, task_id: TaskId) -> SyscallResult<()> {
+        let process = self
+            .proc
+            .processes
+            .get_mut(&pid)
+            .ok_or(SyscallError::NoProcess)?;
+        process.task = Some(task_id);
+        Ok(())
+    }
+
+    /// Get the async task associated with a process
+    pub fn sys_get_process_task(&self, pid: Pid) -> SyscallResult<Option<TaskId>> {
+        let process = self
+            .proc
+            .processes
+            .get(&pid)
+            .ok_or(SyscallError::NoProcess)?;
+        Ok(process.task)
+    }
+
+    /// Notify that a process has exited (called when async task completes)
+    ///
+    /// This marks the process as zombie and stores its exit code.
+    /// The parent can then reap it with waitpid.
+    pub fn sys_process_exit_status(&mut self, pid: Pid, exit_code: i32) -> SyscallResult<()> {
+        let process = self
+            .proc
+            .processes
+            .get_mut(&pid)
+            .ok_or(SyscallError::NoProcess)?;
+
+        // Transition to Zombie state
+        process.state = ProcessState::Zombie(exit_code);
+        process.task = None; // Task has completed
+
+        // TODO: Send SIGCHLD to parent
+        // For now, parent will discover it via waitpid
+
+        Ok(())
+    }
+
+    /// Get exec arguments from current process environment
+    ///
+    /// Returns (path, args) if the process has been exec'd.
+    pub fn sys_get_exec_info(&self) -> SyscallResult<Option<(String, Vec<String>)>> {
+        let process = self.get_current_process()?;
+
+        let path = match process.environ.get("_EXEC_PATH") {
+            Some(p) => p.clone(),
+            None => return Ok(None),
+        };
+
+        let argc: usize = match process.environ.get("_EXEC_ARGC") {
+            Some(n) => n.parse().unwrap_or(0),
+            None => return Ok(None),
+        };
+
+        let mut args = Vec::with_capacity(argc);
+        for i in 0..argc {
+            if let Some(arg) = process.environ.get(&format!("_EXEC_ARG_{}", i)) {
+                args.push(arg.clone());
+            }
+        }
+
+        Ok(Some((path, args)))
+    }
+
+    /// Clear exec info from process environment after execution
+    pub fn sys_clear_exec_info(&mut self) -> SyscallResult<()> {
+        let process = self.get_current_process_mut()?;
+
+        let argc: usize = process
+            .environ
+            .get("_EXEC_ARGC")
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(0);
+
+        process.environ.remove("_EXEC_PATH");
+        process.environ.remove("_EXEC_ARGC");
+        for i in 0..argc {
+            process.environ.remove(&format!("_EXEC_ARG_{}", i));
+        }
+
+        Ok(())
+    }
+
     /// setsid - Create a new session (like Linux setsid(2))
     /// The calling process becomes the session leader and process group leader.
     /// Returns the new session ID on success.
@@ -4172,6 +4359,111 @@ pub fn chown(path: &str, uid: Option<u32>, gid: Option<u32>) -> SyscallResult<()
     KERNEL.with(|k| k.borrow_mut().sys_chown(path, uid, gid))
 }
 
+// ========== EXEC FAMILY ==========
+
+/// execve - Replace current process image with a new program
+///
+/// Prepares the current process to execute a new program:
+/// - Closes CLOEXEC file descriptors
+/// - Resets signal handlers to default
+/// - Stores the command path and arguments for the WASM loader
+///
+/// The actual execution of the WASM module happens separately through the runtime.
+pub fn execve(
+    path: &str,
+    args: &[String],
+    envp: Option<HashMap<String, String>>,
+) -> SyscallResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_execve(path, args.to_vec(), envp))
+}
+
+/// execv - Execute a program with argument vector (uses current environment)
+pub fn execv(path: &str, args: &[String]) -> SyscallResult<()> {
+    execve(path, args, None)
+}
+
+/// execl - Execute a program with argument list (uses current environment)
+pub fn execl(path: &str, arg0: &str, args: &[&str]) -> SyscallResult<()> {
+    let mut argv: Vec<String> = vec![arg0.to_string()];
+    argv.extend(args.iter().map(|s| s.to_string()));
+    execve(path, &argv, None)
+}
+
+/// execlp - Execute a program by name (searches PATH)
+pub fn execlp(name: &str, arg0: &str, args: &[&str]) -> SyscallResult<()> {
+    // Search PATH for the command
+    let path = search_path(name).ok_or(SyscallError::NotFound)?;
+    execl(&path, arg0, args)
+}
+
+/// execvp - Execute a program by name (searches PATH)
+pub fn execvp(name: &str, args: &[String]) -> SyscallResult<()> {
+    // Search PATH for the command
+    let path = search_path(name).ok_or(SyscallError::NotFound)?;
+    execve(&path, args, None)
+}
+
+/// Search PATH environment variable for a command
+fn search_path(name: &str) -> Option<String> {
+    // If it's an absolute or relative path, use it directly
+    if name.contains('/') {
+        if exists(name).unwrap_or(false) {
+            return Some(name.to_string());
+        }
+        return None;
+    }
+
+    // Get PATH from current process environment
+    let path_env = KERNEL.with(|k| {
+        k.borrow()
+            .current_process()
+            .and_then(|p| p.environ.get("PATH").cloned())
+    });
+
+    let path_env = path_env.unwrap_or_else(|| "/bin:/usr/bin".to_string());
+
+    // Search each directory in PATH
+    for dir in path_env.split(':') {
+        let full_path = format!("{}/{}", dir, name);
+        if exists(&full_path).unwrap_or(false) {
+            return Some(full_path);
+        }
+    }
+
+    None
+}
+
+/// Set the async task associated with a process
+///
+/// Links a process to an executor task for lifecycle management.
+pub fn set_process_task(pid: Pid, task_id: TaskId) -> SyscallResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_set_process_task(pid, task_id))
+}
+
+/// Get the async task associated with a process
+pub fn get_process_task(pid: Pid) -> SyscallResult<Option<TaskId>> {
+    KERNEL.with(|k| k.borrow().sys_get_process_task(pid))
+}
+
+/// Notify that a process has exited (for async task completion)
+///
+/// Marks the process as zombie with the given exit code.
+pub fn process_exit_status(pid: Pid, exit_code: i32) -> SyscallResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_process_exit_status(pid, exit_code))
+}
+
+/// Get exec information for current process
+///
+/// Returns (path, args) if the process has been exec'd.
+pub fn get_exec_info() -> SyscallResult<Option<(String, Vec<String>)>> {
+    KERNEL.with(|k| k.borrow().sys_get_exec_info())
+}
+
+/// Clear exec info from current process (after execution starts)
+pub fn clear_exec_info() -> SyscallResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_clear_exec_info())
+}
+
 // ========== PERSISTENCE API ==========
 
 /// Get a JSON snapshot of the VFS for persistence
@@ -5107,5 +5399,205 @@ mod tests {
         // Check not all zeros
         let non_zero = buf.iter().filter(|&&b| b != 0).count();
         assert!(non_zero > 10, "urandom should provide actual random bytes");
+    }
+
+    // ========== EXEC FAMILY TESTS ==========
+
+    #[test]
+    fn test_execve_stores_exec_info() {
+        setup_test_kernel();
+
+        // Create test executable in /tmp
+        let fd = open("/tmp/test_cmd", OpenFlags::WRITE).unwrap();
+        write(fd, b"fake wasm").unwrap();
+        close(fd).unwrap();
+
+        // Call execve
+        let args = vec!["arg1".to_string(), "arg2".to_string()];
+        execve("/tmp/test_cmd", &args, None).unwrap();
+
+        // Check exec info was stored
+        let exec_info = get_exec_info().unwrap();
+        assert!(exec_info.is_some());
+        let (path, stored_args) = exec_info.unwrap();
+        assert_eq!(path, "/tmp/test_cmd");
+        assert_eq!(stored_args, args);
+    }
+
+    #[test]
+    fn test_execve_closes_cloexec_fds() {
+        setup_test_kernel();
+
+        // Create test executable in /tmp
+        let fd = open("/tmp/test_cmd2", OpenFlags::WRITE).unwrap();
+        write(fd, b"fake wasm").unwrap();
+        close(fd).unwrap();
+
+        // Open a file and set CLOEXEC
+        let fd1 = open("/tmp/cloexec_test.txt", OpenFlags::WRITE).unwrap();
+        write(fd1, b"test").unwrap();
+
+        // Set CLOEXEC flag on this fd
+        KERNEL.with(|k| {
+            let mut kernel = k.borrow_mut();
+            if let Ok(proc) = kernel.get_current_process_mut() {
+                proc.files
+                    .set_flags(fd1, crate::kernel::process::FdFlags { cloexec: true });
+            }
+        });
+
+        // Open another file without CLOEXEC
+        let fd2 = open("/tmp/no_cloexec.txt", OpenFlags::WRITE).unwrap();
+        write(fd2, b"test").unwrap();
+
+        // Call execve
+        let args = vec!["test".to_string()];
+        execve("/tmp/test_cmd2", &args, None).unwrap();
+
+        // fd1 should be closed (write should fail)
+        assert!(write(fd1, b"more").is_err());
+
+        // fd2 should still be open
+        assert!(write(fd2, b"more").is_ok());
+        close(fd2).unwrap();
+    }
+
+    #[test]
+    fn test_execve_updates_process_name() {
+        setup_test_kernel();
+
+        // Create test executable in /tmp
+        let fd = open("/tmp/myprogram", OpenFlags::WRITE).unwrap();
+        write(fd, b"fake wasm").unwrap();
+        close(fd).unwrap();
+
+        // Call execve
+        let args = vec![];
+        execve("/tmp/myprogram", &args, None).unwrap();
+
+        // Process name should be updated
+        let new_name = KERNEL.with(|k| k.borrow().current_process().map(|p| p.name.clone()));
+        assert_eq!(new_name, Some("myprogram".to_string()));
+    }
+
+    #[test]
+    fn test_execve_with_environment() {
+        setup_test_kernel();
+
+        // Create test executable in /tmp
+        let fd = open("/tmp/envtest", OpenFlags::WRITE).unwrap();
+        write(fd, b"fake wasm").unwrap();
+        close(fd).unwrap();
+
+        // Create custom environment
+        let mut new_env = HashMap::new();
+        new_env.insert("MY_VAR".to_string(), "my_value".to_string());
+        new_env.insert("PATH".to_string(), "/tmp:/bin".to_string());
+
+        // Call execve with new environment
+        let args = vec![];
+        execve("/tmp/envtest", &args, Some(new_env)).unwrap();
+
+        // Environment should be updated
+        let my_var = KERNEL.with(|k| {
+            k.borrow()
+                .current_process()
+                .and_then(|p| p.environ.get("MY_VAR").cloned())
+        });
+        assert_eq!(my_var, Some("my_value".to_string()));
+    }
+
+    #[test]
+    fn test_execve_not_found() {
+        setup_test_kernel();
+
+        // Try to exec a non-existent file
+        let result = execve("/nonexistent/program", &[], None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_execve_directory() {
+        setup_test_kernel();
+
+        // Try to exec a directory
+        let result = execve("/tmp", &[], None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_clear_exec_info() {
+        setup_test_kernel();
+
+        // Create test executable in /tmp
+        let fd = open("/tmp/cleartest", OpenFlags::WRITE).unwrap();
+        write(fd, b"fake wasm").unwrap();
+        close(fd).unwrap();
+
+        // Call execve
+        let args = vec!["a".to_string(), "b".to_string()];
+        execve("/tmp/cleartest", &args, None).unwrap();
+
+        // Exec info should exist
+        assert!(get_exec_info().unwrap().is_some());
+
+        // Clear it
+        clear_exec_info().unwrap();
+
+        // Now it should be None
+        assert!(get_exec_info().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_search_path_finds_command() {
+        setup_test_kernel();
+
+        // Create test executable in /tmp
+        let fd = open("/tmp/myutil", OpenFlags::WRITE).unwrap();
+        write(fd, b"fake wasm").unwrap();
+        close(fd).unwrap();
+
+        // Set PATH to include /tmp
+        setenv("PATH", "/tmp:/usr/bin").unwrap();
+
+        // execvp should find it
+        let result = execvp("myutil", &["arg".to_string()]);
+        assert!(result.is_ok());
+
+        // Verify it was found
+        let exec_info = get_exec_info().unwrap();
+        assert!(exec_info.is_some());
+        let (path, _) = exec_info.unwrap();
+        assert_eq!(path, "/tmp/myutil");
+    }
+
+    #[test]
+    fn test_process_task_association() {
+        setup_test_kernel();
+
+        let pid = getpid().unwrap();
+        let task_id = TaskId(42);
+
+        // Set task
+        set_process_task(pid, task_id).unwrap();
+
+        // Get task
+        let retrieved = get_process_task(pid).unwrap();
+        assert_eq!(retrieved, Some(task_id));
+    }
+
+    #[test]
+    fn test_process_exit_status() {
+        setup_test_kernel();
+
+        // Fork to create a child
+        let child_pid = fork().unwrap();
+
+        // Mark child as exited with status 42
+        process_exit_status(child_pid, 42).unwrap();
+
+        // Child should be zombie with exit code 42
+        let state = KERNEL.with(|k| k.borrow().get_process(child_pid).map(|p| p.state.clone()));
+        assert_eq!(state, Some(ProcessState::Zombie(42)));
     }
 }

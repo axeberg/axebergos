@@ -1,7 +1,7 @@
 # AxebergOS Work Tracker
 
 **Created**: 2025-12-28
-**Last Updated**: 2025-12-28
+**Last Updated**: 2025-12-29
 
 This document tracks all identified issues, improvements, and feature work for AxebergOS.
 
@@ -15,10 +15,10 @@ This document tracks all identified issues, improvements, and feature work for A
 | Security (High) | 5 | 5 | 0 | 0 |
 | Security (Medium) | 8 | 8 | 0 | 0 |
 | Code Quality | 10 | 10 | 0 | 0 |
-| Missing Features | 15 | 11 | 0 | 4 |
+| Missing Features | 15 | 14 | 0 | 1 |
 | Documentation | 5 | 0 | 0 | 5 |
 | Future Features | 12 | 0 | 0 | 12 |
-| **TOTAL** | **57** | **36** | **0** | **21** |
+| **TOTAL** | **57** | **39** | **0** | **18** |
 
 ---
 
@@ -288,18 +288,30 @@ This document tracks all identified issues, improvements, and feature work for A
 
 ### FEAT-004: True Fork Semantics
 - **Priority**: 🟠 HIGH
-- **Status**: ⬜ TODO
-- **File**: `src/kernel/process.rs:423-465`
+- **Status**: ✅ DONE (2025-12-29)
+- **File**: `src/kernel/syscall.rs`, `src/kernel/process.rs`
 - **Issue**: Fork is simulated, not real
-- **Fix**: Implement proper process spawning
+- **Fix**: Enhanced fork with proper process-task association. Added syscalls:
+  - `set_process_task()` - associates async task with process
+  - `get_process_task()` - retrieves process's task
+  - `process_exit_status()` - marks process as zombie with exit code
+  - Fork already had COW memory, file descriptor duplication, environment inheritance
 - **Estimate**: Large
 
 ### FEAT-005: Complete exec() Family
 - **Priority**: 🟠 HIGH
-- **Status**: ⬜ TODO
+- **Status**: ✅ DONE (2025-12-29)
 - **File**: `src/kernel/syscall.rs`
 - **Issue**: execve incomplete
-- **Fix**: Proper process image replacement
+- **Fix**: Implemented full exec() family syscalls:
+  - `execve()` - exec with explicit environment
+  - `execv()` - exec with arg vector
+  - `execl()` - exec with arg list
+  - `execlp()` - exec searching PATH
+  - `execvp()` - exec with vector, searching PATH
+  - `get_exec_info()` / `clear_exec_info()` - for WASM loader
+  - Closes CLOEXEC file descriptors, resets signal handlers, stores exec info
+  - Added 11 new tests for exec functionality
 - **Estimate**: Large
 
 ### FEAT-006: Fix waitpid()
@@ -379,10 +391,10 @@ This document tracks all identified issues, improvements, and feature work for A
 
 ### FEAT-013: Process Substitution
 - **Priority**: 🟢 LOW
-- **Status**: ⬜ TODO
-- **File**: `src/shell/parser.rs`
+- **Status**: ✅ DONE (2025-12-29)
+- **File**: `src/shell/parser.rs`, `src/shell/executor.rs`
 - **Issue**: No <() or >() support
-- **Fix**: Implement process substitution syntax
+- **Fix**: Implemented process substitution with `<(cmd)` (input) and `>(cmd)` (output) syntax. Input substitutions run the command and write output to a temp file, returning the path. Output substitutions create a temp file path and queue the command to run after the main command completes. Uses `/tmp/procsub_N` naming pattern.
 - **Estimate**: Medium
 
 ### FEAT-014: Heredocs

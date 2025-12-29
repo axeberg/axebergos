@@ -249,6 +249,10 @@ pub struct Executor {
     pub registry: ProgramRegistry,
     /// WASM command runner for executing /bin/*.wasm modules
     pub wasm_runner: WasmCommandRunner,
+    /// Counter for generating unique process substitution temp file IDs
+    procsub_counter: u64,
+    /// Pending output substitutions: (temp_file_path, command_to_run)
+    pending_output_substitutions: Vec<(String, String)>,
 }
 
 impl Executor {
@@ -269,6 +273,8 @@ impl Executor {
             state,
             registry: ProgramRegistry::new(),
             wasm_runner,
+            procsub_counter: 0,
+            pending_output_substitutions: Vec::new(),
         }
     }
 
@@ -1204,14 +1210,14 @@ impl Executor {
         self.expand_substitution_in_arg(line)
     }
 
-    /// Expand command substitutions in a single argument/string
+    /// Expand command substitutions and process substitutions in a single argument/string
     fn expand_substitution_in_arg(&mut self, arg: &str) -> String {
         let mut result = String::new();
         let mut chars = arg.chars().peekable();
 
         while let Some(c) = chars.next() {
             if c == '$' && chars.peek() == Some(&'(') {
-                // $(...) substitution
+                // $(...) command substitution
                 chars.next(); // consume '('
                 if let Some(cmd) = self.extract_nested_paren(&mut chars) {
                     let output = self.execute_substitution(&cmd);
@@ -1219,6 +1225,24 @@ impl Executor {
                 } else {
                     // Malformed - just keep it as-is
                     result.push_str("$(");
+                }
+            } else if c == '<' && chars.peek() == Some(&'(') {
+                // <(...) process substitution - input
+                chars.next(); // consume '('
+                if let Some(cmd) = self.extract_nested_paren(&mut chars) {
+                    let path = self.execute_process_substitution_input(&cmd);
+                    result.push_str(&path);
+                } else {
+                    result.push_str("<(");
+                }
+            } else if c == '>' && chars.peek() == Some(&'(') {
+                // >(...) process substitution - output (limited support)
+                chars.next(); // consume '('
+                if let Some(cmd) = self.extract_nested_paren(&mut chars) {
+                    let path = self.execute_process_substitution_output(&cmd);
+                    result.push_str(&path);
+                } else {
+                    result.push_str(">(");
                 }
             } else if c == '`' {
                 // Backtick substitution
@@ -1250,6 +1274,54 @@ impl Executor {
         }
 
         result
+    }
+
+    /// Execute process substitution for input: <(cmd)
+    /// Returns a path to a file containing the command output
+    fn execute_process_substitution_input(&mut self, cmd: &str) -> String {
+        // Execute the command and capture output
+        let output = self.execute_substitution(cmd);
+
+        // Ensure /tmp exists
+        let _ = syscall::mkdir("/tmp");
+
+        // Create a temp file with the output
+        let temp_path = format!("/tmp/procsub_{}", self.next_procsub_id());
+        if let Err(_e) = self.write_file(&temp_path, &output, false) {
+            // On error, return a path that will cause an error when read
+            return "/dev/null".to_string(); // fallback
+        }
+
+        temp_path
+    }
+
+    /// Execute process substitution for output: >(cmd)
+    /// Returns a path to a file that will be read and fed to the command
+    fn execute_process_substitution_output(&mut self, cmd: &str) -> String {
+        // For output substitution, we need to create a file that when written to
+        // will have its contents fed to the command. This is tricky without
+        // named pipes, so we use a simplified approach:
+        // Return a temp file path, and after the main command completes,
+        // read the file and execute the substituted command with it.
+        // Note: This is a simplified implementation that doesn't handle
+        // streaming properly like real named pipes would.
+
+        // Ensure /tmp exists
+        let _ = syscall::mkdir("/tmp");
+
+        let temp_path = format!("/tmp/procsub_out_{}", self.next_procsub_id());
+
+        // Store the command to execute later with this output file
+        self.pending_output_substitutions
+            .push((temp_path.clone(), cmd.to_string()));
+
+        temp_path
+    }
+
+    /// Generate unique ID for process substitution temp files
+    fn next_procsub_id(&mut self) -> u64 {
+        self.procsub_counter += 1;
+        self.procsub_counter
     }
 
     /// Extract content from nested parentheses, handling nesting
@@ -2587,5 +2659,75 @@ mod tests {
         // Unset
         assert!(exec.state.unset_array("myarr"));
         assert!(!exec.state.has_array("myarr"));
+    }
+
+    // ============ Process Substitution ============
+
+    #[test]
+    fn test_process_substitution_input() {
+        let mut exec = setup_redirect_test();
+
+        // Test basic process substitution expansion
+        let expanded = exec.expand_substitution_in_arg("<(echo hello)");
+        // Should be a temp file path like /tmp/procsub_1
+        assert!(expanded.starts_with("/tmp/procsub_"));
+    }
+
+    #[test]
+    fn test_process_substitution_counter_increments() {
+        let mut exec = setup_redirect_test();
+
+        let path1 = exec.expand_substitution_in_arg("<(echo a)");
+        let path2 = exec.expand_substitution_in_arg("<(echo b)");
+
+        // Different temp files should have different names
+        assert_ne!(path1, path2);
+    }
+
+    #[test]
+    fn test_process_substitution_output() {
+        let mut exec = setup_redirect_test();
+
+        // Test output substitution
+        let expanded = exec.expand_substitution_in_arg(">(cat)");
+        assert!(expanded.starts_with("/tmp/procsub_out_"));
+    }
+
+    #[test]
+    fn test_process_substitution_in_command() {
+        let mut exec = setup_redirect_test();
+
+        // Process substitution should expand and work
+        let result = exec.execute_line("cat <(echo from_procsub)");
+        assert_eq!(
+            result.code, 0,
+            "cat with process substitution failed: {}",
+            result.error
+        );
+        assert_eq!(result.output.trim(), "from_procsub");
+    }
+
+    #[test]
+    fn test_process_substitution_mixed_with_regular_args() {
+        let mut exec = setup_redirect_test();
+
+        // Process substitution mixed with regular arguments
+        let expanded = exec.expand_substitution_in_arg("prefix <(echo test) suffix");
+        assert!(expanded.contains("/tmp/procsub_"));
+        assert!(expanded.starts_with("prefix "));
+        assert!(expanded.ends_with(" suffix"));
+    }
+
+    #[test]
+    fn test_procsub_id_generation() {
+        let mut exec = Executor::new();
+
+        let id1 = exec.next_procsub_id();
+        let id2 = exec.next_procsub_id();
+        let id3 = exec.next_procsub_id();
+
+        assert_eq!(id1, 1);
+        assert_eq!(id2, 2);
+        assert_eq!(id3, 3);
     }
 }
