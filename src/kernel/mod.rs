@@ -15,6 +15,7 @@ pub mod devfs;
 pub mod events;
 pub mod executor;
 pub mod fifo;
+pub mod flock;
 pub mod init;
 pub mod ipc;
 pub mod memory;
@@ -33,6 +34,7 @@ pub mod task;
 pub mod timer;
 pub mod trace;
 pub mod tty;
+pub mod uds;
 pub mod users;
 pub mod wasm;
 pub mod work_stealing;
@@ -45,6 +47,7 @@ mod invariants_test;
 
 pub use executor::{Executor, Priority};
 pub use fifo::{FifoBuffer, FifoError, FifoRegistry};
+pub use flock::{FileLockManager, LockError, LockType, RangeLock};
 pub use init::{
     InitSystem, RestartPolicy, Service, ServiceConfig, ServiceState, ServiceStatus, Target,
 };
@@ -67,13 +70,19 @@ pub use pkg::{
     ResolvedPackage, Version, VersionReq,
 };
 pub use process::{Fd, Handle, OpenFlags, Pid};
-pub use semaphore::{SemError, SemId, SemOpResult, SemSetStats, SemaphoreManager, SemaphoreSet};
+pub use semaphore::{
+    SemAdj, SemError, SemId, SemOpResult, SemSetStats, SemaphoreManager, SemaphoreSet,
+};
 pub use signal::{Signal, SignalAction, SignalError};
 pub use syscall::{SyscallError, SyscallResult};
 pub use task::{Task, TaskId, TaskState};
 pub use timer::TimerId;
 pub use trace::{TraceCategory, TraceEvent, TraceSummary, Tracer};
 pub use tty::{Termios, Tty, TtyManager};
+pub use uds::{
+    SockAddr, SocketError, SocketId, SocketResult, SocketState, SocketType, UnixSocket,
+    UnixSocketManager,
+};
 pub use users::{FileMode, Gid, Group, Uid, User, UserDb};
 pub use work_stealing::{
     Config as WorkStealingConfig, Injector, StealResult, Stealer, TaskHandle, WorkStealingExecutor,

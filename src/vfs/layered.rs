@@ -795,6 +795,39 @@ impl FileSystem for LayeredFs {
         }
     }
 
+    fn link(&mut self, source: &str, dest: &str) -> io::Result<()> {
+        let source = Self::normalize_path(source);
+        let dest = Self::normalize_path(dest);
+
+        // Check source exists
+        if self.is_whiteout(&source) || !self.exists(&source) {
+            return Err(io::Error::new(io::ErrorKind::NotFound, "Source not found"));
+        }
+
+        // Check dest doesn't exist
+        if self.exists(&dest) {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "Destination already exists",
+            ));
+        }
+
+        // Remove whiteout if exists
+        self.remove_whiteout(&dest)?;
+
+        // Copy up source if needed
+        if !self.upper.exists(&source) && self.lower.exists(&source) {
+            self.copy_up(&source)?;
+        }
+
+        // Ensure parent exists in upper
+        if let Some(parent) = Self::parent_path(&dest) {
+            self.ensure_upper_path(&parent)?;
+        }
+
+        self.upper.link(&source, &dest)
+    }
+
     fn chmod(&mut self, path: &str, mode: u16) -> io::Result<()> {
         let path = Self::normalize_path(path);
 
@@ -856,6 +889,32 @@ impl FileSystem for LayeredFs {
         match layer_handle.layer {
             Layer::Upper => self.upper.handle_path(layer_handle.inner_handle),
             Layer::Lower => self.lower.handle_path(layer_handle.inner_handle),
+        }
+    }
+
+    fn set_clock(&mut self, now: f64) {
+        // Set clock on both layers
+        self.upper.set_clock(now);
+        self.lower.set_clock(now);
+    }
+
+    fn utimes(&mut self, path: &str, atime: Option<f64>, mtime: Option<f64>) -> io::Result<()> {
+        let path = Self::normalize_path(path);
+
+        // Check if whited out
+        if self.is_whiteout(&path) {
+            return Err(io::Error::new(io::ErrorKind::NotFound, "Path not found"));
+        }
+
+        // Need to copy up before modifying
+        if !self.upper.exists(&path) && self.lower.exists(&path) {
+            self.copy_up(&path)?;
+        }
+
+        if self.upper.exists(&path) {
+            self.upper.utimes(&path, atime, mtime)
+        } else {
+            Err(io::Error::new(io::ErrorKind::NotFound, "Path not found"))
         }
     }
 }

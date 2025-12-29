@@ -244,6 +244,49 @@ pub struct SemSetStats {
     pub otime: f64,
 }
 
+/// SEM_UNDO adjustment tracking
+///
+/// Tracks adjustments made by a process for SEM_UNDO operations.
+/// Key: (set_id, sem_num), Value: adjustment to undo on exit
+#[derive(Debug, Default, Clone)]
+pub struct SemAdj {
+    /// Adjustments: (SemId, sem_num) -> adjustment value
+    adjustments: HashMap<(SemId, usize), i32>,
+}
+
+impl SemAdj {
+    pub fn new() -> Self {
+        Self {
+            adjustments: HashMap::new(),
+        }
+    }
+
+    /// Record an adjustment (for SEM_UNDO)
+    pub fn record(&mut self, sem_id: SemId, sem_num: usize, adjustment: i32) {
+        let key = (sem_id, sem_num);
+        let entry = self.adjustments.entry(key).or_insert(0);
+        *entry += adjustment;
+    }
+
+    /// Get all adjustments (for undoing on exit)
+    pub fn get_all(&self) -> Vec<(SemId, usize, i32)> {
+        self.adjustments
+            .iter()
+            .map(|(&(id, num), &adj)| (id, num, adj))
+            .collect()
+    }
+
+    /// Clear all adjustments (after undoing)
+    pub fn clear(&mut self) {
+        self.adjustments.clear();
+    }
+
+    /// Check if there are any adjustments
+    pub fn is_empty(&self) -> bool {
+        self.adjustments.is_empty()
+    }
+}
+
 /// Semaphore manager
 pub struct SemaphoreManager {
     /// All semaphore sets
@@ -254,6 +297,8 @@ pub struct SemaphoreManager {
     next_id: u32,
     /// Maximum semaphores per set
     max_sems_per_set: usize,
+    /// SEM_UNDO adjustments per process (pid -> SemAdj)
+    sem_adjs: HashMap<u32, SemAdj>,
 }
 
 impl SemaphoreManager {
@@ -263,6 +308,7 @@ impl SemaphoreManager {
             key_map: HashMap::new(),
             next_id: 1,
             max_sems_per_set: 250,
+            sem_adjs: HashMap::new(),
         }
     }
 
@@ -321,6 +367,58 @@ impl SemaphoreManager {
     ) -> Result<SemOpResult, SemError> {
         let set = self.sets.get_mut(&id).ok_or(SemError::NotFound)?;
         set.semop(sem_num, sem_op, pid, now)
+    }
+
+    /// Perform semaphore operation with SEM_UNDO support
+    ///
+    /// If sem_undo is true, the adjustment is recorded and will be
+    /// automatically undone when the process exits.
+    pub fn semop_with_undo(
+        &mut self,
+        id: SemId,
+        sem_num: usize,
+        sem_op: i32,
+        pid: u32,
+        now: f64,
+        sem_undo: bool,
+    ) -> Result<SemOpResult, SemError> {
+        let result = {
+            let set = self.sets.get_mut(&id).ok_or(SemError::NotFound)?;
+            set.semop(sem_num, sem_op, pid, now)?
+        };
+
+        // Record undo adjustment if operation completed and SEM_UNDO is set
+        if sem_undo && result == SemOpResult::Completed && sem_op != 0 {
+            // The adjustment we need to undo is the opposite of what we did
+            let adj = self.sem_adjs.entry(pid).or_default();
+            adj.record(id, sem_num, -sem_op);
+        }
+
+        Ok(result)
+    }
+
+    /// Undo all semaphore adjustments for a process (called on exit)
+    ///
+    /// This reverses all operations that were performed with SEM_UNDO.
+    pub fn undo_all(&mut self, pid: u32, now: f64) {
+        if let Some(adj) = self.sem_adjs.remove(&pid) {
+            for (sem_id, sem_num, adjustment) in adj.get_all() {
+                // Apply the adjustment (may fail if semaphore set was removed)
+                if let Some(set) = self.sets.get_mut(&sem_id)
+                    && let Some(sem) = set.semaphores.get_mut(sem_num)
+                {
+                    sem.value += adjustment;
+                    sem.otime = now;
+                    sem.pid = pid;
+                    set.otime = now;
+                }
+            }
+        }
+    }
+
+    /// Get the semadj for a process (for debugging/introspection)
+    pub fn get_sem_adj(&self, pid: u32) -> Option<&SemAdj> {
+        self.sem_adjs.get(&pid)
     }
 
     /// Get a semaphore value
@@ -499,5 +597,92 @@ mod tests {
         // Wrong length fails
         let result = set.setall(&[1, 2], 100, 3.0);
         assert_eq!(result, Err(SemError::InvalidArgument));
+    }
+
+    #[test]
+    fn test_sem_undo_basic() {
+        let mut mgr = SemaphoreManager::new();
+        let pid = 100;
+
+        let id = mgr.semget(200, 1, 1000, 1000, true, 1.0).unwrap();
+
+        // Set initial value to 10
+        mgr.semctl_setval(id, 0, 10, pid, 2.0).unwrap();
+
+        // Decrement by 3 with SEM_UNDO
+        let result = mgr.semop_with_undo(id, 0, -3, pid, 3.0, true).unwrap();
+        assert_eq!(result, SemOpResult::Completed);
+        assert_eq!(mgr.semctl_getval(id, 0).unwrap(), 7);
+
+        // Process exits - undo the adjustment
+        mgr.undo_all(pid, 4.0);
+
+        // Value should be restored to 10
+        assert_eq!(mgr.semctl_getval(id, 0).unwrap(), 10);
+    }
+
+    #[test]
+    fn test_sem_undo_multiple_ops() {
+        let mut mgr = SemaphoreManager::new();
+        let pid = 100;
+
+        let id = mgr.semget(201, 2, 1000, 1000, true, 1.0).unwrap();
+
+        // Set initial values
+        mgr.semctl_setval(id, 0, 10, pid, 2.0).unwrap();
+        mgr.semctl_setval(id, 1, 20, pid, 2.0).unwrap();
+
+        // Multiple operations with SEM_UNDO
+        mgr.semop_with_undo(id, 0, -5, pid, 3.0, true).unwrap();
+        mgr.semop_with_undo(id, 0, -2, pid, 3.0, true).unwrap();
+        mgr.semop_with_undo(id, 1, 3, pid, 3.0, true).unwrap();
+
+        assert_eq!(mgr.semctl_getval(id, 0).unwrap(), 3); // 10 - 5 - 2
+        assert_eq!(mgr.semctl_getval(id, 1).unwrap(), 23); // 20 + 3
+
+        // Undo all
+        mgr.undo_all(pid, 4.0);
+
+        // Values restored
+        assert_eq!(mgr.semctl_getval(id, 0).unwrap(), 10);
+        assert_eq!(mgr.semctl_getval(id, 1).unwrap(), 20);
+    }
+
+    #[test]
+    fn test_sem_undo_without_flag() {
+        let mut mgr = SemaphoreManager::new();
+        let pid = 100;
+
+        let id = mgr.semget(202, 1, 1000, 1000, true, 1.0).unwrap();
+        mgr.semctl_setval(id, 0, 10, pid, 2.0).unwrap();
+
+        // Operation without SEM_UNDO
+        mgr.semop_with_undo(id, 0, -5, pid, 3.0, false).unwrap();
+        assert_eq!(mgr.semctl_getval(id, 0).unwrap(), 5);
+
+        // Undo does nothing because SEM_UNDO wasn't set
+        mgr.undo_all(pid, 4.0);
+        assert_eq!(mgr.semctl_getval(id, 0).unwrap(), 5); // Still 5
+    }
+
+    #[test]
+    fn test_sem_adj_tracking() {
+        let mut adj = SemAdj::new();
+        assert!(adj.is_empty());
+
+        adj.record(SemId(1), 0, -5);
+        adj.record(SemId(1), 0, -3);
+        adj.record(SemId(1), 1, 2);
+
+        let all = adj.get_all();
+        assert_eq!(all.len(), 2);
+
+        // Find sem 0 adjustment (should be -8)
+        let sem0_adj = all.iter().find(|(id, num, _)| *id == SemId(1) && *num == 0);
+        assert_eq!(sem0_adj.map(|(_, _, adj)| *adj), Some(-8));
+
+        // Find sem 1 adjustment
+        let sem1_adj = all.iter().find(|(id, num, _)| *id == SemId(1) && *num == 1);
+        assert_eq!(sem1_adj.map(|(_, _, adj)| *adj), Some(2));
     }
 }

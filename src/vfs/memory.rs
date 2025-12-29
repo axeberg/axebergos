@@ -34,6 +34,15 @@ struct NodeMeta {
     gid: u32,
     /// Unix permission mode (rwxrwxrwx)
     mode: u16,
+    /// Access time (last read) in milliseconds since epoch
+    #[serde(default)]
+    atime: f64,
+    /// Modification time (last write to content) in milliseconds since epoch
+    #[serde(default)]
+    mtime: f64,
+    /// Change time (last metadata change) in milliseconds since epoch
+    #[serde(default)]
+    ctime: f64,
 }
 
 impl Default for NodeMeta {
@@ -42,17 +51,42 @@ impl Default for NodeMeta {
             uid: 1000,
             gid: 1000,
             mode: 0o644,
+            atime: 0.0,
+            mtime: 0.0,
+            ctime: 0.0,
         }
     }
 }
 
 impl NodeMeta {
+    fn with_time(uid: u32, gid: u32, mode: u16, now: f64) -> Self {
+        Self {
+            uid,
+            gid,
+            mode,
+            atime: now,
+            mtime: now,
+            ctime: now,
+        }
+    }
+
+    fn file_default(now: f64) -> Self {
+        Self::with_time(1000, 1000, 0o644, now)
+    }
+
     fn dir_default() -> Self {
         Self {
             uid: 1000,
             gid: 1000,
             mode: 0o755,
+            atime: 0.0,
+            mtime: 0.0,
+            ctime: 0.0,
         }
+    }
+
+    fn dir_default_with_time(now: f64) -> Self {
+        Self::with_time(1000, 1000, 0o755, now)
     }
 
     fn root_dir() -> Self {
@@ -60,7 +94,14 @@ impl NodeMeta {
             uid: 0,
             gid: 0,
             mode: 0o755,
+            atime: 0.0,
+            mtime: 0.0,
+            ctime: 0.0,
         }
+    }
+
+    fn symlink_default(now: f64) -> Self {
+        Self::with_time(1000, 1000, 0o777, now)
     }
 }
 
@@ -84,6 +125,8 @@ pub struct MemoryFs {
     meta: HashMap<String, NodeMeta>,
     /// Open file handles
     handles: Slab<OpenFile>,
+    /// Current clock time (set by kernel before operations)
+    clock: f64,
 }
 
 impl MemoryFs {
@@ -92,6 +135,7 @@ impl MemoryFs {
             nodes: HashMap::new(),
             meta: HashMap::new(),
             handles: Slab::new(),
+            clock: 0.0,
         };
         // Root directory always exists
         fs.nodes.insert("/".to_string(), Node::Directory);
@@ -382,6 +426,7 @@ impl MemoryFs {
             nodes: snapshot.nodes,
             meta,
             handles: Slab::new(),
+            clock: 0.0,
         })
     }
 
@@ -416,14 +461,20 @@ impl FileSystem for MemoryFs {
         }
 
         if !exists {
-            // Create new file
+            // Create new file with current timestamp
             self.ensure_parent(&path)?;
             self.nodes.insert(path.clone(), Node::File(Vec::new()));
-            self.meta.insert(path.clone(), NodeMeta::default());
+            self.meta
+                .insert(path.clone(), NodeMeta::file_default(self.clock));
         } else if options.truncate {
-            // Truncate existing file
+            // Truncate existing file and update mtime/ctime
             if let Some(Node::File(data)) = self.nodes.get_mut(&path) {
                 data.clear();
+            }
+            // Update modification time
+            if let Some(meta) = self.meta.get_mut(&path) {
+                meta.mtime = self.clock;
+                meta.ctime = self.clock;
             }
         }
 
@@ -493,6 +544,13 @@ impl FileSystem for MemoryFs {
             file.position += to_read as u64;
         }
 
+        // Update access time (atime) on read
+        if to_read > 0
+            && let Some(meta) = self.meta.get_mut(&path)
+        {
+            meta.atime = self.clock;
+        }
+
         Ok(to_read)
     }
 
@@ -527,6 +585,14 @@ impl FileSystem for MemoryFs {
         // Update position
         if let Some(file) = self.handles.get_mut(handle) {
             file.position += buf.len() as u64;
+        }
+
+        // Update modification time (mtime) and change time (ctime) on write
+        if !buf.is_empty()
+            && let Some(meta) = self.meta.get_mut(&path)
+        {
+            meta.mtime = self.clock;
+            meta.ctime = self.clock;
         }
 
         Ok(buf.len())
@@ -590,6 +656,10 @@ impl FileSystem for MemoryFs {
                 uid: meta.uid,
                 gid: meta.gid,
                 mode: meta.mode,
+                atime: meta.atime,
+                mtime: meta.mtime,
+                ctime: meta.ctime,
+                nlink: 1,
             }),
             Some(Node::Directory) => Ok(Metadata {
                 size: 0,
@@ -600,6 +670,10 @@ impl FileSystem for MemoryFs {
                 uid: meta.uid,
                 gid: meta.gid,
                 mode: meta.mode,
+                atime: meta.atime,
+                mtime: meta.mtime,
+                ctime: meta.ctime,
+                nlink: 2, // Directories have at least 2 (. and parent)
             }),
             Some(Node::Symlink(target)) => Ok(Metadata {
                 size: target.len() as u64,
@@ -610,6 +684,10 @@ impl FileSystem for MemoryFs {
                 uid: meta.uid,
                 gid: meta.gid,
                 mode: meta.mode,
+                atime: meta.atime,
+                mtime: meta.mtime,
+                ctime: meta.ctime,
+                nlink: 1,
             }),
             None => Err(io::Error::new(io::ErrorKind::NotFound, "Path not found")),
         }
@@ -628,7 +706,8 @@ impl FileSystem for MemoryFs {
 
         self.ensure_parent(&path)?;
         self.nodes.insert(path.clone(), Node::Directory);
-        self.meta.insert(path, NodeMeta::dir_default());
+        self.meta
+            .insert(path, NodeMeta::dir_default_with_time(self.clock));
         Ok(())
     }
 
@@ -868,14 +947,8 @@ impl FileSystem for MemoryFs {
         self.nodes
             .insert(link_path.clone(), Node::Symlink(target.to_string()));
         // Symlinks have mode 0o777 by convention (permissions are on target)
-        self.meta.insert(
-            link_path,
-            NodeMeta {
-                uid: 1000,
-                gid: 1000,
-                mode: 0o777,
-            },
-        );
+        self.meta
+            .insert(link_path, NodeMeta::symlink_default(self.clock));
         Ok(())
     }
 
@@ -892,6 +965,64 @@ impl FileSystem for MemoryFs {
         }
     }
 
+    fn link(&mut self, source: &str, dest: &str) -> io::Result<()> {
+        // Note: True hard links require inode-based storage.
+        // For now, we copy the file content to simulate a hard link.
+        // This is a simplified implementation that doesn't share inode state.
+        let source = Self::normalize_path(source);
+        let dest = Self::normalize_path(dest);
+
+        // Check source exists and is a file
+        let content = match self.nodes.get(&source) {
+            Some(Node::File(data)) => data.clone(),
+            Some(Node::Directory) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "Cannot hard link directories",
+                ));
+            }
+            Some(Node::Symlink(_)) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Cannot hard link symlinks",
+                ));
+            }
+            None => return Err(io::Error::new(io::ErrorKind::NotFound, "Source not found")),
+        };
+
+        // Check dest doesn't exist
+        if self.nodes.contains_key(&dest) {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "Destination already exists",
+            ));
+        }
+
+        // Check dest parent exists
+        if let Some(dest_parent) = Self::parent_path(&dest)
+            && !self.nodes.contains_key(&dest_parent)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "Destination parent not found",
+            ));
+        }
+
+        // Create the link (copy content)
+        self.nodes.insert(dest.clone(), Node::File(content));
+
+        // Copy metadata from source
+        if let Some(source_meta) = self.meta.get(&source).cloned() {
+            let mut dest_meta = source_meta;
+            dest_meta.ctime = self.clock; // Update ctime for new entry
+            self.meta.insert(dest, dest_meta);
+        } else {
+            self.meta.insert(dest, NodeMeta::file_default(self.clock));
+        }
+
+        Ok(())
+    }
+
     fn chmod(&mut self, path: &str, mode: u16) -> io::Result<()> {
         let path = Self::normalize_path(path);
 
@@ -901,16 +1032,12 @@ impl FileSystem for MemoryFs {
 
         if let Some(meta) = self.meta.get_mut(&path) {
             meta.mode = mode & 0o7777; // Mask to valid permission bits
+            meta.ctime = self.clock; // Update change time on metadata change
         } else {
-            // Create default meta with the new mode
-            self.meta.insert(
-                path,
-                NodeMeta {
-                    uid: 1000,
-                    gid: 1000,
-                    mode: mode & 0o7777,
-                },
-            );
+            // Create default meta with the new mode and current timestamp
+            let mut node_meta = NodeMeta::file_default(self.clock);
+            node_meta.mode = mode & 0o7777;
+            self.meta.insert(path, node_meta);
         }
 
         Ok(())
@@ -923,6 +1050,7 @@ impl FileSystem for MemoryFs {
             return Err(io::Error::new(io::ErrorKind::NotFound, "Path not found"));
         }
 
+        let clock = self.clock;
         let meta = self.meta.entry(path).or_default();
 
         if let Some(new_uid) = uid {
@@ -931,6 +1059,8 @@ impl FileSystem for MemoryFs {
         if let Some(new_gid) = gid {
             meta.gid = new_gid;
         }
+        // Update change time on metadata change
+        meta.ctime = clock;
 
         Ok(())
     }
@@ -953,6 +1083,26 @@ impl FileSystem for MemoryFs {
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Invalid file handle"))?;
 
         Ok(file.path.clone())
+    }
+
+    fn set_clock(&mut self, now: f64) {
+        self.clock = now;
+    }
+
+    fn utimes(&mut self, path: &str, atime: Option<f64>, mtime: Option<f64>) -> io::Result<()> {
+        let path = Self::normalize_path(path);
+
+        if !self.nodes.contains_key(&path) {
+            return Err(io::Error::new(io::ErrorKind::NotFound, "Path not found"));
+        }
+
+        if let Some(meta) = self.meta.get_mut(&path) {
+            meta.atime = atime.unwrap_or(self.clock);
+            meta.mtime = mtime.unwrap_or(self.clock);
+            meta.ctime = self.clock; // ctime always updated when changing times
+        }
+
+        Ok(())
     }
 }
 
@@ -1604,5 +1754,209 @@ mod tests {
         assert_eq!(path, "/myfile.txt");
 
         fs.close(handle).unwrap();
+    }
+
+    // ============ Timestamps ============
+
+    #[test]
+    fn test_timestamp_on_file_create() {
+        let mut fs = MemoryFs::new();
+
+        // Set a specific clock time
+        fs.set_clock(1000.0);
+
+        // Create a file
+        let handle = fs
+            .open("/test.txt", OpenOptions::new().write(true).create(true))
+            .unwrap();
+        fs.close(handle).unwrap();
+
+        // Check timestamps are set
+        let meta = fs.metadata("/test.txt").unwrap();
+        assert_eq!(meta.atime, 1000.0);
+        assert_eq!(meta.mtime, 1000.0);
+        assert_eq!(meta.ctime, 1000.0);
+    }
+
+    #[test]
+    fn test_timestamp_on_read() {
+        let mut fs = MemoryFs::new();
+
+        // Create file at time 1000
+        fs.set_clock(1000.0);
+        let handle = fs
+            .open("/test.txt", OpenOptions::new().write(true).create(true))
+            .unwrap();
+        fs.write(handle, b"hello").unwrap();
+        fs.close(handle).unwrap();
+
+        // Read file at time 2000
+        fs.set_clock(2000.0);
+        let handle = fs.open("/test.txt", OpenOptions::new().read(true)).unwrap();
+        let mut buf = [0u8; 5];
+        fs.read(handle, &mut buf).unwrap();
+        fs.close(handle).unwrap();
+
+        // atime should be updated, mtime/ctime unchanged
+        let meta = fs.metadata("/test.txt").unwrap();
+        assert_eq!(meta.atime, 2000.0);
+        assert_eq!(meta.mtime, 1000.0);
+        assert_eq!(meta.ctime, 1000.0);
+    }
+
+    #[test]
+    fn test_timestamp_on_write() {
+        let mut fs = MemoryFs::new();
+
+        // Create file at time 1000
+        fs.set_clock(1000.0);
+        let handle = fs
+            .open("/test.txt", OpenOptions::new().write(true).create(true))
+            .unwrap();
+        fs.close(handle).unwrap();
+
+        // Write to file at time 2000
+        fs.set_clock(2000.0);
+        let handle = fs
+            .open("/test.txt", OpenOptions::new().write(true))
+            .unwrap();
+        fs.write(handle, b"hello").unwrap();
+        fs.close(handle).unwrap();
+
+        // mtime and ctime should be updated
+        let meta = fs.metadata("/test.txt").unwrap();
+        assert_eq!(meta.atime, 1000.0); // unchanged
+        assert_eq!(meta.mtime, 2000.0);
+        assert_eq!(meta.ctime, 2000.0);
+    }
+
+    #[test]
+    fn test_timestamp_on_chmod() {
+        let mut fs = MemoryFs::new();
+
+        // Create file at time 1000
+        fs.set_clock(1000.0);
+        create_test_file(&mut fs, "/test.txt");
+
+        // chmod at time 2000
+        fs.set_clock(2000.0);
+        fs.chmod("/test.txt", 0o755).unwrap();
+
+        // Only ctime should be updated
+        let meta = fs.metadata("/test.txt").unwrap();
+        assert_eq!(meta.atime, 1000.0);
+        assert_eq!(meta.mtime, 1000.0);
+        assert_eq!(meta.ctime, 2000.0);
+    }
+
+    #[test]
+    fn test_timestamp_on_chown() {
+        let mut fs = MemoryFs::new();
+
+        // Create file at time 1000
+        fs.set_clock(1000.0);
+        create_test_file(&mut fs, "/test.txt");
+
+        // chown at time 2000
+        fs.set_clock(2000.0);
+        fs.chown("/test.txt", Some(0), Some(0)).unwrap();
+
+        // Only ctime should be updated
+        let meta = fs.metadata("/test.txt").unwrap();
+        assert_eq!(meta.atime, 1000.0);
+        assert_eq!(meta.mtime, 1000.0);
+        assert_eq!(meta.ctime, 2000.0);
+    }
+
+    #[test]
+    fn test_timestamp_on_mkdir() {
+        let mut fs = MemoryFs::new();
+
+        // Create directory at time 1000
+        fs.set_clock(1000.0);
+        fs.create_dir("/mydir").unwrap();
+
+        // Check timestamps
+        let meta = fs.metadata("/mydir").unwrap();
+        assert_eq!(meta.atime, 1000.0);
+        assert_eq!(meta.mtime, 1000.0);
+        assert_eq!(meta.ctime, 1000.0);
+    }
+
+    #[test]
+    fn test_timestamp_on_symlink() {
+        let mut fs = MemoryFs::new();
+
+        // Create symlink at time 1000
+        fs.set_clock(1000.0);
+        fs.symlink("/target", "/link").unwrap();
+
+        // Check timestamps
+        let meta = fs.metadata("/link").unwrap();
+        assert_eq!(meta.atime, 1000.0);
+        assert_eq!(meta.mtime, 1000.0);
+        assert_eq!(meta.ctime, 1000.0);
+    }
+
+    #[test]
+    fn test_utimes() {
+        let mut fs = MemoryFs::new();
+
+        // Create file at time 1000
+        fs.set_clock(1000.0);
+        create_test_file(&mut fs, "/test.txt");
+
+        // Set specific times
+        fs.set_clock(3000.0);
+        fs.utimes("/test.txt", Some(2000.0), Some(2500.0)).unwrap();
+
+        let meta = fs.metadata("/test.txt").unwrap();
+        assert_eq!(meta.atime, 2000.0);
+        assert_eq!(meta.mtime, 2500.0);
+        assert_eq!(meta.ctime, 3000.0); // ctime always updated
+    }
+
+    #[test]
+    fn test_utimes_with_none() {
+        let mut fs = MemoryFs::new();
+
+        // Create file at time 1000
+        fs.set_clock(1000.0);
+        create_test_file(&mut fs, "/test.txt");
+
+        // Set times to current clock (None = use current time)
+        fs.set_clock(2000.0);
+        fs.utimes("/test.txt", None, None).unwrap();
+
+        let meta = fs.metadata("/test.txt").unwrap();
+        assert_eq!(meta.atime, 2000.0);
+        assert_eq!(meta.mtime, 2000.0);
+        assert_eq!(meta.ctime, 2000.0);
+    }
+
+    #[test]
+    fn test_truncate_updates_times() {
+        let mut fs = MemoryFs::new();
+
+        // Create file with content at time 1000
+        fs.set_clock(1000.0);
+        let handle = fs
+            .open("/test.txt", OpenOptions::new().write(true).create(true))
+            .unwrap();
+        fs.write(handle, b"hello world").unwrap();
+        fs.close(handle).unwrap();
+
+        // Truncate at time 2000
+        fs.set_clock(2000.0);
+        let handle = fs
+            .open("/test.txt", OpenOptions::new().write(true).truncate(true))
+            .unwrap();
+        fs.close(handle).unwrap();
+
+        // mtime and ctime should be updated
+        let meta = fs.metadata("/test.txt").unwrap();
+        assert_eq!(meta.atime, 1000.0);
+        assert_eq!(meta.mtime, 2000.0);
+        assert_eq!(meta.ctime, 2000.0);
     }
 }

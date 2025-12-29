@@ -8,7 +8,7 @@
 //! 5. Running WASM command modules from /bin
 
 use super::builtins::{self, BuiltinResult, ShellState};
-use super::parser::{CommandList, LogicalOp, Pipeline, SimpleCommand};
+use super::parser::{ArrayAssignment, CommandList, LogicalOp, ParsedLine, Pipeline, SimpleCommand};
 use super::programs;
 use crate::kernel::syscall;
 use crate::kernel::wasm::WasmCommandRunner;
@@ -249,6 +249,10 @@ pub struct Executor {
     pub registry: ProgramRegistry,
     /// WASM command runner for executing /bin/*.wasm modules
     pub wasm_runner: WasmCommandRunner,
+    /// Counter for generating unique process substitution temp file IDs
+    procsub_counter: u64,
+    /// Pending output substitutions: (temp_file_path, command_to_run)
+    pending_output_substitutions: Vec<(String, String)>,
 }
 
 impl Executor {
@@ -269,6 +273,8 @@ impl Executor {
             state,
             registry: ProgramRegistry::new(),
             wasm_runner,
+            procsub_counter: 0,
+            pending_output_substitutions: Vec::new(),
         }
     }
 
@@ -341,6 +347,11 @@ impl Executor {
             return Some(self.execute_builtin(cmd));
         }
 
+        // Shell functions are sync
+        if self.state.has_function(&cmd.program) {
+            return Some(self.execute_single(cmd));
+        }
+
         // Registry programs are sync
         if self.registry.contains(&cmd.program) {
             return Some(self.execute_single(cmd));
@@ -382,13 +393,26 @@ impl Executor {
         #[cfg(all(target_arch = "wasm32", not(test)))]
         crate::console_log!("[exec] Running: {}", line);
 
-        // Parse the command list (handles &&, ||, ;)
-        let cmd_list = match super::parser::parse_command_list(&line) {
-            Ok(c) => c,
+        // Parse the line (may be a command or function definition)
+        let parsed = match super::parser::parse_line(&line) {
+            Ok(p) => p,
             Err(e) => return ExecResult::success().with_error(format!("parse error: {}", e)),
         };
 
-        let result = self.execute_command_list(&cmd_list);
+        let result = match parsed {
+            ParsedLine::Empty => ExecResult::success(),
+            ParsedLine::Function(func) => {
+                // Store the function definition
+                self.state.set_function(&func.name, &func.body);
+                ExecResult::success()
+            }
+            ParsedLine::Array(arr) => {
+                // Handle array assignment
+                self.execute_array_assignment(&arr);
+                ExecResult::success()
+            }
+            ParsedLine::Command(cmd_list) => self.execute_command_list(&cmd_list),
+        };
 
         #[cfg(all(target_arch = "wasm32", not(test)))]
         if !result.error.is_empty() {
@@ -396,6 +420,31 @@ impl Executor {
         }
 
         result
+    }
+
+    /// Execute an array assignment
+    fn execute_array_assignment(&mut self, arr: &ArrayAssignment) {
+        if let Some(index) = arr.index {
+            // Element assignment: arr[n]=value
+            let value = arr.elements.first().cloned().unwrap_or_default();
+            // Expand variables in the value
+            let expanded = self.expand_substitution_in_arg(&value);
+            self.state.set_array_element(&arr.name, index, expanded);
+        } else if arr.append {
+            // Append: arr+=(elem1 elem2 ...)
+            for elem in &arr.elements {
+                let expanded = self.expand_substitution_in_arg(elem);
+                self.state.push_array(&arr.name, expanded);
+            }
+        } else {
+            // Definition: arr=(elem1 elem2 ...)
+            let expanded: Vec<String> = arr
+                .elements
+                .iter()
+                .map(|e| self.expand_substitution_in_arg(e))
+                .collect();
+            self.state.set_array(arr.name.clone(), expanded);
+        }
     }
 
     /// Execute a command list (multiple pipelines with &&, ||, ;)
@@ -464,6 +513,12 @@ impl Executor {
         // Handle built-in commands
         if builtins::is_builtin(&cmd.program) {
             return self.execute_builtin(cmd);
+        }
+
+        // Handle shell functions
+        if let Some(body) = self.state.get_function(&cmd.program).map(|s| s.to_string()) {
+            // Execute the function body
+            return self.execute_line(&body);
         }
 
         // Handle external programs from registry
@@ -539,6 +594,11 @@ impl Executor {
         // Handle built-in commands (sync)
         if builtins::is_builtin(&cmd.program) {
             return self.execute_builtin(cmd);
+        }
+
+        // Handle shell functions (sync)
+        if self.state.has_function(&cmd.program) {
+            return self.execute_single(cmd);
         }
 
         // Handle registry programs (sync)
@@ -672,6 +732,13 @@ impl Executor {
                         last_code = 0;
                     }
                 }
+            } else if let Some(body) = self.state.get_function(&cmd.program).map(|s| s.to_string())
+            {
+                // Execute shell function
+                let result = self.execute_line(&body);
+                stdout = result.output;
+                stderr = result.error;
+                last_code = result.code;
             } else if let Some(prog) = self.registry.get(&cmd.program) {
                 // Registry program - pass pipe_input as stdin
                 last_code = prog(&expanded_args, &pipe_input, &mut stdout, &mut stderr);
@@ -910,6 +977,13 @@ impl Executor {
                         last_code = 0;
                     }
                 }
+            } else if let Some(body) = self.state.get_function(&cmd.program).map(|s| s.to_string())
+            {
+                // Execute shell function - function output becomes pipe output
+                let result = self.execute_line(&body);
+                stdout = result.output;
+                stderr = result.error;
+                last_code = result.code;
             } else if let Some(prog) = self.registry.get(&cmd.program) {
                 // Pass pipe input directly via stdin parameter
                 last_code = prog(&expanded_args, &pipe_input, &mut stdout, &mut stderr);
@@ -1136,14 +1210,14 @@ impl Executor {
         self.expand_substitution_in_arg(line)
     }
 
-    /// Expand command substitutions in a single argument/string
+    /// Expand command substitutions and process substitutions in a single argument/string
     fn expand_substitution_in_arg(&mut self, arg: &str) -> String {
         let mut result = String::new();
         let mut chars = arg.chars().peekable();
 
         while let Some(c) = chars.next() {
             if c == '$' && chars.peek() == Some(&'(') {
-                // $(...) substitution
+                // $(...) command substitution
                 chars.next(); // consume '('
                 if let Some(cmd) = self.extract_nested_paren(&mut chars) {
                     let output = self.execute_substitution(&cmd);
@@ -1151,6 +1225,24 @@ impl Executor {
                 } else {
                     // Malformed - just keep it as-is
                     result.push_str("$(");
+                }
+            } else if c == '<' && chars.peek() == Some(&'(') {
+                // <(...) process substitution - input
+                chars.next(); // consume '('
+                if let Some(cmd) = self.extract_nested_paren(&mut chars) {
+                    let path = self.execute_process_substitution_input(&cmd);
+                    result.push_str(&path);
+                } else {
+                    result.push_str("<(");
+                }
+            } else if c == '>' && chars.peek() == Some(&'(') {
+                // >(...) process substitution - output (limited support)
+                chars.next(); // consume '('
+                if let Some(cmd) = self.extract_nested_paren(&mut chars) {
+                    let path = self.execute_process_substitution_output(&cmd);
+                    result.push_str(&path);
+                } else {
+                    result.push_str(">(");
                 }
             } else if c == '`' {
                 // Backtick substitution
@@ -1182,6 +1274,54 @@ impl Executor {
         }
 
         result
+    }
+
+    /// Execute process substitution for input: <(cmd)
+    /// Returns a path to a file containing the command output
+    fn execute_process_substitution_input(&mut self, cmd: &str) -> String {
+        // Execute the command and capture output
+        let output = self.execute_substitution(cmd);
+
+        // Ensure /tmp exists
+        let _ = syscall::mkdir("/tmp");
+
+        // Create a temp file with the output
+        let temp_path = format!("/tmp/procsub_{}", self.next_procsub_id());
+        if let Err(_e) = self.write_file(&temp_path, &output, false) {
+            // On error, return a path that will cause an error when read
+            return "/dev/null".to_string(); // fallback
+        }
+
+        temp_path
+    }
+
+    /// Execute process substitution for output: >(cmd)
+    /// Returns a path to a file that will be read and fed to the command
+    fn execute_process_substitution_output(&mut self, cmd: &str) -> String {
+        // For output substitution, we need to create a file that when written to
+        // will have its contents fed to the command. This is tricky without
+        // named pipes, so we use a simplified approach:
+        // Return a temp file path, and after the main command completes,
+        // read the file and execute the substituted command with it.
+        // Note: This is a simplified implementation that doesn't handle
+        // streaming properly like real named pipes would.
+
+        // Ensure /tmp exists
+        let _ = syscall::mkdir("/tmp");
+
+        let temp_path = format!("/tmp/procsub_out_{}", self.next_procsub_id());
+
+        // Store the command to execute later with this output file
+        self.pending_output_substitutions
+            .push((temp_path.clone(), cmd.to_string()));
+
+        temp_path
+    }
+
+    /// Generate unique ID for process substitution temp files
+    fn next_procsub_id(&mut self) -> u64 {
+        self.procsub_counter += 1;
+        self.procsub_counter
     }
 
     /// Extract content from nested parentheses, handling nesting
@@ -2333,5 +2473,261 @@ mod tests {
         assert_eq!(result.code, 42);
         assert!(result.output.contains("before"));
         assert!(!result.output.contains("after"));
+    }
+
+    // ============ Shell Functions ============
+
+    #[test]
+    fn test_define_and_call_function() {
+        let mut exec = Executor::new();
+
+        // Define a simple function
+        let result = exec.execute_line("hello() { echo hello world }");
+        assert_eq!(result.code, 0);
+
+        // Call the function
+        let result = exec.execute_line("hello");
+        assert_eq!(result.code, 0);
+        assert_eq!(result.output, "hello world");
+    }
+
+    #[test]
+    fn test_function_with_pipeline() {
+        let mut exec = Executor::new();
+
+        // Define a function that uses a pipeline
+        let result = exec.execute_line("greet() { echo hello | cat }");
+        assert_eq!(result.code, 0);
+
+        // Call the function
+        let result = exec.execute_line("greet");
+        assert_eq!(result.code, 0);
+        assert_eq!(result.output, "hello");
+    }
+
+    #[test]
+    fn test_function_with_logical_ops() {
+        let mut exec = Executor::new();
+
+        // Define a function with logical operators
+        let result = exec.execute_line("check() { true && echo success }");
+        assert_eq!(result.code, 0);
+
+        // Call the function
+        let result = exec.execute_line("check");
+        assert_eq!(result.code, 0);
+        assert_eq!(result.output, "success");
+    }
+
+    #[test]
+    fn test_function_redefine() {
+        let mut exec = Executor::new();
+
+        // Define function
+        exec.execute_line("foo() { echo first }");
+        let result = exec.execute_line("foo");
+        assert_eq!(result.output, "first");
+
+        // Redefine function
+        exec.execute_line("foo() { echo second }");
+        let result = exec.execute_line("foo");
+        assert_eq!(result.output, "second");
+    }
+
+    #[test]
+    fn test_function_builtin_priority() {
+        let mut exec = Executor::new();
+
+        // Define a function with the same name as a builtin should NOT override
+        // (builtins take priority in our implementation)
+        exec.execute_line("echo() { echo override }");
+
+        // The builtin echo should still work
+        let result = exec.execute_line("echo test");
+        // Note: in our implementation builtins take priority over functions
+        assert_eq!(result.output, "test");
+    }
+
+    #[test]
+    fn test_function_state_persists() {
+        let mut exec = Executor::new();
+
+        // Define function
+        exec.execute_line("myfunc() { echo stored }");
+
+        // Function should be stored in state
+        assert!(exec.state.has_function("myfunc"));
+        assert_eq!(exec.state.get_function("myfunc"), Some("echo stored"));
+    }
+
+    #[test]
+    fn test_function_multiple_commands() {
+        let mut exec = Executor::new();
+
+        // Define function with multiple commands using ;
+        exec.execute_line("multi() { echo one ; echo two }");
+
+        let result = exec.execute_line("multi");
+        assert_eq!(result.code, 0);
+        assert!(result.output.contains("one"));
+        assert!(result.output.contains("two"));
+    }
+
+    // ============ Shell Arrays ============
+
+    #[test]
+    fn test_array_definition() {
+        let mut exec = Executor::new();
+
+        exec.execute_line("arr=(one two three)");
+
+        assert!(exec.state.has_array("arr"));
+        assert_eq!(exec.state.array_len("arr"), 3);
+        assert_eq!(exec.state.get_array_element("arr", 0), Some("one"));
+        assert_eq!(exec.state.get_array_element("arr", 1), Some("two"));
+        assert_eq!(exec.state.get_array_element("arr", 2), Some("three"));
+    }
+
+    #[test]
+    fn test_array_empty_definition() {
+        let mut exec = Executor::new();
+
+        exec.execute_line("arr=()");
+
+        assert!(exec.state.has_array("arr"));
+        assert_eq!(exec.state.array_len("arr"), 0);
+    }
+
+    #[test]
+    fn test_array_element_assignment() {
+        let mut exec = Executor::new();
+
+        exec.execute_line("arr[0]=first");
+        exec.execute_line("arr[2]=third");
+
+        assert_eq!(exec.state.get_array_element("arr", 0), Some("first"));
+        assert_eq!(exec.state.get_array_element("arr", 1), Some("")); // Gap filled with empty
+        assert_eq!(exec.state.get_array_element("arr", 2), Some("third"));
+    }
+
+    #[test]
+    fn test_array_append() {
+        let mut exec = Executor::new();
+
+        exec.execute_line("arr=(one)");
+        exec.execute_line("arr+=(two three)");
+
+        assert_eq!(exec.state.array_len("arr"), 3);
+        assert_eq!(exec.state.get_array_element("arr", 0), Some("one"));
+        assert_eq!(exec.state.get_array_element("arr", 1), Some("two"));
+        assert_eq!(exec.state.get_array_element("arr", 2), Some("three"));
+    }
+
+    #[test]
+    fn test_array_redefine() {
+        let mut exec = Executor::new();
+
+        exec.execute_line("arr=(one two three)");
+        assert_eq!(exec.state.array_len("arr"), 3);
+
+        exec.execute_line("arr=(new)");
+        assert_eq!(exec.state.array_len("arr"), 1);
+        assert_eq!(exec.state.get_array_element("arr", 0), Some("new"));
+    }
+
+    #[test]
+    fn test_array_state_methods() {
+        let mut exec = Executor::new();
+
+        // Initial state
+        assert!(!exec.state.has_array("myarr"));
+        assert_eq!(exec.state.array_len("myarr"), 0);
+
+        // Set array
+        exec.state.set_array("myarr", vec!["a".into(), "b".into()]);
+        assert!(exec.state.has_array("myarr"));
+        assert_eq!(exec.state.array_len("myarr"), 2);
+
+        // Push
+        exec.state.push_array("myarr", "c");
+        assert_eq!(exec.state.array_len("myarr"), 3);
+
+        // Set element
+        exec.state.set_array_element("myarr", 1, "changed");
+        assert_eq!(exec.state.get_array_element("myarr", 1), Some("changed"));
+
+        // Unset
+        assert!(exec.state.unset_array("myarr"));
+        assert!(!exec.state.has_array("myarr"));
+    }
+
+    // ============ Process Substitution ============
+
+    #[test]
+    fn test_process_substitution_input() {
+        let mut exec = setup_redirect_test();
+
+        // Test basic process substitution expansion
+        let expanded = exec.expand_substitution_in_arg("<(echo hello)");
+        // Should be a temp file path like /tmp/procsub_1
+        assert!(expanded.starts_with("/tmp/procsub_"));
+    }
+
+    #[test]
+    fn test_process_substitution_counter_increments() {
+        let mut exec = setup_redirect_test();
+
+        let path1 = exec.expand_substitution_in_arg("<(echo a)");
+        let path2 = exec.expand_substitution_in_arg("<(echo b)");
+
+        // Different temp files should have different names
+        assert_ne!(path1, path2);
+    }
+
+    #[test]
+    fn test_process_substitution_output() {
+        let mut exec = setup_redirect_test();
+
+        // Test output substitution
+        let expanded = exec.expand_substitution_in_arg(">(cat)");
+        assert!(expanded.starts_with("/tmp/procsub_out_"));
+    }
+
+    #[test]
+    fn test_process_substitution_in_command() {
+        let mut exec = setup_redirect_test();
+
+        // Process substitution should expand and work
+        let result = exec.execute_line("cat <(echo from_procsub)");
+        assert_eq!(
+            result.code, 0,
+            "cat with process substitution failed: {}",
+            result.error
+        );
+        assert_eq!(result.output.trim(), "from_procsub");
+    }
+
+    #[test]
+    fn test_process_substitution_mixed_with_regular_args() {
+        let mut exec = setup_redirect_test();
+
+        // Process substitution mixed with regular arguments
+        let expanded = exec.expand_substitution_in_arg("prefix <(echo test) suffix");
+        assert!(expanded.contains("/tmp/procsub_"));
+        assert!(expanded.starts_with("prefix "));
+        assert!(expanded.ends_with(" suffix"));
+    }
+
+    #[test]
+    fn test_procsub_id_generation() {
+        let mut exec = Executor::new();
+
+        let id1 = exec.next_procsub_id();
+        let id2 = exec.next_procsub_id();
+        let id3 = exec.next_procsub_id();
+
+        assert_eq!(id1, 1);
+        assert_eq!(id2, 2);
+        assert_eq!(id3, 3);
     }
 }

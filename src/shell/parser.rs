@@ -24,6 +24,8 @@ pub struct SimpleCommand {
     pub stdout: Option<Redirect>,
     /// Error redirection: 2> file or 2>> file
     pub stderr: Option<Redirect>,
+    /// Heredoc input: << DELIMITER or <<- DELIMITER
+    pub heredoc: Option<Heredoc>,
 }
 
 impl SimpleCommand {
@@ -34,7 +36,13 @@ impl SimpleCommand {
             stdin: None,
             stdout: None,
             stderr: None,
+            heredoc: None,
         }
+    }
+
+    /// Check if this command has a pending heredoc that needs content
+    pub fn needs_heredoc(&self) -> bool {
+        self.heredoc.as_ref().is_some_and(|h| h.content.is_none())
     }
 
     pub fn arg(mut self, arg: impl Into<String>) -> Self {
@@ -67,6 +75,64 @@ impl Redirect {
             path: path.into(),
             append,
         }
+    }
+}
+
+/// Heredoc specification
+///
+/// Represents a here-document input redirection (<<DELIMITER).
+/// The content is filled in after parsing when the heredoc lines are read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Heredoc {
+    /// Delimiter that ends the heredoc (e.g., "EOF")
+    pub delimiter: String,
+    /// Strip leading tabs from content (<<- vs <<)
+    pub strip_tabs: bool,
+    /// The heredoc content (filled in after parsing)
+    pub content: Option<String>,
+}
+
+impl Heredoc {
+    /// Create a new heredoc with delimiter
+    pub fn new(delimiter: impl Into<String>, strip_tabs: bool) -> Self {
+        Self {
+            delimiter: delimiter.into(),
+            strip_tabs,
+            content: None,
+        }
+    }
+
+    /// Set the heredoc content
+    pub fn with_content(mut self, content: impl Into<String>) -> Self {
+        self.content = Some(content.into());
+        self
+    }
+
+    /// Read heredoc content from lines until delimiter is found
+    ///
+    /// Returns true if delimiter was found, false if input ended
+    pub fn read_content(&mut self, lines: &mut impl Iterator<Item = String>) -> bool {
+        let mut content = String::new();
+        for line in lines {
+            let trimmed = if self.strip_tabs {
+                line.trim_start_matches('\t')
+            } else {
+                line.as_str()
+            };
+
+            if trimmed == self.delimiter {
+                self.content = Some(content);
+                return true;
+            }
+
+            if !content.is_empty() {
+                content.push('\n');
+            }
+            content.push_str(trimmed);
+        }
+        // Delimiter not found - treat rest as content (shell behavior)
+        self.content = Some(content);
+        false
     }
 }
 
@@ -163,6 +229,106 @@ impl CommandList {
     }
 }
 
+/// A shell function definition
+///
+/// Represents: `name() { body... }`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellFunction {
+    /// Function name
+    pub name: String,
+    /// Function body as raw command string
+    pub body: String,
+}
+
+impl ShellFunction {
+    pub fn new(name: impl Into<String>, body: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            body: body.into(),
+        }
+    }
+}
+
+/// Process substitution: <(cmd) or >(cmd)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProcessSubstitution {
+    /// The command to run
+    pub command: String,
+    /// True for input (<(cmd)), false for output (>(cmd))
+    pub is_input: bool,
+}
+
+impl ProcessSubstitution {
+    pub fn input(command: impl Into<String>) -> Self {
+        Self {
+            command: command.into(),
+            is_input: true,
+        }
+    }
+
+    pub fn output(command: impl Into<String>) -> Self {
+        Self {
+            command: command.into(),
+            is_input: false,
+        }
+    }
+}
+
+/// An array assignment
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArrayAssignment {
+    /// Array name
+    pub name: String,
+    /// Array elements (for definition) or single value (for element assignment)
+    pub elements: Vec<String>,
+    /// If Some, this is an element assignment at the given index
+    pub index: Option<usize>,
+    /// If true, append to array instead of replace
+    pub append: bool,
+}
+
+impl ArrayAssignment {
+    pub fn definition(name: impl Into<String>, elements: Vec<String>) -> Self {
+        Self {
+            name: name.into(),
+            elements,
+            index: None,
+            append: false,
+        }
+    }
+
+    pub fn element(name: impl Into<String>, index: usize, value: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            elements: vec![value.into()],
+            index: Some(index),
+            append: false,
+        }
+    }
+
+    pub fn append(name: impl Into<String>, elements: Vec<String>) -> Self {
+        Self {
+            name: name.into(),
+            elements,
+            index: None,
+            append: true,
+        }
+    }
+}
+
+/// Result of parsing a line - could be a command or a function definition
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParsedLine {
+    /// A regular command list
+    Command(CommandList),
+    /// A function definition
+    Function(ShellFunction),
+    /// An array assignment
+    Array(ArrayAssignment),
+    /// Empty line
+    Empty,
+}
+
 /// Token types
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Token {
@@ -180,6 +346,10 @@ enum Token {
     RedirectErr,
     /// Error append redirect: 2>>
     RedirectErrAppend,
+    /// Heredoc: <<
+    HeredocStart,
+    /// Heredoc with tab stripping: <<-
+    HeredocStripStart,
     /// Background: &
     Background,
     /// AND: &&
@@ -188,6 +358,18 @@ enum Token {
     Or,
     /// Semicolon: ;
     Semicolon,
+    /// Left parenthesis: (
+    LeftParen,
+    /// Right parenthesis: )
+    RightParen,
+    /// Left brace: {
+    LeftBrace,
+    /// Right brace: }
+    RightBrace,
+    /// Left bracket: [
+    LeftBracket,
+    /// Right bracket: ]
+    RightBracket,
 }
 
 impl<'a> Lexer<'a> {
@@ -252,7 +434,18 @@ impl<'a> Lexer<'a> {
             }
             '<' => {
                 self.chars.next();
-                Ok(Some(Token::RedirectIn))
+                if self.chars.peek() == Some(&'<') {
+                    self.chars.next();
+                    // Check for <<- (tab stripping heredoc)
+                    if self.chars.peek() == Some(&'-') {
+                        self.chars.next();
+                        Ok(Some(Token::HeredocStripStart))
+                    } else {
+                        Ok(Some(Token::HeredocStart))
+                    }
+                } else {
+                    Ok(Some(Token::RedirectIn))
+                }
             }
             '>' => {
                 self.chars.next();
@@ -282,6 +475,30 @@ impl<'a> Lexer<'a> {
                 }
             }
             '"' | '\'' => self.read_quoted_string(c),
+            '(' => {
+                self.chars.next();
+                Ok(Some(Token::LeftParen))
+            }
+            ')' => {
+                self.chars.next();
+                Ok(Some(Token::RightParen))
+            }
+            '{' => {
+                self.chars.next();
+                Ok(Some(Token::LeftBrace))
+            }
+            '}' => {
+                self.chars.next();
+                Ok(Some(Token::RightBrace))
+            }
+            '[' => {
+                self.chars.next();
+                Ok(Some(Token::LeftBracket))
+            }
+            ']' => {
+                self.chars.next();
+                Ok(Some(Token::RightBracket))
+            }
             _ => self.read_word(),
         }
     }
@@ -292,7 +509,10 @@ impl<'a> Lexer<'a> {
         while let Some(&c) = self.chars.peek() {
             match c {
                 // These terminate a word
-                ' ' | '\t' | '\n' | '\r' | '|' | '&' | '<' | '>' | ';' => break,
+                ' ' | '\t' | '\n' | '\r' | '|' | '&' | '<' | '>' | ';' | '(' | ')' | '{' | '}'
+                | '[' | ']' => {
+                    break;
+                }
                 // Quotes can appear mid-word: foo"bar"baz
                 '"' | '\'' => {
                     self.chars.next();
@@ -340,6 +560,221 @@ impl<'a> Lexer<'a> {
     }
 }
 
+/// Parse a line that may be a command or a function definition
+///
+/// Detects shell function syntax: `name() { body... }`
+/// Detects array syntax: `arr=(elem1 elem2)`, `arr+=(elem)`, `arr[0]=value`
+pub fn parse_line(input: &str) -> Result<ParsedLine, ParseError> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Ok(ParsedLine::Empty);
+    }
+
+    // Try to parse as function definition first
+    if let Some(func) = try_parse_function(trimmed)? {
+        return Ok(ParsedLine::Function(func));
+    }
+
+    // Try to parse as array assignment
+    if let Some(arr) = try_parse_array(trimmed)? {
+        return Ok(ParsedLine::Array(arr));
+    }
+
+    // Otherwise parse as a command list
+    let cmd_list = parse_command_list(input)?;
+    Ok(ParsedLine::Command(cmd_list))
+}
+
+/// Try to parse an array assignment: `arr=(...)`, `arr+=(...)`, `arr[n]=value`
+fn try_parse_array(input: &str) -> Result<Option<ArrayAssignment>, ParseError> {
+    let mut lexer = Lexer::new(input);
+
+    // First token must be a word (array name, possibly with = or +=)
+    let first_word = match lexer.next_token()? {
+        Some(Token::Word(w)) => w,
+        _ => return Ok(None),
+    };
+
+    // Check for arr=( or arr+=(
+    if let Some(name) = first_word.strip_suffix("=(") {
+        // Tokenize the rest - we need to put back the '(' context
+        // Actually, since we consumed "arr=(", the next tokens should be the elements
+        // But we already consumed past the '(' so we need to handle this differently
+        // Let's use a simpler approach - detect the pattern and reparse
+        if !name.is_empty() && !name.contains('+') {
+            let elements = collect_array_elements(&mut lexer)?;
+            return Ok(Some(ArrayAssignment::definition(name, elements)));
+        }
+    }
+
+    // Check for arr+=(
+    if let Some(name) = first_word.strip_suffix("+=(")
+        && !name.is_empty()
+    {
+        let elements = collect_array_elements(&mut lexer)?;
+        return Ok(Some(ArrayAssignment::append(name, elements)));
+    }
+
+    // Check for arr= followed by ( - first word ends with =
+    if let Some(name) = first_word.strip_suffix('=')
+        && !name.is_empty()
+        && !name.contains('+')
+    {
+        match lexer.next_token()? {
+            Some(Token::LeftParen) => {
+                let elements = collect_array_elements(&mut lexer)?;
+                return Ok(Some(ArrayAssignment::definition(name, elements)));
+            }
+            _ => return Ok(None), // Regular assignment like FOO=bar
+        }
+    }
+
+    // Check for arr+= followed by (
+    if let Some(name) = first_word.strip_suffix("+=")
+        && !name.is_empty()
+    {
+        match lexer.next_token()? {
+            Some(Token::LeftParen) => {
+                let elements = collect_array_elements(&mut lexer)?;
+                return Ok(Some(ArrayAssignment::append(name, elements)));
+            }
+            _ => return Ok(None),
+        }
+    }
+
+    // Check for arr[ - element assignment: arr[n]=value
+    let name = &first_word;
+    match lexer.next_token()? {
+        Some(Token::LeftBracket) => {
+            // Get index
+            let index = match lexer.next_token()? {
+                Some(Token::Word(w)) => w.parse::<usize>().map_err(|_| {
+                    ParseError::UnexpectedToken(format!("invalid array index: {}", w))
+                })?,
+                _ => return Ok(None),
+            };
+
+            // Expect closing bracket
+            match lexer.next_token()? {
+                Some(Token::RightBracket) => {}
+                _ => return Ok(None),
+            }
+
+            // Get value (which includes the =)
+            let value_with_eq = match lexer.next_token()? {
+                Some(Token::Word(w)) => w,
+                None => return Ok(None),
+                _ => return Ok(None),
+            };
+
+            // Value should start with =
+            if let Some(value) = value_with_eq.strip_prefix('=') {
+                return Ok(Some(ArrayAssignment::element(name.clone(), index, value)));
+            }
+
+            Ok(None)
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Collect array elements until closing paren
+fn collect_array_elements(lexer: &mut Lexer) -> Result<Vec<String>, ParseError> {
+    let mut elements = Vec::new();
+
+    loop {
+        match lexer.next_token()? {
+            Some(Token::RightParen) => break,
+            Some(Token::Word(w)) => elements.push(w),
+            None => return Err(ParseError::UnexpectedEnd),
+            Some(t) => {
+                return Err(ParseError::UnexpectedToken(format!(
+                    "unexpected token in array: {:?}",
+                    t
+                )));
+            }
+        }
+    }
+
+    Ok(elements)
+}
+
+/// Try to parse a function definition: `name() { body... }`
+///
+/// Returns None if this doesn't look like a function definition.
+fn try_parse_function(input: &str) -> Result<Option<ShellFunction>, ParseError> {
+    let mut lexer = Lexer::new(input);
+
+    // First token must be a word (function name)
+    let name = match lexer.next_token()? {
+        Some(Token::Word(w)) => w,
+        _ => return Ok(None),
+    };
+
+    // Next must be `(`
+    match lexer.next_token()? {
+        Some(Token::LeftParen) => {}
+        _ => return Ok(None),
+    }
+
+    // Next must be `)`
+    match lexer.next_token()? {
+        Some(Token::RightParen) => {}
+        _ => return Ok(None),
+    }
+
+    // Next must be `{`
+    match lexer.next_token()? {
+        Some(Token::LeftBrace) => {}
+        _ => return Ok(None),
+    }
+
+    // Now collect everything until matching `}`
+    let mut body_parts: Vec<String> = Vec::new();
+    let mut brace_depth = 1;
+
+    // Collect rest of input as body, tracking brace depth
+    loop {
+        match lexer.next_token()? {
+            Some(Token::LeftBrace) => {
+                brace_depth += 1;
+                body_parts.push("{".to_string());
+            }
+            Some(Token::RightBrace) => {
+                brace_depth -= 1;
+                if brace_depth == 0 {
+                    break;
+                }
+                body_parts.push("}".to_string());
+            }
+            Some(Token::Word(w)) => body_parts.push(w),
+            Some(Token::Pipe) => body_parts.push("|".to_string()),
+            Some(Token::RedirectIn) => body_parts.push("<".to_string()),
+            Some(Token::RedirectOut) => body_parts.push(">".to_string()),
+            Some(Token::RedirectAppend) => body_parts.push(">>".to_string()),
+            Some(Token::RedirectErr) => body_parts.push("2>".to_string()),
+            Some(Token::RedirectErrAppend) => body_parts.push("2>>".to_string()),
+            Some(Token::HeredocStart) => body_parts.push("<<".to_string()),
+            Some(Token::HeredocStripStart) => body_parts.push("<<-".to_string()),
+            Some(Token::Background) => body_parts.push("&".to_string()),
+            Some(Token::And) => body_parts.push("&&".to_string()),
+            Some(Token::Or) => body_parts.push("||".to_string()),
+            Some(Token::Semicolon) => body_parts.push(";".to_string()),
+            Some(Token::LeftParen) => body_parts.push("(".to_string()),
+            Some(Token::RightParen) => body_parts.push(")".to_string()),
+            Some(Token::LeftBracket) => body_parts.push("[".to_string()),
+            Some(Token::RightBracket) => body_parts.push("]".to_string()),
+            None => {
+                return Err(ParseError::UnexpectedEnd);
+            }
+        }
+    }
+
+    let body = body_parts.join(" ");
+
+    Ok(Some(ShellFunction::new(name, body.trim())))
+}
+
 /// Parse a command line into a command list (handles &&, ||, ;)
 pub fn parse_command_list(input: &str) -> Result<CommandList, ParseError> {
     let mut lexer = Lexer::new(input);
@@ -368,6 +803,7 @@ fn parse_pipeline_internal(
     let mut stdin = None;
     let mut stdout = None;
     let mut stderr = None;
+    let mut heredoc = None;
     let mut background = false;
     let mut trailing_op: Option<LogicalOp> = None;
     let mut expecting_command = true; // True at start and after pipe
@@ -407,6 +843,7 @@ fn parse_pipeline_internal(
                     stdin.take(),
                     stdout.take(),
                     stderr.take(),
+                    heredoc.take(),
                 );
                 commands.push(cmd);
                 expecting_command = true; // Expect command after pipe
@@ -434,6 +871,14 @@ fn parse_pipeline_internal(
                 let target = expect_word(lexer)?;
                 stderr = Some(Redirect::new(target, true));
             }
+            Token::HeredocStart => {
+                let delimiter = expect_word(lexer)?;
+                heredoc = Some(Heredoc::new(delimiter, false));
+            }
+            Token::HeredocStripStart => {
+                let delimiter = expect_word(lexer)?;
+                heredoc = Some(Heredoc::new(delimiter, true));
+            }
             // Stop at logical operators - return them for the caller
             Token::And => {
                 trailing_op = Some(LogicalOp::And);
@@ -459,6 +904,15 @@ fn parse_pipeline_internal(
                     }
                 }
             }
+            // Braces and parentheses are for function definitions/subshells
+            // In a regular command context, treat them as unexpected
+            Token::LeftParen | Token::RightParen | Token::LeftBrace | Token::RightBrace => {
+                return Err(ParseError::UnexpectedToken(format!("{:?}", token)));
+            }
+            // Brackets are for array syntax - unexpected in command context
+            Token::LeftBracket | Token::RightBracket => {
+                return Err(ParseError::UnexpectedToken(format!("{:?}", token)));
+            }
         }
     }
 
@@ -469,7 +923,7 @@ fn parse_pipeline_internal(
             return Err(ParseError::EmptyCommand);
         }
     } else {
-        let cmd = build_command(&mut current_words, stdin, stdout, stderr);
+        let cmd = build_command(&mut current_words, stdin, stdout, stderr, heredoc);
         commands.push(cmd);
     }
 
@@ -501,6 +955,7 @@ fn build_command(
     stdin: Option<Redirect>,
     stdout: Option<Redirect>,
     stderr: Option<Redirect>,
+    heredoc: Option<Heredoc>,
 ) -> SimpleCommand {
     let program = words.remove(0);
     let args = std::mem::take(words);
@@ -510,6 +965,7 @@ fn build_command(
         stdin,
         stdout,
         stderr,
+        heredoc,
     }
 }
 
@@ -874,5 +1330,314 @@ mod tests {
     fn test_or_no_space() {
         let result = parse_command_list("false||echo ok").unwrap();
         assert_eq!(result.rest[0].0, LogicalOp::Or);
+    }
+
+    // ============ Heredocs ============
+
+    #[test]
+    fn test_heredoc_basic() {
+        let result = parse("cat <<EOF").unwrap();
+        assert_eq!(result.commands[0].program, "cat");
+        let heredoc = result.commands[0].heredoc.as_ref().unwrap();
+        assert_eq!(heredoc.delimiter, "EOF");
+        assert!(!heredoc.strip_tabs);
+        assert!(heredoc.content.is_none()); // Content not yet filled
+    }
+
+    #[test]
+    fn test_heredoc_strip_tabs() {
+        let result = parse("cat <<-END").unwrap();
+        assert_eq!(result.commands[0].program, "cat");
+        let heredoc = result.commands[0].heredoc.as_ref().unwrap();
+        assert_eq!(heredoc.delimiter, "END");
+        assert!(heredoc.strip_tabs);
+    }
+
+    #[test]
+    fn test_heredoc_with_args() {
+        let result = parse("cat -n <<EOF file.txt").unwrap();
+        assert_eq!(result.commands[0].program, "cat");
+        assert_eq!(result.commands[0].args, vec!["-n", "file.txt"]);
+        let heredoc = result.commands[0].heredoc.as_ref().unwrap();
+        assert_eq!(heredoc.delimiter, "EOF");
+    }
+
+    #[test]
+    fn test_heredoc_needs_content() {
+        let result = parse("cat <<EOF").unwrap();
+        assert!(result.commands[0].needs_heredoc());
+    }
+
+    #[test]
+    fn test_heredoc_read_content() {
+        let mut heredoc = Heredoc::new("EOF", false);
+        let lines = vec!["line1".to_string(), "line2".to_string(), "EOF".to_string()];
+        let found = heredoc.read_content(&mut lines.into_iter());
+        assert!(found);
+        assert_eq!(heredoc.content, Some("line1\nline2".to_string()));
+    }
+
+    #[test]
+    fn test_heredoc_read_content_strip_tabs() {
+        let mut heredoc = Heredoc::new("EOF", true);
+        let lines = vec![
+            "\tindented".to_string(),
+            "\t\tmore indented".to_string(),
+            "\tEOF".to_string(),
+        ];
+        let found = heredoc.read_content(&mut lines.into_iter());
+        assert!(found);
+        assert_eq!(heredoc.content, Some("indented\nmore indented".to_string()));
+    }
+
+    #[test]
+    fn test_heredoc_with_content() {
+        let heredoc = Heredoc::new("EOF", false).with_content("hello\nworld");
+        assert_eq!(heredoc.content, Some("hello\nworld".to_string()));
+    }
+
+    // ============ Shell Functions ============
+
+    #[test]
+    fn test_parse_simple_function() {
+        let result = parse_line("hello() { echo hello }").unwrap();
+        match result {
+            ParsedLine::Function(func) => {
+                assert_eq!(func.name, "hello");
+                assert_eq!(func.body, "echo hello");
+            }
+            _ => panic!("Expected function, got {:?}", result),
+        }
+    }
+
+    #[test]
+    fn test_parse_function_with_args() {
+        let result = parse_line("greet() { echo hello $1 }").unwrap();
+        match result {
+            ParsedLine::Function(func) => {
+                assert_eq!(func.name, "greet");
+                assert_eq!(func.body, "echo hello $1");
+            }
+            _ => panic!("Expected function"),
+        }
+    }
+
+    #[test]
+    fn test_parse_function_with_pipe() {
+        let result = parse_line("count() { ls | wc -l }").unwrap();
+        match result {
+            ParsedLine::Function(func) => {
+                assert_eq!(func.name, "count");
+                assert_eq!(func.body, "ls | wc -l");
+            }
+            _ => panic!("Expected function"),
+        }
+    }
+
+    #[test]
+    fn test_parse_function_with_redirect() {
+        let result = parse_line("save() { echo data > file.txt }").unwrap();
+        match result {
+            ParsedLine::Function(func) => {
+                assert_eq!(func.name, "save");
+                assert_eq!(func.body, "echo data > file.txt");
+            }
+            _ => panic!("Expected function"),
+        }
+    }
+
+    #[test]
+    fn test_parse_function_with_logical_ops() {
+        let result = parse_line("check() { test -f file && echo exists || echo missing }").unwrap();
+        match result {
+            ParsedLine::Function(func) => {
+                assert_eq!(func.name, "check");
+                assert_eq!(func.body, "test -f file && echo exists || echo missing");
+            }
+            _ => panic!("Expected function"),
+        }
+    }
+
+    #[test]
+    fn test_parse_function_nested_braces() {
+        let result = parse_line("outer() { if true { echo nested } }").unwrap();
+        match result {
+            ParsedLine::Function(func) => {
+                assert_eq!(func.name, "outer");
+                assert!(func.body.contains("nested"));
+            }
+            _ => panic!("Expected function"),
+        }
+    }
+
+    #[test]
+    fn test_parse_function_unterminated() {
+        let result = parse_line("broken() { echo hello");
+        assert!(matches!(result, Err(ParseError::UnexpectedEnd)));
+    }
+
+    #[test]
+    fn test_parse_line_empty() {
+        let result = parse_line("").unwrap();
+        assert!(matches!(result, ParsedLine::Empty));
+    }
+
+    #[test]
+    fn test_parse_line_whitespace() {
+        let result = parse_line("   ").unwrap();
+        assert!(matches!(result, ParsedLine::Empty));
+    }
+
+    #[test]
+    fn test_parse_line_command() {
+        let result = parse_line("echo hello").unwrap();
+        match result {
+            ParsedLine::Command(cmd_list) => {
+                assert_eq!(cmd_list.first.commands[0].program, "echo");
+            }
+            _ => panic!("Expected command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_line_not_function_missing_parens() {
+        // Without `()`, `{` is not valid in a command context
+        let result = parse_line("hello { echo }");
+        // Should fail since `{` is unexpected in a regular command
+        assert!(matches!(result, Err(ParseError::UnexpectedToken(_))));
+    }
+
+    #[test]
+    fn test_parse_regular_command_not_function() {
+        // A simple word that looks like a function name but isn't
+        let result = parse_line("myfunc arg1 arg2").unwrap();
+        match result {
+            ParsedLine::Command(cmd_list) => {
+                assert_eq!(cmd_list.first.commands[0].program, "myfunc");
+                assert_eq!(cmd_list.first.commands[0].args, vec!["arg1", "arg2"]);
+            }
+            _ => panic!("Expected command"),
+        }
+    }
+
+    #[test]
+    fn test_shell_function_struct() {
+        let func = ShellFunction::new("myfunc", "echo test");
+        assert_eq!(func.name, "myfunc");
+        assert_eq!(func.body, "echo test");
+    }
+
+    // ============ Shell Arrays ============
+
+    #[test]
+    fn test_parse_array_definition() {
+        let result = parse_line("arr=(one two three)").unwrap();
+        match result {
+            ParsedLine::Array(arr) => {
+                assert_eq!(arr.name, "arr");
+                assert_eq!(arr.elements, vec!["one", "two", "three"]);
+                assert!(arr.index.is_none());
+                assert!(!arr.append);
+            }
+            _ => panic!("Expected array, got {:?}", result),
+        }
+    }
+
+    #[test]
+    fn test_parse_array_definition_empty() {
+        let result = parse_line("arr=()").unwrap();
+        match result {
+            ParsedLine::Array(arr) => {
+                assert_eq!(arr.name, "arr");
+                assert!(arr.elements.is_empty());
+            }
+            _ => panic!("Expected array"),
+        }
+    }
+
+    #[test]
+    fn test_parse_array_append() {
+        let result = parse_line("arr+=(new)").unwrap();
+        match result {
+            ParsedLine::Array(arr) => {
+                assert_eq!(arr.name, "arr");
+                assert_eq!(arr.elements, vec!["new"]);
+                assert!(arr.append);
+            }
+            _ => panic!("Expected array"),
+        }
+    }
+
+    #[test]
+    fn test_parse_array_element_assignment() {
+        let result = parse_line("arr[0]=value").unwrap();
+        match result {
+            ParsedLine::Array(arr) => {
+                assert_eq!(arr.name, "arr");
+                assert_eq!(arr.index, Some(0));
+                assert_eq!(arr.elements, vec!["value"]);
+            }
+            _ => panic!("Expected array"),
+        }
+    }
+
+    #[test]
+    fn test_parse_array_element_assignment_large_index() {
+        let result = parse_line("arr[42]=hello").unwrap();
+        match result {
+            ParsedLine::Array(arr) => {
+                assert_eq!(arr.name, "arr");
+                assert_eq!(arr.index, Some(42));
+                assert_eq!(arr.elements, vec!["hello"]);
+            }
+            _ => panic!("Expected array"),
+        }
+    }
+
+    #[test]
+    fn test_parse_array_not_regular_assignment() {
+        // FOO=bar should be a command (export-style), not an array
+        let result = parse_line("FOO=bar").unwrap();
+        assert!(matches!(result, ParsedLine::Command(_)));
+    }
+
+    #[test]
+    fn test_parse_array_definition_with_spaces() {
+        let result = parse_line("arr=( one two )").unwrap();
+        match result {
+            ParsedLine::Array(arr) => {
+                assert_eq!(arr.name, "arr");
+                assert_eq!(arr.elements, vec!["one", "two"]);
+            }
+            _ => panic!("Expected array"),
+        }
+    }
+
+    #[test]
+    fn test_array_assignment_struct() {
+        let def = ArrayAssignment::definition("arr", vec!["a".into(), "b".into()]);
+        assert_eq!(def.name, "arr");
+        assert!(!def.append);
+        assert!(def.index.is_none());
+
+        let elem = ArrayAssignment::element("arr", 5, "val");
+        assert_eq!(elem.name, "arr");
+        assert_eq!(elem.index, Some(5));
+
+        let append = ArrayAssignment::append("arr", vec!["x".into()]);
+        assert!(append.append);
+    }
+
+    // ============ Process Substitution ============
+
+    #[test]
+    fn test_process_substitution_struct() {
+        let input = ProcessSubstitution::input("ls -la");
+        assert_eq!(input.command, "ls -la");
+        assert!(input.is_input);
+
+        let output = ProcessSubstitution::output("wc -l");
+        assert_eq!(output.command, "wc -l");
+        assert!(!output.is_input);
     }
 }

@@ -343,6 +343,15 @@ pub struct Process {
     /// File mode creation mask (umask)
     /// Bits set in umask are cleared from the mode when creating files
     pub umask: u16,
+
+    /// Flag for WCONTINUED: set when process is continued via SIGCONT
+    /// Cleared when reported via waitpid with WCONTINUED
+    pub was_continued: bool,
+
+    /// Process scheduling priority (nice value)
+    /// Range: -20 (highest priority) to +19 (lowest priority), 0 is default
+    /// Like POSIX nice(2) / setpriority(2)
+    pub nice: i8,
 }
 
 /// Builder pattern for creating Process instances
@@ -375,6 +384,7 @@ pub struct ProcessBuilder {
     is_session_leader: bool,
     umask: u16,
     ctty: Option<String>,
+    nice: i8,
 }
 
 impl ProcessBuilder {
@@ -397,7 +407,17 @@ impl ProcessBuilder {
             is_session_leader: true,
             umask: 0o022,
             ctty: None,
+            nice: 0,
         }
+    }
+
+    /// Set the scheduling priority (nice value)
+    ///
+    /// Range: -20 (highest priority) to +19 (lowest priority), 0 is default.
+    /// Values outside this range will be clamped.
+    pub fn nice(mut self, nice: i8) -> Self {
+        self.nice = nice.clamp(-20, 19);
+        self
     }
 
     /// Set the parent process
@@ -533,6 +553,8 @@ impl ProcessBuilder {
             ctty: self.ctty,
             is_session_leader: self.is_session_leader,
             umask: self.umask,
+            was_continued: false,
+            nice: self.nice,
         }
     }
 }
@@ -582,6 +604,8 @@ impl Process {
             ctty: None,
             is_session_leader: true, // New processes are session leaders by default
             umask: 0o022,            // Default umask (files=644, dirs=755)
+            was_continued: false,
+            nice: 0, // Default priority
         }
     }
 
@@ -624,6 +648,8 @@ impl Process {
             ctty: None,
             is_session_leader: false,
             umask: 0o022,
+            was_continued: false,
+            nice: 0,
         }
     }
 
@@ -666,6 +692,8 @@ impl Process {
             ctty: None,
             is_session_leader: true,
             umask: 0o022,
+            was_continued: false,
+            nice: 0,
         }
     }
 
@@ -724,6 +752,8 @@ impl Process {
             ctty: Some("tty1".to_string()),
             is_session_leader: true,
             umask: 0o022,
+            was_continued: false,
+            nice: 0,
         }
     }
 
@@ -813,6 +843,8 @@ impl Process {
             ctty: self.ctty.clone(),
             is_session_leader: false, // Child is not session leader
             umask: self.umask,        // Inherit umask
+            was_continued: false,     // Child starts fresh
+            nice: self.nice,          // Inherit scheduling priority
         };
 
         (child, region_mapping)

@@ -16,25 +16,27 @@
 
 use super::devfs::DevFs;
 use super::fifo::FifoRegistry;
+use super::flock::{FileLockManager, LockError, LockType, RangeLock};
 use super::init::InitSystem;
 use super::memory::{
     MemoryError, MemoryManager, MemoryStats, Protection, RegionId, ShmId, ShmInfo,
     SystemMemoryStats,
 };
 use super::mount::MountTable;
-use super::msgqueue::MsgQueueManager;
+use super::msgqueue::{MsgQueueError, MsgQueueId, MsgQueueManager, MsgQueueStats};
 use super::object::{
     ConsoleObject, FileObject, KernelObject, ObjectTable, PipeObject, WindowId, WindowObject,
 };
 pub use super::process::{Fd, Handle, OpenFlags, Pgid, Pid, Process, ProcessState, Sid};
 use super::procfs::{ProcContext, ProcFs, SystemContext, generate_proc_content};
 use super::semaphore::SemaphoreManager;
-use super::signal::{Signal, SignalAction, SignalError, resolve_action};
+use super::signal::{SigProcMaskHow, Signal, SignalAction, SignalError, resolve_action};
 use super::sysfs::SysFs;
 use super::task::TaskId;
 use super::timer::{TimerId, TimerQueue};
 use super::trace::{TraceCategory, TraceSummary, Tracer};
 use super::tty::TtyManager;
+use super::uds::{SockAddr, SocketId, SocketResult, SocketType, UnixSocketManager};
 use super::users::{FileMode, Gid, Group, Uid, User, UserDb, check_permission};
 use crate::vfs::{
     FileHandle as VfsFileHandle, FileSystem, MemoryFs, OpenOptions as VfsOpenOptions,
@@ -139,6 +141,16 @@ pub enum SyscallNr {
     Setgroups = 309,
     Chmod = 310,
     Chown = 311,
+
+    // Message Queues (325-349)
+    Msgget = 325,
+    Msgsnd = 326,
+    Msgrcv = 327,
+    Msgctl = 328,
+
+    // File Locking (350-359)
+    Flock = 350,
+    Fcntl = 351,
 }
 
 /// Macro to generate syscall name lookup
@@ -240,6 +252,14 @@ syscall_names! {
     Setgroups => "setgroups",
     Chmod => "chmod",
     Chown => "chown",
+    // Message Queues
+    Msgget => "msgget",
+    Msgsnd => "msgsnd",
+    Msgrcv => "msgrcv",
+    Msgctl => "msgctl",
+    // File Locking
+    Flock => "flock",
+    Fcntl => "fcntl",
 }
 
 impl std::fmt::Display for SyscallNr {
@@ -448,6 +468,10 @@ pub struct IpcSubsystem {
     pub msgqueues: MsgQueueManager,
     /// Semaphore manager
     pub semaphores: SemaphoreManager,
+    /// File lock manager
+    pub file_locks: FileLockManager,
+    /// Unix domain socket manager
+    pub sockets: UnixSocketManager,
 }
 
 impl IpcSubsystem {
@@ -456,6 +480,8 @@ impl IpcSubsystem {
             fifos: FifoRegistry::new(),
             msgqueues: MsgQueueManager::new(),
             semaphores: SemaphoreManager::new(),
+            file_locks: FileLockManager::new(),
+            sockets: UnixSocketManager::new(),
         }
     }
 }
@@ -894,6 +920,193 @@ impl Kernel {
         self.proc.processes.insert(child_pid, child);
 
         Ok(child_pid)
+    }
+
+    /// execve - Replace current process image with a new program (like Linux execve(2))
+    ///
+    /// In a traditional Unix, execve replaces the entire process memory with the new
+    /// program. In our browser-based OS, we:
+    /// 1. Store the command, args, and environment for later execution
+    /// 2. Close CLOEXEC file descriptors
+    /// 3. Reset signal handlers to default
+    /// 4. Return, allowing the caller to actually run the WASM module
+    ///
+    /// This is a "prepare for exec" syscall - the actual execution happens
+    /// via the WASM runtime separately.
+    pub fn sys_execve(
+        &mut self,
+        path: &str,
+        args: Vec<String>,
+        envp: Option<HashMap<String, String>>,
+    ) -> SyscallResult<()> {
+        let current_pid = self.proc.current.ok_or(SyscallError::NoProcess)?;
+
+        // Verify the file exists and is executable
+        let resolved = self.resolve_path(current_pid, path)?;
+        let resolved_str = resolved.to_string_lossy();
+        let meta = self
+            .fs
+            .vfs
+            .metadata(&resolved_str)
+            .map_err(|_| SyscallError::NotFound)?;
+        if meta.is_dir {
+            return Err(SyscallError::IsADirectory);
+        }
+
+        // Get the process
+        let process = self
+            .proc
+            .processes
+            .get_mut(&current_pid)
+            .ok_or(SyscallError::NoProcess)?;
+
+        // Find CLOEXEC file descriptors
+        let cloexec_fds: Vec<Fd> = process
+            .files
+            .iter()
+            .filter(|(fd, _)| process.files.get_flags(*fd).is_some_and(|f| f.cloexec))
+            .map(|(fd, _)| fd)
+            .collect();
+
+        for fd in cloexec_fds {
+            if let Some(handle) = process.files.remove(fd) {
+                // Release the handle
+                if self.objects.release(handle).is_some() {
+                    // Clean up VFS handle if present
+                    if let Some(vh) = self.fs.vfs_handles.remove(&handle) {
+                        let _ = self.fs.vfs.close(vh);
+                    }
+                }
+            }
+        }
+
+        // Get mutable reference again after closing fds
+        let process = self
+            .proc
+            .processes
+            .get_mut(&current_pid)
+            .ok_or(SyscallError::NoProcess)?;
+
+        // Update process name to the executable
+        process.name = path.rsplit('/').next().unwrap_or(path).to_string();
+
+        // Update environment if provided
+        if let Some(new_env) = envp {
+            process.environ = new_env;
+        }
+
+        // Reset signal handlers to default (SIG_DFL)
+        process.signals.reset_handlers();
+
+        // Clear pending signals (except those that can't be caught)
+        process.signals.clear_pending();
+
+        // Store args in process environment for retrieval
+        // (Convention: EXEC_ARGS_N for each argument)
+        for (i, arg) in args.iter().enumerate() {
+            process
+                .environ
+                .insert(format!("_EXEC_ARG_{}", i), arg.clone());
+        }
+        process
+            .environ
+            .insert("_EXEC_ARGC".to_string(), args.len().to_string());
+        process.environ.insert(
+            "_EXEC_PATH".to_string(),
+            resolved.to_string_lossy().to_string(),
+        );
+
+        Ok(())
+    }
+
+    /// Set the async task associated with a process
+    ///
+    /// This links a process to an executor task so that when the task completes,
+    /// the process can be marked as zombie.
+    pub fn sys_set_process_task(&mut self, pid: Pid, task_id: TaskId) -> SyscallResult<()> {
+        let process = self
+            .proc
+            .processes
+            .get_mut(&pid)
+            .ok_or(SyscallError::NoProcess)?;
+        process.task = Some(task_id);
+        Ok(())
+    }
+
+    /// Get the async task associated with a process
+    pub fn sys_get_process_task(&self, pid: Pid) -> SyscallResult<Option<TaskId>> {
+        let process = self
+            .proc
+            .processes
+            .get(&pid)
+            .ok_or(SyscallError::NoProcess)?;
+        Ok(process.task)
+    }
+
+    /// Notify that a process has exited (called when async task completes)
+    ///
+    /// This marks the process as zombie and stores its exit code.
+    /// The parent can then reap it with waitpid.
+    pub fn sys_process_exit_status(&mut self, pid: Pid, exit_code: i32) -> SyscallResult<()> {
+        let process = self
+            .proc
+            .processes
+            .get_mut(&pid)
+            .ok_or(SyscallError::NoProcess)?;
+
+        // Transition to Zombie state
+        process.state = ProcessState::Zombie(exit_code);
+        process.task = None; // Task has completed
+
+        // TODO: Send SIGCHLD to parent
+        // For now, parent will discover it via waitpid
+
+        Ok(())
+    }
+
+    /// Get exec arguments from current process environment
+    ///
+    /// Returns (path, args) if the process has been exec'd.
+    pub fn sys_get_exec_info(&self) -> SyscallResult<Option<(String, Vec<String>)>> {
+        let process = self.get_current_process()?;
+
+        let path = match process.environ.get("_EXEC_PATH") {
+            Some(p) => p.clone(),
+            None => return Ok(None),
+        };
+
+        let argc: usize = match process.environ.get("_EXEC_ARGC") {
+            Some(n) => n.parse().unwrap_or(0),
+            None => return Ok(None),
+        };
+
+        let mut args = Vec::with_capacity(argc);
+        for i in 0..argc {
+            if let Some(arg) = process.environ.get(&format!("_EXEC_ARG_{}", i)) {
+                args.push(arg.clone());
+            }
+        }
+
+        Ok(Some((path, args)))
+    }
+
+    /// Clear exec info from process environment after execution
+    pub fn sys_clear_exec_info(&mut self) -> SyscallResult<()> {
+        let process = self.get_current_process_mut()?;
+
+        let argc: usize = process
+            .environ
+            .get("_EXEC_ARGC")
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(0);
+
+        process.environ.remove("_EXEC_PATH");
+        process.environ.remove("_EXEC_ARGC");
+        for i in 0..argc {
+            process.environ.remove(&format!("_EXEC_ARG_{}", i));
+        }
+
+        Ok(())
     }
 
     /// setsid - Create a new session (like Linux setsid(2))
@@ -1414,10 +1627,17 @@ impl Kernel {
 
         // Look for a child that has changed state
         for child_pid in children {
-            if let Some(child) = self.proc.processes.get(&child_pid) {
-                match &child.state {
+            // First check state without mutable borrow
+            let state_info = self
+                .proc
+                .processes
+                .get(&child_pid)
+                .map(|child| (child.state.clone(), child.was_continued));
+
+            if let Some((state, was_continued)) = state_info {
+                match state {
                     ProcessState::Zombie(exit_code) => {
-                        let status = WaitStatus::Exited(*exit_code);
+                        let status = WaitStatus::Exited(exit_code);
                         // Reap the zombie
                         self.proc.processes.remove(&child_pid);
                         // Remove from parent's children list
@@ -1429,9 +1649,12 @@ impl Kernel {
                     ProcessState::Stopped if flags.untraced => {
                         return Ok((child_pid, WaitStatus::Stopped));
                     }
-                    ProcessState::Running if flags.continued => {
-                        // Check if it was recently continued
-                        // (In a full implementation, we'd track this separately)
+                    ProcessState::Running if flags.continued && was_continued => {
+                        // Child was recently continued - clear flag and report
+                        if let Some(child) = self.proc.processes.get_mut(&child_pid) {
+                            child.was_continued = false;
+                        }
+                        return Ok((child_pid, WaitStatus::Continued));
                     }
                     _ => {}
                 }
@@ -2574,6 +2797,112 @@ impl Kernel {
         Ok(process.signals.has_pending())
     }
 
+    /// Get pending signals as a bitmask
+    pub fn sys_sigpending_mask(&self) -> SyscallResult<u16> {
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .proc
+            .processes
+            .get(&current)
+            .ok_or(SyscallError::NoProcess)?;
+        Ok(process.signals.get_pending_mask())
+    }
+
+    /// sigprocmask - examine and change blocked signals
+    ///
+    /// # Arguments
+    /// * `how` - How to modify the mask (Block, Unblock, SetMask)
+    /// * `mask` - Bitmask of signals (bit N = signal N)
+    ///
+    /// # Returns
+    /// The old signal mask before modification
+    pub fn sys_sigprocmask(&mut self, how: SigProcMaskHow, mask: u16) -> SyscallResult<u16> {
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .proc
+            .processes
+            .get_mut(&current)
+            .ok_or(SyscallError::NoProcess)?;
+        Ok(process.signals.sigprocmask(how, mask))
+    }
+
+    /// Get current signal mask
+    pub fn sys_siggetmask(&self) -> SyscallResult<u16> {
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .proc
+            .processes
+            .get(&current)
+            .ok_or(SyscallError::NoProcess)?;
+        Ok(process.signals.get_blocked_mask())
+    }
+
+    // ========== Process Priority ==========
+
+    /// nice - adjust process scheduling priority
+    ///
+    /// Adds the increment to the current nice value (clamped to -20..19).
+    /// Returns the new nice value.
+    ///
+    /// Note: In real POSIX, only root can decrease nice (increase priority).
+    /// We allow any user to adjust priority for simplicity.
+    pub fn sys_nice(&mut self, increment: i8) -> SyscallResult<i8> {
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .proc
+            .processes
+            .get_mut(&current)
+            .ok_or(SyscallError::NoProcess)?;
+
+        let new_nice = (process.nice as i16 + increment as i16).clamp(-20, 19) as i8;
+        process.nice = new_nice;
+        Ok(new_nice)
+    }
+
+    /// getpriority - get process scheduling priority
+    ///
+    /// Returns the nice value for the specified process.
+    /// Use pid=0 for current process.
+    pub fn sys_getpriority(&self, pid: Pid) -> SyscallResult<i8> {
+        let target_pid = if pid.0 == 0 {
+            self.proc.current.ok_or(SyscallError::NoProcess)?
+        } else {
+            pid
+        };
+
+        let process = self
+            .proc
+            .processes
+            .get(&target_pid)
+            .ok_or(SyscallError::NoProcess)?;
+
+        Ok(process.nice)
+    }
+
+    /// setpriority - set process scheduling priority
+    ///
+    /// Sets the nice value for the specified process.
+    /// Use pid=0 for current process.
+    ///
+    /// Note: In real POSIX, only root can decrease nice (increase priority).
+    /// We allow any user to adjust priority for simplicity.
+    pub fn sys_setpriority(&mut self, pid: Pid, priority: i8) -> SyscallResult<()> {
+        let target_pid = if pid.0 == 0 {
+            self.proc.current.ok_or(SyscallError::NoProcess)?
+        } else {
+            pid
+        };
+
+        let process = self
+            .proc
+            .processes
+            .get_mut(&target_pid)
+            .ok_or(SyscallError::NoProcess)?;
+
+        process.nice = priority.clamp(-20, 19);
+        Ok(())
+    }
+
     /// Process pending signals for a process, returns action to take
     pub fn process_signals(&mut self, pid: Pid) -> Option<(Signal, SignalAction)> {
         let process = self.proc.processes.get_mut(&pid)?;
@@ -2596,6 +2925,7 @@ impl Kernel {
             SignalAction::Continue => {
                 if process.state == ProcessState::Stopped {
                     process.state = ProcessState::Running;
+                    process.was_continued = true; // Set flag for WCONTINUED
                 }
                 process.signals.cont();
             }
@@ -2608,6 +2938,446 @@ impl Kernel {
         }
 
         Some((signal, action))
+    }
+
+    // ========== MESSAGE QUEUE SYSCALLS ==========
+
+    /// msgget - get or create a message queue
+    ///
+    /// # Arguments
+    /// * `key` - Queue key. Negative = create private queue, non-negative = get/create by key
+    /// * `create` - If true, create queue if it doesn't exist
+    ///
+    /// # Returns
+    /// Queue ID on success
+    pub fn sys_msgget(&mut self, key: i32, create: bool) -> SyscallResult<u32> {
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .proc
+            .processes
+            .get(&current)
+            .ok_or(SyscallError::NoProcess)?;
+
+        let uid = process.euid.0;
+        let gid = process.egid.0;
+
+        let id = self
+            .ipc
+            .msgqueues
+            .msgget(key, uid, gid, create)
+            .map_err(|e| match e {
+                MsgQueueError::NotFound => SyscallError::NotFound,
+                MsgQueueError::AlreadyExists => SyscallError::AlreadyExists,
+                _ => SyscallError::Io("message queue error".into()),
+            })?;
+
+        Ok(id.0)
+    }
+
+    /// msgsnd - send a message to a queue
+    ///
+    /// # Arguments
+    /// * `queue_id` - Queue identifier
+    /// * `mtype` - Message type (must be > 0)
+    /// * `data` - Message data
+    ///
+    /// # Returns
+    /// () on success
+    pub fn sys_msgsnd(&mut self, queue_id: u32, mtype: i64, data: Vec<u8>) -> SyscallResult<()> {
+        use super::msgqueue::Message;
+
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .proc
+            .processes
+            .get(&current)
+            .ok_or(SyscallError::NoProcess)?;
+
+        // Check write permission
+        let queue = self
+            .ipc
+            .msgqueues
+            .get(MsgQueueId(queue_id))
+            .ok_or(SyscallError::NotFound)?;
+
+        if process.euid.0 != 0 && process.euid.0 != queue.uid {
+            // Check mode for write permission
+            let can_write = if process.euid.0 == queue.uid {
+                queue.mode & 0o200 != 0
+            } else if process.egid.0 == queue.gid {
+                queue.mode & 0o020 != 0
+            } else {
+                queue.mode & 0o002 != 0
+            };
+            if !can_write {
+                return Err(SyscallError::PermissionDenied);
+            }
+        }
+
+        let now = self.time.now;
+        let msg = Message::new(mtype, data);
+
+        self.ipc
+            .msgqueues
+            .msgsnd(MsgQueueId(queue_id), msg, now)
+            .map_err(|e| match e {
+                MsgQueueError::InvalidType => SyscallError::InvalidArgument,
+                MsgQueueError::QueueFull => SyscallError::WouldBlock,
+                MsgQueueError::NotFound => SyscallError::NotFound,
+                _ => SyscallError::Io("message queue error".into()),
+            })
+    }
+
+    /// msgrcv - receive a message from a queue
+    ///
+    /// # Arguments
+    /// * `queue_id` - Queue identifier
+    /// * `mtype` - Message type selector:
+    ///   - 0: receive first message
+    ///   - >0: receive first message with matching type
+    ///   - <0: receive first message with type <= |mtype|
+    ///
+    /// # Returns
+    /// (mtype, data) on success
+    pub fn sys_msgrcv(&mut self, queue_id: u32, mtype: i64) -> SyscallResult<(i64, Vec<u8>)> {
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .proc
+            .processes
+            .get(&current)
+            .ok_or(SyscallError::NoProcess)?;
+
+        // Check read permission
+        let queue = self
+            .ipc
+            .msgqueues
+            .get(MsgQueueId(queue_id))
+            .ok_or(SyscallError::NotFound)?;
+
+        if process.euid.0 != 0 && process.euid.0 != queue.uid {
+            // Check mode for read permission
+            let can_read = if process.euid.0 == queue.uid {
+                queue.mode & 0o400 != 0
+            } else if process.egid.0 == queue.gid {
+                queue.mode & 0o040 != 0
+            } else {
+                queue.mode & 0o004 != 0
+            };
+            if !can_read {
+                return Err(SyscallError::PermissionDenied);
+            }
+        }
+
+        let now = self.time.now;
+
+        let msg = self
+            .ipc
+            .msgqueues
+            .msgrcv(MsgQueueId(queue_id), mtype, now)
+            .map_err(|e| match e {
+                MsgQueueError::NoMessage => SyscallError::WouldBlock,
+                MsgQueueError::NotFound => SyscallError::NotFound,
+                _ => SyscallError::Io("message queue error".into()),
+            })?;
+
+        Ok((msg.mtype, msg.data))
+    }
+
+    /// msgctl - message queue control operations
+    ///
+    /// # Arguments
+    /// * `queue_id` - Queue identifier
+    /// * `cmd` - Command:
+    ///   - 0 (IPC_RMID): Remove queue
+    ///   - 1 (IPC_STAT): Get queue stats (returns via separate method)
+    ///   - 2 (IPC_SET): Set queue attributes
+    /// * `uid`, `gid`, `mode`, `max_bytes` - Values for IPC_SET
+    ///
+    /// # Returns
+    /// () on success, stats for IPC_STAT
+    pub fn sys_msgctl_rmid(&mut self, queue_id: u32) -> SyscallResult<()> {
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .proc
+            .processes
+            .get(&current)
+            .ok_or(SyscallError::NoProcess)?;
+
+        // Check owner or root
+        let queue = self
+            .ipc
+            .msgqueues
+            .get(MsgQueueId(queue_id))
+            .ok_or(SyscallError::NotFound)?;
+
+        if process.euid.0 != 0 && process.euid.0 != queue.uid {
+            return Err(SyscallError::PermissionDenied);
+        }
+
+        self.ipc
+            .msgqueues
+            .msgctl_rmid(MsgQueueId(queue_id))
+            .map_err(|_| SyscallError::NotFound)
+    }
+
+    /// msgctl IPC_STAT - get queue statistics
+    pub fn sys_msgctl_stat(&self, queue_id: u32) -> SyscallResult<MsgQueueStats> {
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .proc
+            .processes
+            .get(&current)
+            .ok_or(SyscallError::NoProcess)?;
+
+        // Check read permission
+        let queue = self
+            .ipc
+            .msgqueues
+            .get(MsgQueueId(queue_id))
+            .ok_or(SyscallError::NotFound)?;
+
+        if process.euid.0 != 0 && process.euid.0 != queue.uid {
+            let can_read = if process.euid.0 == queue.uid {
+                queue.mode & 0o400 != 0
+            } else if process.egid.0 == queue.gid {
+                queue.mode & 0o040 != 0
+            } else {
+                queue.mode & 0o004 != 0
+            };
+            if !can_read {
+                return Err(SyscallError::PermissionDenied);
+            }
+        }
+
+        self.ipc
+            .msgqueues
+            .msgctl_stat(MsgQueueId(queue_id))
+            .map_err(|_| SyscallError::NotFound)
+    }
+
+    /// msgctl IPC_SET - set queue attributes
+    pub fn sys_msgctl_set(
+        &mut self,
+        queue_id: u32,
+        uid: Option<u32>,
+        gid: Option<u32>,
+        mode: Option<u16>,
+        max_bytes: Option<usize>,
+    ) -> SyscallResult<()> {
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .proc
+            .processes
+            .get(&current)
+            .ok_or(SyscallError::NoProcess)?;
+
+        // Check owner or root
+        let queue = self
+            .ipc
+            .msgqueues
+            .get(MsgQueueId(queue_id))
+            .ok_or(SyscallError::NotFound)?;
+
+        if process.euid.0 != 0 && process.euid.0 != queue.uid {
+            return Err(SyscallError::PermissionDenied);
+        }
+
+        // Non-root can only set uid/gid to themselves
+        if process.euid.0 != 0
+            && let Some(u) = uid
+            && u != process.euid.0
+            && u != queue.uid
+        {
+            return Err(SyscallError::PermissionDenied);
+        }
+
+        self.ipc
+            .msgqueues
+            .msgctl_set(MsgQueueId(queue_id), uid, gid, mode, max_bytes)
+            .map_err(|_| SyscallError::NotFound)
+    }
+
+    // ========== FILE LOCKING SYSCALLS ==========
+
+    /// flock - apply or remove an advisory lock on an open file
+    ///
+    /// # Arguments
+    /// * `fd` - File descriptor to lock
+    /// * `operation` - Lock operation:
+    ///   - 0 (LOCK_UN): Unlock
+    ///   - 1 (LOCK_SH): Shared lock
+    ///   - 2 (LOCK_EX): Exclusive lock
+    ///   - Add 4 (LOCK_NB) for non-blocking
+    ///
+    /// # Returns
+    /// () on success
+    pub fn sys_flock(&mut self, fd: Fd, operation: i32) -> SyscallResult<()> {
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .proc
+            .processes
+            .get(&current)
+            .ok_or(SyscallError::NoProcess)?;
+
+        // Get the file path from the fd
+        let path = {
+            let file = process
+                .files
+                .get(fd)
+                .and_then(|h| self.objects.get(h))
+                .ok_or(SyscallError::BadFd)?;
+
+            match file {
+                KernelObject::File(f) => f.path.to_string_lossy().to_string(),
+                _ => return Err(SyscallError::BadFd),
+            }
+        };
+
+        // Parse operation
+        let blocking = operation & 4 == 0; // LOCK_NB = 4
+        let lock_type = match operation & 3 {
+            0 => LockType::Unlock,
+            1 => LockType::Shared,
+            2 => LockType::Exclusive,
+            _ => return Err(SyscallError::InvalidArgument),
+        };
+
+        self.ipc
+            .file_locks
+            .flock(&path, current, lock_type, blocking)
+            .map_err(|e| match e {
+                LockError::WouldBlock => SyscallError::WouldBlock,
+                LockError::InvalidArgument => SyscallError::InvalidArgument,
+                LockError::Deadlock => SyscallError::WouldBlock, // Treat as WouldBlock
+            })
+    }
+
+    /// fcntl F_SETLK/F_SETLKW - set a byte-range lock
+    ///
+    /// # Arguments
+    /// * `fd` - File descriptor
+    /// * `lock_type` - 0=unlock, 1=read lock, 2=write lock
+    /// * `start` - Starting offset
+    /// * `len` - Length (0 = to end of file)
+    /// * `whence` - How to interpret start (0=SET, 1=CUR, 2=END)
+    /// * `blocking` - Wait for lock if blocked
+    ///
+    /// # Returns
+    /// () on success
+    pub fn sys_fcntl_lock(
+        &mut self,
+        fd: Fd,
+        lock_type: i32,
+        start: u64,
+        len: u64,
+        whence: i32,
+        blocking: bool,
+    ) -> SyscallResult<()> {
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .proc
+            .processes
+            .get(&current)
+            .ok_or(SyscallError::NoProcess)?;
+
+        // Get the file path from the fd
+        let path = {
+            let file = process
+                .files
+                .get(fd)
+                .and_then(|h| self.objects.get(h))
+                .ok_or(SyscallError::BadFd)?;
+
+            match file {
+                KernelObject::File(f) => f.path.to_string_lossy().to_string(),
+                _ => return Err(SyscallError::BadFd),
+            }
+        };
+
+        let lt = match lock_type {
+            0 => LockType::Unlock,
+            1 => LockType::Shared,
+            2 => LockType::Exclusive,
+            _ => return Err(SyscallError::InvalidArgument),
+        };
+
+        let lock = RangeLock {
+            pid: current,
+            lock_type: lt,
+            start,
+            len,
+            whence,
+        };
+
+        self.ipc
+            .file_locks
+            .fcntl_lock(&path, current, lock, blocking)
+            .map_err(|e| match e {
+                LockError::WouldBlock => SyscallError::WouldBlock,
+                LockError::InvalidArgument => SyscallError::InvalidArgument,
+                LockError::Deadlock => SyscallError::WouldBlock,
+            })
+    }
+
+    /// fcntl F_GETLK - test if a lock can be placed
+    ///
+    /// Returns information about a conflicting lock, or the input lock
+    /// with type set to UNLOCK if no conflict.
+    pub fn sys_fcntl_getlk(
+        &self,
+        fd: Fd,
+        lock_type: i32,
+        start: u64,
+        len: u64,
+        whence: i32,
+    ) -> SyscallResult<(i32, Pid, u64, u64)> {
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .proc
+            .processes
+            .get(&current)
+            .ok_or(SyscallError::NoProcess)?;
+
+        // Get the file path from the fd
+        let path = {
+            let file = process
+                .files
+                .get(fd)
+                .and_then(|h| self.objects.get(h))
+                .ok_or(SyscallError::BadFd)?;
+
+            match file {
+                KernelObject::File(f) => f.path.to_string_lossy().to_string(),
+                _ => return Err(SyscallError::BadFd),
+            }
+        };
+
+        let lt = match lock_type {
+            0 => LockType::Unlock,
+            1 => LockType::Shared,
+            2 => LockType::Exclusive,
+            _ => return Err(SyscallError::InvalidArgument),
+        };
+
+        let lock = RangeLock {
+            pid: current,
+            lock_type: lt,
+            start,
+            len,
+            whence,
+        };
+
+        match self.ipc.file_locks.get_lock(&path, current, &lock) {
+            Some(conflict) => {
+                let ctype = match conflict.lock_type {
+                    LockType::Unlock => 0,
+                    LockType::Shared => 1,
+                    LockType::Exclusive => 2,
+                };
+                Ok((ctype, conflict.pid, conflict.start, conflict.len))
+            }
+            None => Ok((0, Pid(0), 0, 0)), // No conflict, return UNLOCK
+        }
     }
 
     /// Get process state
@@ -2905,6 +3675,82 @@ impl Kernel {
 
         self.fs.vfs.chown(path, uid, gid)?;
         Ok(())
+    }
+
+    // ========== SOCKET SYSCALLS ==========
+
+    /// Create a Unix domain socket
+    pub fn sys_socket(&mut self, socket_type: SocketType) -> SocketId {
+        self.ipc.sockets.socket(socket_type)
+    }
+
+    /// Close a socket
+    pub fn sys_socket_close(&mut self, id: SocketId) -> SocketResult<()> {
+        self.ipc.sockets.close(id)
+    }
+
+    /// Bind a socket to an address
+    pub fn sys_bind(&mut self, id: SocketId, addr: SockAddr) -> SocketResult<()> {
+        self.ipc.sockets.bind(id, addr)
+    }
+
+    /// Listen for connections on a socket
+    pub fn sys_listen(&mut self, id: SocketId, backlog: usize) -> SocketResult<()> {
+        self.ipc.sockets.listen(id, backlog)
+    }
+
+    /// Accept a connection on a socket
+    pub fn sys_accept(&mut self, id: SocketId) -> SocketResult<(SocketId, SockAddr)> {
+        self.ipc.sockets.accept(id)
+    }
+
+    /// Connect a socket to an address
+    pub fn sys_connect(&mut self, id: SocketId, addr: &SockAddr) -> SocketResult<()> {
+        self.ipc.sockets.connect(id, addr)
+    }
+
+    /// Send data on a connected socket
+    pub fn sys_send(&mut self, id: SocketId, data: &[u8]) -> SocketResult<usize> {
+        self.ipc.sockets.send(id, data)
+    }
+
+    /// Receive data from a connected socket
+    pub fn sys_recv(&mut self, id: SocketId) -> SocketResult<Vec<u8>> {
+        self.ipc.sockets.recv(id)
+    }
+
+    /// Send datagram to an address
+    pub fn sys_sendto(
+        &mut self,
+        id: SocketId,
+        data: &[u8],
+        addr: &SockAddr,
+    ) -> SocketResult<usize> {
+        self.ipc.sockets.sendto(id, data, addr)
+    }
+
+    /// Receive datagram
+    pub fn sys_recvfrom(&mut self, id: SocketId) -> SocketResult<(Vec<u8>, Option<SockAddr>)> {
+        self.ipc.sockets.recvfrom(id)
+    }
+
+    /// Set socket to non-blocking mode
+    pub fn sys_socket_set_nonblocking(
+        &mut self,
+        id: SocketId,
+        nonblocking: bool,
+    ) -> SocketResult<()> {
+        self.ipc.sockets.set_nonblocking(id, nonblocking)
+    }
+
+    /// Get socket local address
+    pub fn sys_getsockname(&self, id: SocketId) -> SocketResult<Option<SockAddr>> {
+        self.ipc.sockets.local_addr(id)
+    }
+
+    /// Get socket peer address
+    pub fn sys_getpeername(&self, id: SocketId) -> SocketResult<Option<SockAddr>> {
+        self.ipc.sockets.peer_addr(id)
     }
 }
 
@@ -3364,6 +4210,52 @@ pub fn sigpending() -> SyscallResult<bool> {
     KERNEL.with(|k| k.borrow().sys_sigpending())
 }
 
+/// Get pending signals as a bitmask
+pub fn sigpending_mask() -> SyscallResult<u16> {
+    KERNEL.with(|k| k.borrow().sys_sigpending_mask())
+}
+
+/// Examine and change blocked signals (sigprocmask)
+///
+/// # Arguments
+/// * `how` - How to modify the mask (Block, Unblock, SetMask)
+/// * `mask` - Bitmask of signals (bit N = signal N)
+///
+/// # Returns
+/// The old signal mask before modification
+pub fn sigprocmask(how: SigProcMaskHow, mask: u16) -> SyscallResult<u16> {
+    KERNEL.with(|k| k.borrow_mut().sys_sigprocmask(how, mask))
+}
+
+/// Get current signal mask
+pub fn siggetmask() -> SyscallResult<u16> {
+    KERNEL.with(|k| k.borrow().sys_siggetmask())
+}
+
+/// Adjust process scheduling priority (nice)
+///
+/// Adds the increment to the current nice value and returns the new value.
+/// The result is clamped to the range -20 to +19.
+pub fn nice(increment: i8) -> SyscallResult<i8> {
+    KERNEL.with(|k| k.borrow_mut().sys_nice(increment))
+}
+
+/// Get process scheduling priority
+///
+/// Returns the nice value for the specified process.
+/// Use pid=0 for current process.
+pub fn getpriority(pid: Pid) -> SyscallResult<i8> {
+    KERNEL.with(|k| k.borrow().sys_getpriority(pid))
+}
+
+/// Set process scheduling priority
+///
+/// Sets the nice value for the specified process.
+/// Use pid=0 for current process.
+pub fn setpriority(pid: Pid, priority: i8) -> SyscallResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_setpriority(pid, priority))
+}
+
 /// Process signals for a process (call from runtime)
 pub fn process_signals(pid: Pid) -> Option<(Signal, SignalAction)> {
     KERNEL.with(|k| k.borrow_mut().process_signals(pid))
@@ -3545,6 +4437,178 @@ pub fn chmod(path: &str, mode: u16) -> SyscallResult<()> {
 /// Change file ownership
 pub fn chown(path: &str, uid: Option<u32>, gid: Option<u32>) -> SyscallResult<()> {
     KERNEL.with(|k| k.borrow_mut().sys_chown(path, uid, gid))
+}
+
+// ========== EXEC FAMILY ==========
+
+/// execve - Replace current process image with a new program
+///
+/// Prepares the current process to execute a new program:
+/// - Closes CLOEXEC file descriptors
+/// - Resets signal handlers to default
+/// - Stores the command path and arguments for the WASM loader
+///
+/// The actual execution of the WASM module happens separately through the runtime.
+pub fn execve(
+    path: &str,
+    args: &[String],
+    envp: Option<HashMap<String, String>>,
+) -> SyscallResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_execve(path, args.to_vec(), envp))
+}
+
+/// execv - Execute a program with argument vector (uses current environment)
+pub fn execv(path: &str, args: &[String]) -> SyscallResult<()> {
+    execve(path, args, None)
+}
+
+/// execl - Execute a program with argument list (uses current environment)
+pub fn execl(path: &str, arg0: &str, args: &[&str]) -> SyscallResult<()> {
+    let mut argv: Vec<String> = vec![arg0.to_string()];
+    argv.extend(args.iter().map(|s| s.to_string()));
+    execve(path, &argv, None)
+}
+
+/// execlp - Execute a program by name (searches PATH)
+pub fn execlp(name: &str, arg0: &str, args: &[&str]) -> SyscallResult<()> {
+    // Search PATH for the command
+    let path = search_path(name).ok_or(SyscallError::NotFound)?;
+    execl(&path, arg0, args)
+}
+
+/// execvp - Execute a program by name (searches PATH)
+pub fn execvp(name: &str, args: &[String]) -> SyscallResult<()> {
+    // Search PATH for the command
+    let path = search_path(name).ok_or(SyscallError::NotFound)?;
+    execve(&path, args, None)
+}
+
+/// Search PATH environment variable for a command
+fn search_path(name: &str) -> Option<String> {
+    // If it's an absolute or relative path, use it directly
+    if name.contains('/') {
+        if exists(name).unwrap_or(false) {
+            return Some(name.to_string());
+        }
+        return None;
+    }
+
+    // Get PATH from current process environment
+    let path_env = KERNEL.with(|k| {
+        k.borrow()
+            .current_process()
+            .and_then(|p| p.environ.get("PATH").cloned())
+    });
+
+    let path_env = path_env.unwrap_or_else(|| "/bin:/usr/bin".to_string());
+
+    // Search each directory in PATH
+    for dir in path_env.split(':') {
+        let full_path = format!("{}/{}", dir, name);
+        if exists(&full_path).unwrap_or(false) {
+            return Some(full_path);
+        }
+    }
+
+    None
+}
+
+/// Set the async task associated with a process
+///
+/// Links a process to an executor task for lifecycle management.
+pub fn set_process_task(pid: Pid, task_id: TaskId) -> SyscallResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_set_process_task(pid, task_id))
+}
+
+/// Get the async task associated with a process
+pub fn get_process_task(pid: Pid) -> SyscallResult<Option<TaskId>> {
+    KERNEL.with(|k| k.borrow().sys_get_process_task(pid))
+}
+
+/// Notify that a process has exited (for async task completion)
+///
+/// Marks the process as zombie with the given exit code.
+pub fn process_exit_status(pid: Pid, exit_code: i32) -> SyscallResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_process_exit_status(pid, exit_code))
+}
+
+/// Get exec information for current process
+///
+/// Returns (path, args) if the process has been exec'd.
+pub fn get_exec_info() -> SyscallResult<Option<(String, Vec<String>)>> {
+    KERNEL.with(|k| k.borrow().sys_get_exec_info())
+}
+
+/// Clear exec info from current process (after execution starts)
+pub fn clear_exec_info() -> SyscallResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_clear_exec_info())
+}
+
+// ========== SOCKET API ==========
+
+/// Create a Unix domain socket
+pub fn socket(socket_type: SocketType) -> SocketId {
+    KERNEL.with(|k| k.borrow_mut().sys_socket(socket_type))
+}
+
+/// Close a Unix domain socket
+pub fn socket_close(id: SocketId) -> SocketResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_socket_close(id))
+}
+
+/// Bind a socket to a path
+pub fn bind(id: SocketId, path: &str) -> SocketResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_bind(id, SockAddr::new(path)))
+}
+
+/// Listen for connections on a socket
+pub fn listen(id: SocketId, backlog: usize) -> SocketResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_listen(id, backlog))
+}
+
+/// Accept a connection on a socket
+pub fn accept(id: SocketId) -> SocketResult<(SocketId, SockAddr)> {
+    KERNEL.with(|k| k.borrow_mut().sys_accept(id))
+}
+
+/// Connect to a Unix domain socket
+pub fn connect(id: SocketId, path: &str) -> SocketResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_connect(id, &SockAddr::new(path)))
+}
+
+/// Send data on a connected socket
+pub fn send(id: SocketId, data: &[u8]) -> SocketResult<usize> {
+    KERNEL.with(|k| k.borrow_mut().sys_send(id, data))
+}
+
+/// Receive data from a connected socket
+pub fn recv(id: SocketId) -> SocketResult<Vec<u8>> {
+    KERNEL.with(|k| k.borrow_mut().sys_recv(id))
+}
+
+/// Send datagram to address
+pub fn sendto(id: SocketId, data: &[u8], path: &str) -> SocketResult<usize> {
+    KERNEL.with(|k| k.borrow_mut().sys_sendto(id, data, &SockAddr::new(path)))
+}
+
+/// Receive datagram with sender address
+pub fn recvfrom(id: SocketId) -> SocketResult<(Vec<u8>, Option<SockAddr>)> {
+    KERNEL.with(|k| k.borrow_mut().sys_recvfrom(id))
+}
+
+/// Set socket non-blocking mode
+pub fn socket_set_nonblocking(id: SocketId, nonblocking: bool) -> SocketResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_socket_set_nonblocking(id, nonblocking))
+}
+
+/// Get socket local address
+pub fn getsockname(id: SocketId) -> SocketResult<Option<SockAddr>> {
+    KERNEL.with(|k| k.borrow().sys_getsockname(id))
+}
+
+/// Get socket peer address
+pub fn getpeername(id: SocketId) -> SocketResult<Option<SockAddr>> {
+    KERNEL.with(|k| k.borrow().sys_getpeername(id))
 }
 
 // ========== PERSISTENCE API ==========
@@ -4482,5 +5546,270 @@ mod tests {
         // Check not all zeros
         let non_zero = buf.iter().filter(|&&b| b != 0).count();
         assert!(non_zero > 10, "urandom should provide actual random bytes");
+    }
+
+    // ========== EXEC FAMILY TESTS ==========
+
+    #[test]
+    fn test_execve_stores_exec_info() {
+        setup_test_kernel();
+
+        // Create test executable in /tmp
+        let fd = open("/tmp/test_cmd", OpenFlags::WRITE).unwrap();
+        write(fd, b"fake wasm").unwrap();
+        close(fd).unwrap();
+
+        // Call execve
+        let args = vec!["arg1".to_string(), "arg2".to_string()];
+        execve("/tmp/test_cmd", &args, None).unwrap();
+
+        // Check exec info was stored
+        let exec_info = get_exec_info().unwrap();
+        assert!(exec_info.is_some());
+        let (path, stored_args) = exec_info.unwrap();
+        assert_eq!(path, "/tmp/test_cmd");
+        assert_eq!(stored_args, args);
+    }
+
+    #[test]
+    fn test_execve_closes_cloexec_fds() {
+        setup_test_kernel();
+
+        // Create test executable in /tmp
+        let fd = open("/tmp/test_cmd2", OpenFlags::WRITE).unwrap();
+        write(fd, b"fake wasm").unwrap();
+        close(fd).unwrap();
+
+        // Open a file and set CLOEXEC
+        let fd1 = open("/tmp/cloexec_test.txt", OpenFlags::WRITE).unwrap();
+        write(fd1, b"test").unwrap();
+
+        // Set CLOEXEC flag on this fd
+        KERNEL.with(|k| {
+            let mut kernel = k.borrow_mut();
+            if let Ok(proc) = kernel.get_current_process_mut() {
+                proc.files
+                    .set_flags(fd1, crate::kernel::process::FdFlags { cloexec: true });
+            }
+        });
+
+        // Open another file without CLOEXEC
+        let fd2 = open("/tmp/no_cloexec.txt", OpenFlags::WRITE).unwrap();
+        write(fd2, b"test").unwrap();
+
+        // Call execve
+        let args = vec!["test".to_string()];
+        execve("/tmp/test_cmd2", &args, None).unwrap();
+
+        // fd1 should be closed (write should fail)
+        assert!(write(fd1, b"more").is_err());
+
+        // fd2 should still be open
+        assert!(write(fd2, b"more").is_ok());
+        close(fd2).unwrap();
+    }
+
+    #[test]
+    fn test_execve_updates_process_name() {
+        setup_test_kernel();
+
+        // Create test executable in /tmp
+        let fd = open("/tmp/myprogram", OpenFlags::WRITE).unwrap();
+        write(fd, b"fake wasm").unwrap();
+        close(fd).unwrap();
+
+        // Call execve
+        let args = vec![];
+        execve("/tmp/myprogram", &args, None).unwrap();
+
+        // Process name should be updated
+        let new_name = KERNEL.with(|k| k.borrow().current_process().map(|p| p.name.clone()));
+        assert_eq!(new_name, Some("myprogram".to_string()));
+    }
+
+    #[test]
+    fn test_execve_with_environment() {
+        setup_test_kernel();
+
+        // Create test executable in /tmp
+        let fd = open("/tmp/envtest", OpenFlags::WRITE).unwrap();
+        write(fd, b"fake wasm").unwrap();
+        close(fd).unwrap();
+
+        // Create custom environment
+        let mut new_env = HashMap::new();
+        new_env.insert("MY_VAR".to_string(), "my_value".to_string());
+        new_env.insert("PATH".to_string(), "/tmp:/bin".to_string());
+
+        // Call execve with new environment
+        let args = vec![];
+        execve("/tmp/envtest", &args, Some(new_env)).unwrap();
+
+        // Environment should be updated
+        let my_var = KERNEL.with(|k| {
+            k.borrow()
+                .current_process()
+                .and_then(|p| p.environ.get("MY_VAR").cloned())
+        });
+        assert_eq!(my_var, Some("my_value".to_string()));
+    }
+
+    #[test]
+    fn test_execve_not_found() {
+        setup_test_kernel();
+
+        // Try to exec a non-existent file
+        let result = execve("/nonexistent/program", &[], None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_execve_directory() {
+        setup_test_kernel();
+
+        // Try to exec a directory
+        let result = execve("/tmp", &[], None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_clear_exec_info() {
+        setup_test_kernel();
+
+        // Create test executable in /tmp
+        let fd = open("/tmp/cleartest", OpenFlags::WRITE).unwrap();
+        write(fd, b"fake wasm").unwrap();
+        close(fd).unwrap();
+
+        // Call execve
+        let args = vec!["a".to_string(), "b".to_string()];
+        execve("/tmp/cleartest", &args, None).unwrap();
+
+        // Exec info should exist
+        assert!(get_exec_info().unwrap().is_some());
+
+        // Clear it
+        clear_exec_info().unwrap();
+
+        // Now it should be None
+        assert!(get_exec_info().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_search_path_finds_command() {
+        setup_test_kernel();
+
+        // Create test executable in /tmp
+        let fd = open("/tmp/myutil", OpenFlags::WRITE).unwrap();
+        write(fd, b"fake wasm").unwrap();
+        close(fd).unwrap();
+
+        // Set PATH to include /tmp
+        setenv("PATH", "/tmp:/usr/bin").unwrap();
+
+        // execvp should find it
+        let result = execvp("myutil", &["arg".to_string()]);
+        assert!(result.is_ok());
+
+        // Verify it was found
+        let exec_info = get_exec_info().unwrap();
+        assert!(exec_info.is_some());
+        let (path, _) = exec_info.unwrap();
+        assert_eq!(path, "/tmp/myutil");
+    }
+
+    #[test]
+    fn test_process_task_association() {
+        setup_test_kernel();
+
+        let pid = getpid().unwrap();
+        let task_id = TaskId(42);
+
+        // Set task
+        set_process_task(pid, task_id).unwrap();
+
+        // Get task
+        let retrieved = get_process_task(pid).unwrap();
+        assert_eq!(retrieved, Some(task_id));
+    }
+
+    #[test]
+    fn test_process_exit_status() {
+        setup_test_kernel();
+
+        // Fork to create a child
+        let child_pid = fork().unwrap();
+
+        // Mark child as exited with status 42
+        process_exit_status(child_pid, 42).unwrap();
+
+        // Child should be zombie with exit code 42
+        let state = KERNEL.with(|k| k.borrow().get_process(child_pid).map(|p| p.state.clone()));
+        assert_eq!(state, Some(ProcessState::Zombie(42)));
+    }
+
+    #[test]
+    fn test_socket_stream() {
+        setup_test_kernel();
+
+        // Create and bind server socket
+        let server = socket(SocketType::Stream);
+        assert!(bind(server, "/tmp/test_socket.sock").is_ok());
+        assert!(listen(server, 5).is_ok());
+
+        // Create client and connect
+        let client = socket(SocketType::Stream);
+        assert!(connect(client, "/tmp/test_socket.sock").is_ok());
+
+        // Accept connection
+        let (accepted, _addr) = accept(server).unwrap();
+
+        // Send data from client
+        assert_eq!(send(client, b"hello").unwrap(), 5);
+
+        // Receive on accepted socket
+        let data = recv(accepted).unwrap();
+        assert_eq!(data, b"hello");
+
+        // Clean up
+        assert!(socket_close(client).is_ok());
+        assert!(socket_close(accepted).is_ok());
+        assert!(socket_close(server).is_ok());
+    }
+
+    #[test]
+    fn test_socket_datagram() {
+        setup_test_kernel();
+
+        // Create and bind two datagram sockets
+        let sock1 = socket(SocketType::Datagram);
+        assert!(bind(sock1, "/tmp/dgram1.sock").is_ok());
+
+        let sock2 = socket(SocketType::Datagram);
+        assert!(bind(sock2, "/tmp/dgram2.sock").is_ok());
+
+        // Send from sock1 to sock2
+        assert_eq!(sendto(sock1, b"datagram", "/tmp/dgram2.sock").unwrap(), 8);
+
+        // Receive on sock2
+        let (data, _) = recvfrom(sock2).unwrap();
+        assert_eq!(data, b"datagram");
+
+        // Clean up
+        assert!(socket_close(sock1).is_ok());
+        assert!(socket_close(sock2).is_ok());
+    }
+
+    #[test]
+    fn test_socket_getsockname() {
+        setup_test_kernel();
+
+        let sock = socket(SocketType::Stream);
+        assert!(bind(sock, "/tmp/named.sock").is_ok());
+
+        let addr = getsockname(sock).unwrap();
+        assert_eq!(addr.unwrap().path, "/tmp/named.sock");
+
+        socket_close(sock).unwrap();
     }
 }

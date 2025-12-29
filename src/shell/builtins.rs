@@ -37,6 +37,10 @@ pub struct ShellState {
     pub env: HashMap<String, String>,
     /// Shell aliases
     pub aliases: HashMap<String, String>,
+    /// Shell functions (name -> body)
+    pub functions: HashMap<String, String>,
+    /// Shell arrays (name -> elements)
+    pub arrays: HashMap<String, Vec<String>>,
     /// Last command exit code
     pub last_status: i32,
 }
@@ -47,6 +51,8 @@ impl ShellState {
             cwd: PathBuf::from("/home"),
             env: HashMap::new(),
             aliases: HashMap::new(),
+            functions: HashMap::new(),
+            arrays: HashMap::new(),
             last_status: 0,
         }
     }
@@ -79,6 +85,74 @@ impl ShellState {
     /// Remove an alias
     pub fn unalias(&mut self, name: &str) -> bool {
         self.aliases.remove(name).is_some()
+    }
+
+    /// Get a shell function body
+    pub fn get_function(&self, name: &str) -> Option<&str> {
+        self.functions.get(name).map(|s| s.as_str())
+    }
+
+    /// Define a shell function
+    pub fn set_function(&mut self, name: impl Into<String>, body: impl Into<String>) {
+        self.functions.insert(name.into(), body.into());
+    }
+
+    /// Remove a shell function
+    pub fn unset_function(&mut self, name: &str) -> bool {
+        self.functions.remove(name).is_some()
+    }
+
+    /// Check if a function exists
+    pub fn has_function(&self, name: &str) -> bool {
+        self.functions.contains_key(name)
+    }
+
+    /// Get an array
+    pub fn get_array(&self, name: &str) -> Option<&Vec<String>> {
+        self.arrays.get(name)
+    }
+
+    /// Get an array element
+    pub fn get_array_element(&self, name: &str, index: usize) -> Option<&str> {
+        self.arrays
+            .get(name)
+            .and_then(|arr| arr.get(index).map(|s| s.as_str()))
+    }
+
+    /// Set an array
+    pub fn set_array(&mut self, name: impl Into<String>, elements: Vec<String>) {
+        self.arrays.insert(name.into(), elements);
+    }
+
+    /// Set an array element
+    pub fn set_array_element(&mut self, name: &str, index: usize, value: impl Into<String>) {
+        let arr = self.arrays.entry(name.to_string()).or_default();
+        // Extend array if necessary
+        if index >= arr.len() {
+            arr.resize(index + 1, String::new());
+        }
+        arr[index] = value.into();
+    }
+
+    /// Append to an array
+    pub fn push_array(&mut self, name: &str, value: impl Into<String>) {
+        let arr = self.arrays.entry(name.to_string()).or_default();
+        arr.push(value.into());
+    }
+
+    /// Get array length
+    pub fn array_len(&self, name: &str) -> usize {
+        self.arrays.get(name).map(|arr| arr.len()).unwrap_or(0)
+    }
+
+    /// Check if an array exists
+    pub fn has_array(&self, name: &str) -> bool {
+        self.arrays.contains_key(name)
+    }
+
+    /// Remove an array
+    pub fn unset_array(&mut self, name: &str) -> bool {
+        self.arrays.remove(name).is_some()
     }
 }
 
