@@ -128,6 +128,11 @@ impl FileMode {
         self.0 & Self::S_ISGID != 0
     }
 
+    /// Check if sticky bit is set
+    pub fn is_sticky(&self) -> bool {
+        self.0 & Self::S_ISVTX != 0
+    }
+
     /// Format as symbolic string (e.g., "rwxr-xr-x")
     pub fn to_symbolic(&self) -> String {
         let mut s = String::with_capacity(9);

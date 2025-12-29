@@ -23,9 +23,10 @@ use super::geometry::{Color, Point, Rect};
 use std::collections::HashMap;
 
 /// Font style for text rendering
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum FontStyle {
     /// Normal upright text
+    #[default]
     Normal,
     /// Italic/oblique text
     Italic,
@@ -33,12 +34,6 @@ pub enum FontStyle {
     Bold,
     /// Bold italic text
     BoldItalic,
-}
-
-impl Default for FontStyle {
-    fn default() -> Self {
-        Self::Normal
-    }
 }
 
 /// Font weight (100-900)
@@ -882,6 +877,5 @@ mod tests {
     fn test_font_weight() {
         assert_eq!(FontWeight::NORMAL.0, 400);
         assert_eq!(FontWeight::BOLD.0, 700);
-        assert!(FontWeight::BOLD.0 > FontWeight::NORMAL.0);
     }
 }

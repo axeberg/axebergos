@@ -136,6 +136,136 @@ impl std::fmt::Display for Sid {
     }
 }
 
+/// Resource limit type (like Linux RLIMIT_*)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum RlimitResource {
+    /// Maximum number of open file descriptors
+    NoFile = 0,
+    /// Maximum number of processes for this user
+    NProc = 1,
+    /// Maximum file size that can be created (bytes)
+    FSize = 2,
+    /// Maximum stack size (bytes)
+    Stack = 3,
+    /// Maximum CPU time (seconds)
+    Cpu = 4,
+    /// Maximum size of core dump file (bytes)
+    Core = 5,
+    /// Maximum data segment size (bytes)
+    Data = 6,
+    /// Maximum address space (bytes)
+    As = 7,
+}
+
+impl RlimitResource {
+    pub fn from_u32(n: u32) -> Option<Self> {
+        match n {
+            0 => Some(RlimitResource::NoFile),
+            1 => Some(RlimitResource::NProc),
+            2 => Some(RlimitResource::FSize),
+            3 => Some(RlimitResource::Stack),
+            4 => Some(RlimitResource::Cpu),
+            5 => Some(RlimitResource::Core),
+            6 => Some(RlimitResource::Data),
+            7 => Some(RlimitResource::As),
+            _ => None,
+        }
+    }
+}
+
+/// A single resource limit with soft and hard values
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rlimit {
+    /// Current (soft) limit - can be raised up to hard limit
+    pub soft: u64,
+    /// Maximum (hard) limit - only root can raise
+    pub hard: u64,
+}
+
+impl Rlimit {
+    pub const INFINITY: u64 = u64::MAX;
+
+    pub fn new(soft: u64, hard: u64) -> Self {
+        Self { soft, hard }
+    }
+
+    pub fn unlimited() -> Self {
+        Self {
+            soft: Self::INFINITY,
+            hard: Self::INFINITY,
+        }
+    }
+}
+
+/// Resource limits for a process (like Linux rlimit)
+#[derive(Debug, Clone)]
+pub struct ResourceLimits {
+    /// Maximum number of open file descriptors (RLIMIT_NOFILE)
+    pub nofile: Rlimit,
+    /// Maximum number of processes for this user (RLIMIT_NPROC)
+    pub nproc: Rlimit,
+    /// Maximum file size (RLIMIT_FSIZE)
+    pub fsize: Rlimit,
+    /// Maximum stack size (RLIMIT_STACK)
+    pub stack: Rlimit,
+    /// Maximum CPU time in seconds (RLIMIT_CPU)
+    pub cpu: Rlimit,
+    /// Maximum core dump size (RLIMIT_CORE)
+    pub core: Rlimit,
+    /// Maximum data segment size (RLIMIT_DATA)
+    pub data: Rlimit,
+    /// Maximum address space (RLIMIT_AS)
+    pub address_space: Rlimit,
+}
+
+impl Default for ResourceLimits {
+    fn default() -> Self {
+        Self {
+            nofile: Rlimit::new(1024, 4096),
+            nproc: Rlimit::new(1024, 4096),
+            fsize: Rlimit::unlimited(),
+            stack: Rlimit::new(8 * 1024 * 1024, Rlimit::INFINITY), // 8MB soft
+            cpu: Rlimit::unlimited(),
+            core: Rlimit::new(0, Rlimit::INFINITY), // Core dumps disabled by default
+            data: Rlimit::unlimited(),
+            address_space: Rlimit::unlimited(),
+        }
+    }
+}
+
+impl ResourceLimits {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn get(&self, resource: RlimitResource) -> Rlimit {
+        match resource {
+            RlimitResource::NoFile => self.nofile,
+            RlimitResource::NProc => self.nproc,
+            RlimitResource::FSize => self.fsize,
+            RlimitResource::Stack => self.stack,
+            RlimitResource::Cpu => self.cpu,
+            RlimitResource::Core => self.core,
+            RlimitResource::Data => self.data,
+            RlimitResource::As => self.address_space,
+        }
+    }
+
+    pub fn set(&mut self, resource: RlimitResource, limit: Rlimit) {
+        match resource {
+            RlimitResource::NoFile => self.nofile = limit,
+            RlimitResource::NProc => self.nproc = limit,
+            RlimitResource::FSize => self.fsize = limit,
+            RlimitResource::Stack => self.stack = limit,
+            RlimitResource::Cpu => self.cpu = limit,
+            RlimitResource::Core => self.core = limit,
+            RlimitResource::Data => self.data = limit,
+            RlimitResource::As => self.address_space = limit,
+        }
+    }
+}
+
 /// A process in the system
 pub struct Process {
     /// Unique process identifier
@@ -162,6 +292,15 @@ pub struct Process {
     /// Effective group ID (for permission checks)
     pub egid: Gid,
 
+    /// Saved user ID (for privilege dropping and restoration)
+    /// When a setuid binary runs, this stores the original euid so
+    /// the process can temporarily drop privileges via seteuid()
+    /// and regain them later with seteuid(suid).
+    pub suid: Uid,
+
+    /// Saved group ID (for privilege dropping and restoration)
+    pub sgid: Gid,
+
     /// Supplementary group IDs
     pub groups: Vec<Gid>,
 
@@ -176,6 +315,9 @@ pub struct Process {
 
     /// Signal handling
     pub signals: ProcessSignals,
+
+    /// Resource limits (like Linux rlimit)
+    pub rlimits: ResourceLimits,
 
     /// Environment variables (inherited on spawn, like Linux environ)
     pub environ: HashMap<String, String>,
@@ -197,6 +339,10 @@ pub struct Process {
 
     /// Is this process a session leader?
     pub is_session_leader: bool,
+
+    /// File mode creation mask (umask)
+    /// Bits set in umask are cleared from the mode when creating files
+    pub umask: u16,
 }
 
 impl Process {
@@ -228,11 +374,14 @@ impl Process {
             gid,
             euid: uid,
             egid: gid,
+            suid: uid, // Saved IDs start same as real IDs
+            sgid: gid,
             groups: vec![gid],
             state: ProcessState::Running,
             files: FileTable::new(),
             memory: ProcessMemory::new(),
             signals: ProcessSignals::new(),
+            rlimits: ResourceLimits::new(),
             environ,
             cwd: PathBuf::from("/"),
             task: None,
@@ -240,6 +389,7 @@ impl Process {
             children: Vec::new(),
             ctty: None,
             is_session_leader: true, // New processes are session leaders by default
+            umask: 0o022,            // Default umask (files=644, dirs=755)
         }
     }
 
@@ -266,11 +416,14 @@ impl Process {
             gid,
             euid: uid,
             egid: gid,
+            suid: uid,
+            sgid: gid,
             groups,
             state: ProcessState::Running,
             files: FileTable::new(),
             memory: ProcessMemory::new(),
             signals: ProcessSignals::new(),
+            rlimits: ResourceLimits::new(),
             environ,
             cwd,
             task: None,
@@ -278,6 +431,7 @@ impl Process {
             children: Vec::new(),
             ctty: None,
             is_session_leader: false,
+            umask: 0o022,
         }
     }
 
@@ -304,11 +458,14 @@ impl Process {
             gid,
             euid: uid,
             egid: gid,
+            suid: uid,
+            sgid: gid,
             groups: vec![gid],
             state: ProcessState::Running,
             files: FileTable::new(),
             memory: ProcessMemory::with_limit(limit),
             signals: ProcessSignals::new(),
+            rlimits: ResourceLimits::new(),
             environ,
             cwd: PathBuf::from("/"),
             task: None,
@@ -316,6 +473,7 @@ impl Process {
             children: Vec::new(),
             ctty: None,
             is_session_leader: true,
+            umask: 0o022,
         }
     }
 
@@ -358,11 +516,14 @@ impl Process {
             gid,
             euid: uid,
             egid: gid,
+            suid: uid,
+            sgid: gid,
             groups,
             state: ProcessState::Running,
             files: FileTable::new(),
             memory: ProcessMemory::new(),
             signals: ProcessSignals::new(),
+            rlimits: ResourceLimits::new(),
             environ,
             cwd: PathBuf::from(home),
             task: None,
@@ -370,6 +531,7 @@ impl Process {
             children: Vec::new(),
             ctty: Some("tty1".to_string()),
             is_session_leader: true,
+            umask: 0o022,
         }
     }
 
@@ -443,11 +605,14 @@ impl Process {
             gid: self.gid,
             euid: self.euid,
             egid: self.egid,
+            suid: self.suid, // Inherit saved UID
+            sgid: self.sgid, // Inherit saved GID
             groups: self.groups.clone(),
             state: ProcessState::Running,
             files: FileTable::new(), // Caller sets up fds
             memory: child_memory,
             signals: super::signal::ProcessSignals::new(), // Fresh signal state
+            rlimits: self.rlimits.clone(),                 // Inherit resource limits
             environ: self.environ.clone(),
             cwd: self.cwd.clone(),
             task: None, // Caller sets up task
@@ -455,11 +620,15 @@ impl Process {
             children: Vec::new(), // No children yet
             ctty: self.ctty.clone(),
             is_session_leader: false, // Child is not session leader
+            umask: self.umask,        // Inherit umask
         };
 
         (child, region_mapping)
     }
 }
+
+/// Maximum file descriptors per process (POSIX default is often 1024)
+pub const MAX_FDS_PER_PROCESS: usize = 1024;
 
 /// A process's file descriptor table
 pub struct FileTable {
@@ -467,6 +636,8 @@ pub struct FileTable {
     next_fd: u32,
     /// Map from fd to kernel object handle
     table: HashMap<Fd, Handle>,
+    /// Maximum number of file descriptors (can be adjusted per-process)
+    max_fds: usize,
 }
 
 impl FileTable {
@@ -474,14 +645,50 @@ impl FileTable {
         Self {
             next_fd: 3, // 0, 1, 2 reserved for stdin/stdout/stderr
             table: HashMap::new(),
+            max_fds: MAX_FDS_PER_PROCESS,
         }
     }
 
-    pub fn alloc(&mut self, handle: Handle) -> Fd {
+    /// Create a new FileTable with a custom fd limit
+    pub fn with_limit(max_fds: usize) -> Self {
+        Self {
+            next_fd: 3,
+            table: HashMap::new(),
+            max_fds,
+        }
+    }
+
+    /// Allocate a new file descriptor for a handle
+    /// Returns None if the fd limit has been reached
+    pub fn alloc(&mut self, handle: Handle) -> Option<Fd> {
+        // Check if we've hit the limit
+        if self.table.len() >= self.max_fds {
+            return None;
+        }
         let fd = Fd(self.next_fd);
         self.next_fd += 1;
         self.table.insert(fd, handle);
-        fd
+        Some(fd)
+    }
+
+    /// Get the current number of open file descriptors
+    pub fn len(&self) -> usize {
+        self.table.len()
+    }
+
+    /// Check if the file table is empty
+    pub fn is_empty(&self) -> bool {
+        self.table.is_empty()
+    }
+
+    /// Get the maximum number of file descriptors allowed
+    pub fn max_fds(&self) -> usize {
+        self.max_fds
+    }
+
+    /// Set the maximum number of file descriptors (for rlimit)
+    pub fn set_max_fds(&mut self, max: usize) {
+        self.max_fds = max;
     }
 
     pub fn insert(&mut self, fd: Fd, handle: Handle) {
@@ -501,11 +708,12 @@ impl FileTable {
     }
 
     /// Clone the file table for fork
-    /// Returns a new FileTable with the same mappings
+    /// Returns a new FileTable with the same mappings and fd limit
     pub fn clone_for_fork(&self) -> Self {
         Self {
             next_fd: self.next_fd,
             table: self.table.clone(),
+            max_fds: self.max_fds,
         }
     }
 
@@ -549,8 +757,8 @@ mod tests {
         let h1 = Handle(100);
         let h2 = Handle(200);
 
-        let fd1 = ft.alloc(h1);
-        let fd2 = ft.alloc(h2);
+        let fd1 = ft.alloc(h1).expect("should allocate fd");
+        let fd2 = ft.alloc(h2).expect("should allocate fd");
 
         assert_eq!(fd1, Fd(3)); // First user fd after stdin/stdout/stderr
         assert_eq!(fd2, Fd(4));
@@ -575,7 +783,7 @@ mod tests {
     fn test_file_table_remove() {
         let mut ft = FileTable::new();
         let h = Handle(100);
-        let fd = ft.alloc(h);
+        let fd = ft.alloc(h).expect("should allocate fd");
 
         assert!(ft.contains(fd));
         let removed = ft.remove(fd);
@@ -590,5 +798,32 @@ mod tests {
 
         proc.state = ProcessState::Zombie(0);
         assert!(!proc.is_alive());
+    }
+
+    #[test]
+    fn test_file_table_fd_limit() {
+        // Create a file table with a small limit for testing
+        let mut ft = FileTable::with_limit(5);
+        let h = Handle(100);
+
+        // Should be able to allocate up to the limit
+        for i in 0..5 {
+            let fd = ft.alloc(h);
+            assert!(fd.is_some(), "Should allocate fd #{}", i);
+        }
+
+        // Should fail when limit is reached
+        let fd = ft.alloc(h);
+        assert!(fd.is_none(), "Should fail when limit is reached");
+
+        // Verify the count
+        assert_eq!(ft.len(), 5);
+        assert_eq!(ft.max_fds(), 5);
+    }
+
+    #[test]
+    fn test_file_table_default_limit() {
+        let ft = FileTable::new();
+        assert_eq!(ft.max_fds(), MAX_FDS_PER_PROCESS);
     }
 }

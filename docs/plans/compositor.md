@@ -313,4 +313,4 @@ pub fn handle_click(x: f64, y: f64, button: i16) {
 
 - [Syscall Interface](../kernel/syscalls.md) - window_create
 - [Executor](../kernel/executor.md) - Render timing
-- [Future Work](../future-work.md) - Planned enhancements
+- [Work Tracker](../WORK_TRACKER.md) - All work items and planned enhancements

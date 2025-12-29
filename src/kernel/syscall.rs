@@ -36,7 +36,9 @@ use super::timer::{TimerId, TimerQueue};
 use super::trace::{TraceCategory, TraceSummary, Tracer};
 use super::tty::TtyManager;
 use super::users::{FileMode, Gid, Group, Uid, User, UserDb, check_permission};
-use crate::vfs::{FileSystem, MemoryFs, OpenOptions as VfsOpenOptions};
+use crate::vfs::{
+    FileHandle as VfsFileHandle, FileSystem, MemoryFs, OpenOptions as VfsOpenOptions,
+};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::SeekFrom;
@@ -334,6 +336,8 @@ pub enum SyscallError {
     IsADirectory,
     /// Already exists
     AlreadyExists,
+    /// Too many open files (EMFILE)
+    TooManyOpenFiles,
 }
 
 impl std::fmt::Display for SyscallError {
@@ -355,6 +359,7 @@ impl std::fmt::Display for SyscallError {
             SyscallError::NotADirectory => write!(f, "not a directory"),
             SyscallError::IsADirectory => write!(f, "is a directory"),
             SyscallError::AlreadyExists => write!(f, "already exists"),
+            SyscallError::TooManyOpenFiles => write!(f, "too many open files"),
         }
     }
 }
@@ -393,6 +398,12 @@ pub struct FileMetadata {
     pub is_file: bool,
     pub is_symlink: bool,
     pub symlink_target: Option<String>,
+    /// Owner user ID
+    pub uid: u32,
+    /// Owner group ID
+    pub gid: u32,
+    /// Unix permission mode (including setuid/setgid bits)
+    pub mode: u16,
 }
 
 pub type SyscallResult<T> = Result<T, SyscallError>;
@@ -835,6 +846,8 @@ impl Kernel {
         } else if SysFs::is_sys_path(&resolved_str) {
             self.open_sysfs(&resolved_str)?
         } else {
+            // SEC-011: Check path traversal permissions for regular files
+            self.check_path_traversal(&resolved_str)?;
             self.open_file(&resolved, flags)?
         };
 
@@ -843,7 +856,10 @@ impl Kernel {
             .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)?;
-        let fd = process.files.alloc(handle);
+        let fd = process
+            .files
+            .alloc(handle)
+            .ok_or(SyscallError::TooManyOpenFiles)?;
         Ok(fd)
     }
 
@@ -885,6 +901,26 @@ impl Kernel {
         } else {
             None
         };
+
+        // SEC-010: Permission check for /proc/[pid]/* access
+        // Only allow process to read its own /proc/[pid]/* files, or root can read any
+        if let Some(target) = target_pid
+            && target != current_pid
+        {
+            // Accessing another process's /proc entries
+            let current_process = self.get_current_process()?;
+            let is_root = current_process.euid == Uid::ROOT;
+
+            if !is_root {
+                // Check if this is a sensitive file that requires ownership
+                let sensitive_files = ["environ", "cmdline", "maps", "fd", "cwd", "exe"];
+                let is_sensitive = sensitive_files.iter().any(|f| path.contains(f));
+
+                if is_sensitive {
+                    return Err(SyscallError::PermissionDenied);
+                }
+            }
+        }
 
         // Generate process context if needed
         let proc_ctx = target_pid.and_then(|pid| {
@@ -1018,8 +1054,18 @@ impl Kernel {
             .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)?;
-        let read_fd = process.files.alloc(handle);
-        let write_fd = process.files.alloc(handle);
+        let read_fd = process
+            .files
+            .alloc(handle)
+            .ok_or(SyscallError::TooManyOpenFiles)?;
+        let write_fd = match process.files.alloc(handle) {
+            Some(fd) => fd,
+            None => {
+                // Clean up the read fd if we can't allocate write fd
+                process.files.remove(read_fd);
+                return Err(SyscallError::TooManyOpenFiles);
+            }
+        };
 
         Ok((read_fd, write_fd))
     }
@@ -1040,7 +1086,10 @@ impl Kernel {
             .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)?;
-        let fd = process.files.alloc(handle);
+        let fd = process
+            .files
+            .alloc(handle)
+            .ok_or(SyscallError::TooManyOpenFiles)?;
 
         Ok(fd)
     }
@@ -1060,7 +1109,10 @@ impl Kernel {
 
         // Allocate a new fd pointing to the same handle
         let process = self.get_current_process_mut()?;
-        let new_fd = process.files.alloc(handle);
+        let new_fd = process
+            .files
+            .alloc(handle)
+            .ok_or(SyscallError::TooManyOpenFiles)?;
         Ok(new_fd)
     }
 
@@ -1352,6 +1404,125 @@ impl Kernel {
         }
     }
 
+    /// Check permission on an already-opened file handle (atomic, TOCTOU-safe)
+    ///
+    /// This is preferred over check_file_permission when the file is already open,
+    /// as it checks permissions on the actual opened file, not a path that could
+    /// have changed between check and use.
+    fn check_handle_permission(
+        &self,
+        vfs_handle: VfsFileHandle,
+        want_read: bool,
+        want_write: bool,
+        want_exec: bool,
+    ) -> SyscallResult<()> {
+        let process = self.get_current_process()?;
+
+        // Get metadata from the opened file handle (not the path)
+        let meta = self.vfs.fstat(vfs_handle)?;
+
+        // Check permission
+        let allowed = check_permission(
+            Uid(meta.uid),
+            Gid(meta.gid),
+            FileMode::new(meta.mode),
+            process.euid,
+            process.egid,
+            &process.groups,
+            want_read,
+            want_write,
+            want_exec,
+        );
+
+        if allowed {
+            Ok(())
+        } else {
+            Err(SyscallError::PermissionDenied)
+        }
+    }
+
+    /// SEC-011: Check execute permission on ALL directories in the path
+    /// This is required to traverse to the target file/directory
+    fn check_path_traversal(&self, path: &str) -> SyscallResult<()> {
+        let process = self.get_current_process()?;
+
+        // Root can always traverse
+        if process.euid == Uid::ROOT {
+            return Ok(());
+        }
+
+        // Split path into components and check each directory
+        let path = Path::new(path);
+        let mut current_path = PathBuf::from("/");
+
+        for component in path.components() {
+            use std::path::Component;
+            match component {
+                Component::RootDir => continue,
+                Component::CurDir => continue,
+                Component::ParentDir => {
+                    current_path.pop();
+                }
+                Component::Normal(name) => {
+                    // Check execute permission on current directory before entering
+                    let current_str = current_path.to_string_lossy();
+                    if current_str != "/" {
+                        // Check if current_path is a directory we need execute permission for
+                        if let Ok(meta) = self.vfs.metadata(&current_str)
+                            && meta.is_dir
+                        {
+                            let allowed = check_permission(
+                                Uid(meta.uid),
+                                Gid(meta.gid),
+                                FileMode::new(meta.mode),
+                                process.euid,
+                                process.egid,
+                                &process.groups,
+                                false,
+                                false,
+                                true, // Need execute to traverse
+                            );
+                            if !allowed {
+                                return Err(SyscallError::PermissionDenied);
+                            }
+                        }
+                    }
+                    current_path.push(name);
+                }
+                Component::Prefix(_) => {} // Windows-only
+            }
+        }
+
+        // Check the final directory component if the path is a directory path
+        // (for the parent directory of a file)
+        if let Some(parent) = path.parent()
+            && parent != Path::new("")
+            && parent != Path::new("/")
+        {
+            let parent_str = parent.to_string_lossy();
+            if let Ok(meta) = self.vfs.metadata(&parent_str)
+                && meta.is_dir
+            {
+                let allowed = check_permission(
+                    Uid(meta.uid),
+                    Gid(meta.gid),
+                    FileMode::new(meta.mode),
+                    process.euid,
+                    process.egid,
+                    &process.groups,
+                    false,
+                    false,
+                    true,
+                );
+                if !allowed {
+                    return Err(SyscallError::PermissionDenied);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Check if the current process has write permission on the parent directory
     /// (needed for creating/deleting files in the directory)
     fn check_parent_write_permission(&self, path: &str) -> SyscallResult<()> {
@@ -1365,6 +1536,55 @@ impl Kernel {
 
         // Need write and execute on parent directory to create/delete files
         self.check_file_permission(parent, false, true, true)
+    }
+
+    /// SEC-015: Check sticky bit restriction for file deletion
+    /// When a directory has the sticky bit set, only the owner of the file,
+    /// the owner of the directory, or root can delete files in it.
+    fn check_sticky_bit(&self, path: &str) -> SyscallResult<()> {
+        let process = self.get_current_process()?;
+
+        // Root can always delete
+        if process.euid == Uid::ROOT {
+            return Ok(());
+        }
+
+        // Get parent directory
+        let parent_path = Path::new(path)
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| "/".to_string());
+        let parent = if parent_path.is_empty() {
+            "/"
+        } else {
+            &parent_path
+        };
+
+        // Get parent directory metadata
+        let parent_meta = self.vfs.metadata(parent)?;
+        let parent_mode = FileMode::new(parent_meta.mode);
+
+        // If sticky bit is not set, no restriction
+        if !parent_mode.is_sticky() {
+            return Ok(());
+        }
+
+        // Sticky bit is set - check ownership
+        // Can delete if: owner of directory, or owner of file
+        let is_dir_owner = parent_meta.uid == process.euid.0;
+        if is_dir_owner {
+            return Ok(());
+        }
+
+        // Check if owner of the file being deleted
+        if let Ok(file_meta) = self.vfs.metadata(path)
+            && file_meta.uid == process.euid.0
+        {
+            return Ok(());
+        }
+
+        // Not allowed
+        Err(SyscallError::PermissionDenied)
     }
 
     /// Get the current process's effective UID (for setting file ownership)
@@ -1412,20 +1632,23 @@ impl Kernel {
     }
 
     /// Open a regular file
+    ///
+    /// Uses atomic permission checking (TOCTOU-safe): opens the file first,
+    /// then checks permissions on the actual opened file handle.
     fn open_file(&mut self, path: &Path, flags: OpenFlags) -> SyscallResult<Handle> {
         let path_str = path.to_str().ok_or(SyscallError::InvalidArgument)?;
 
-        // Check if file exists
+        // Check if file exists (needed to determine if we're creating a new file)
         let file_exists = self.vfs.exists(path_str);
 
-        if file_exists {
-            // Check permissions on existing file
-            self.check_file_permission(path_str, flags.read, flags.write, false)?;
-        } else if flags.create {
-            // For new files, check write permission on parent directory
-            self.check_parent_write_permission(path_str)?;
-        } else {
-            return Err(SyscallError::NotFound);
+        // For new files, check parent directory permission first
+        // This must happen before open since the file doesn't exist yet
+        if !file_exists {
+            if flags.create {
+                self.check_parent_write_permission(path_str)?;
+            } else {
+                return Err(SyscallError::NotFound);
+            }
         }
 
         // Convert our flags to VFS options
@@ -1438,18 +1661,36 @@ impl Kernel {
             truncate: flags.truncate,
         };
 
-        // Open via VFS
+        // Open via VFS first (before permission check for TOCTOU safety)
         let vfs_handle = self.vfs.open(path_str, vfs_opts)?;
 
-        // If we just created a new file, set ownership to current user
+        // For existing files, check permissions AFTER opening (TOCTOU-safe)
+        // This uses fstat on the opened handle, not the path that could have changed
+        if file_exists
+            && self
+                .check_handle_permission(vfs_handle, flags.read, flags.write, false)
+                .is_err()
+        {
+            // Permission denied - close the handle and return error
+            let _ = self.vfs.close(vfs_handle);
+            return Err(SyscallError::PermissionDenied);
+        }
+
+        // If we just created a new file, set ownership and apply umask
         if !file_exists && flags.create {
             let euid = self.current_euid()?;
             let egid = self.current_egid()?;
             let _ = self.vfs.chown(path_str, Some(euid.0), Some(egid.0));
+
+            // SEC-014: Apply umask to new file mode
+            // Default file mode is 0o666, apply umask to get final mode
+            let umask = self.get_current_process()?.umask;
+            let new_mode = 0o666 & !umask;
+            let _ = self.vfs.chmod(path_str, new_mode);
         }
 
-        // Read the file contents
-        let meta = self.vfs.metadata(path_str)?;
+        // Read the file contents (using fstat for consistency with atomic open)
+        let meta = self.vfs.fstat(vfs_handle)?;
         let mut data = vec![0u8; meta.size as usize];
         if !data.is_empty() {
             self.vfs.read(vfs_handle, &mut data)?;
@@ -1527,6 +1768,12 @@ impl Kernel {
         let euid = self.current_euid()?;
         let egid = self.current_egid()?;
         let _ = self.vfs.chown(path_str, Some(euid.0), Some(egid.0));
+
+        // SEC-014: Apply umask to new directory mode
+        // Default directory mode is 0o777, apply umask to get final mode
+        let umask = self.get_current_process()?.umask;
+        let new_mode = 0o777 & !umask;
+        let _ = self.vfs.chmod(path_str, new_mode);
 
         Ok(())
     }
@@ -1613,6 +1860,9 @@ impl Kernel {
                 is_file: !is_dir,
                 is_symlink: false,
                 symlink_target: None,
+                uid: 0, // root owns /proc
+                gid: 0,
+                mode: if is_dir { 0o555 } else { 0o444 }, // read-only
             });
         }
 
@@ -1628,6 +1878,9 @@ impl Kernel {
                 is_file: !is_dir,
                 is_symlink: false,
                 symlink_target: None,
+                uid: 0, // root owns /dev
+                gid: 0,
+                mode: if is_dir { 0o755 } else { 0o666 }, // device files are rw for all
             });
         }
 
@@ -1643,6 +1896,9 @@ impl Kernel {
                 is_file: !is_dir,
                 is_symlink: false,
                 symlink_target: None,
+                uid: 0, // root owns /sys
+                gid: 0,
+                mode: if is_dir { 0o555 } else { 0o444 }, // read-only
             });
         }
 
@@ -1653,6 +1909,9 @@ impl Kernel {
             is_file: meta.is_file,
             is_symlink: meta.is_symlink,
             symlink_target: meta.symlink_target,
+            uid: meta.uid,
+            gid: meta.gid,
+            mode: meta.mode,
         })
     }
 
@@ -1664,6 +1923,9 @@ impl Kernel {
 
         // Check write/execute permission on parent directory
         self.check_parent_write_permission(path_str)?;
+
+        // SEC-015: Check sticky bit restriction
+        self.check_sticky_bit(path_str)?;
 
         self.vfs.remove_file(path_str)?;
         Ok(())
@@ -1677,6 +1939,9 @@ impl Kernel {
 
         // Check write/execute permission on parent directory
         self.check_parent_write_permission(path_str)?;
+
+        // SEC-015: Check sticky bit restriction
+        self.check_sticky_bit(path_str)?;
 
         self.vfs.remove_dir(path_str)?;
         Ok(())
@@ -2193,13 +2458,18 @@ impl Kernel {
     pub fn sys_setuid(&mut self, uid: Uid) -> SyscallResult<()> {
         let process = self.get_current_process_mut()?;
 
-        // Only root can set arbitrary uid
-        if process.euid != Uid::ROOT && uid != process.uid {
-            return Err(SyscallError::PermissionDenied);
+        if process.euid == Uid::ROOT {
+            // Root: set all three IDs (real, effective, saved)
+            process.uid = uid;
+            process.euid = uid;
+            process.suid = uid;
+        } else {
+            // Non-root: can only set effective UID to real or saved UID
+            if uid != process.uid && uid != process.suid {
+                return Err(SyscallError::PermissionDenied);
+            }
+            process.euid = uid;
         }
-
-        process.uid = uid;
-        process.euid = uid;
         Ok(())
     }
 
@@ -2207,8 +2477,8 @@ impl Kernel {
     pub fn sys_seteuid(&mut self, euid: Uid) -> SyscallResult<()> {
         let process = self.get_current_process_mut()?;
 
-        // Can set euid to real uid, saved uid (we don't track saved), or if root any uid
-        if process.euid != Uid::ROOT && euid != process.uid {
+        // Can set euid to real uid, saved uid, or if root any uid
+        if process.euid != Uid::ROOT && euid != process.uid && euid != process.suid {
             return Err(SyscallError::PermissionDenied);
         }
 
@@ -2220,12 +2490,18 @@ impl Kernel {
     pub fn sys_setgid(&mut self, gid: Gid) -> SyscallResult<()> {
         let process = self.get_current_process_mut()?;
 
-        if process.euid != Uid::ROOT && gid != process.gid {
-            return Err(SyscallError::PermissionDenied);
+        if process.euid == Uid::ROOT {
+            // Root: set all three IDs (real, effective, saved)
+            process.gid = gid;
+            process.egid = gid;
+            process.sgid = gid;
+        } else {
+            // Non-root: can only set effective GID to real or saved GID
+            if gid != process.gid && gid != process.sgid {
+                return Err(SyscallError::PermissionDenied);
+            }
+            process.egid = gid;
         }
-
-        process.gid = gid;
-        process.egid = gid;
         Ok(())
     }
 
@@ -2233,7 +2509,8 @@ impl Kernel {
     pub fn sys_setegid(&mut self, egid: Gid) -> SyscallResult<()> {
         let process = self.get_current_process_mut()?;
 
-        if process.euid != Uid::ROOT && egid != process.gid {
+        // Can set egid to real gid, saved gid, or if root any gid
+        if process.euid != Uid::ROOT && egid != process.gid && egid != process.sgid {
             return Err(SyscallError::PermissionDenied);
         }
 
@@ -2250,6 +2527,49 @@ impl Kernel {
         }
 
         process.groups = groups;
+        Ok(())
+    }
+
+    /// Set file mode creation mask (umask)
+    /// Returns the previous umask value
+    pub fn sys_umask(&mut self, mask: u16) -> SyscallResult<u16> {
+        let process = self.get_current_process_mut()?;
+        let old_mask = process.umask;
+        // Only keep the permission bits (rwxrwxrwx = 0o777)
+        process.umask = mask & 0o777;
+        Ok(old_mask)
+    }
+
+    /// Get resource limit for a resource
+    pub fn sys_getrlimit(
+        &self,
+        resource: super::process::RlimitResource,
+    ) -> SyscallResult<super::process::Rlimit> {
+        let process = self.get_current_process()?;
+        Ok(process.rlimits.get(resource))
+    }
+
+    /// Set resource limit for a resource
+    pub fn sys_setrlimit(
+        &mut self,
+        resource: super::process::RlimitResource,
+        limit: super::process::Rlimit,
+    ) -> SyscallResult<()> {
+        let process = self.get_current_process_mut()?;
+        let current = process.rlimits.get(resource);
+
+        // Validate the new limit
+        // Soft limit cannot exceed hard limit
+        if limit.soft > limit.hard {
+            return Err(SyscallError::InvalidArgument);
+        }
+
+        // Non-root cannot raise hard limit
+        if limit.hard > current.hard && process.euid != Uid::ROOT {
+            return Err(SyscallError::PermissionDenied);
+        }
+
+        process.rlimits.set(resource, limit);
         Ok(())
     }
 
@@ -2352,19 +2672,30 @@ impl Kernel {
         uid: Option<u32>,
         gid: Option<u32>,
     ) -> SyscallResult<()> {
-        // Check if caller is root (only root can chown)
         let process = self.get_current_process()?;
         let euid = process.euid;
 
+        // Get file metadata to check ownership
+        let meta = self.vfs.metadata(path)?;
+
         // Only root can change ownership
-        if euid.0 != 0 {
-            // Non-root can only change group to a group they belong to
+        if euid != Uid::ROOT {
+            // SEC-013: Non-root users can only change group if they own the file
+            // and only to a group they belong to
             if uid.is_some() {
                 return Err(SyscallError::PermissionDenied);
             }
+
+            // Must own the file to change its group
+            if meta.uid != euid.0 {
+                return Err(SyscallError::PermissionDenied);
+            }
+
+            // Can only change to a group the user belongs to
             if let Some(new_gid) = gid {
                 let groups = &process.groups;
-                if !groups.iter().any(|g| g.0 == new_gid) && process.gid.0 != new_gid {
+                let is_member = groups.iter().any(|g| g.0 == new_gid) || process.gid.0 == new_gid;
+                if !is_member {
                     return Err(SyscallError::PermissionDenied);
                 }
             }

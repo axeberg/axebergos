@@ -409,4 +409,4 @@ async fn consumer(shm_id: ShmId) {
 - [Syscall Interface](syscalls.md) - Memory syscalls
 - [Process Model](processes.md) - Per-process memory
 - [IPC](ipc.md) - Communication patterns
-- [Future Work](../future-work.md) - Planned enhancements
+- [Work Tracker](../WORK_TRACKER.md) - All work items and planned enhancements

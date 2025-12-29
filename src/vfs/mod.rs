@@ -155,6 +155,17 @@ pub trait FileSystem {
 
     /// Change file owner
     fn chown(&mut self, path: &str, uid: Option<u32>, gid: Option<u32>) -> io::Result<()>;
+
+    /// Get metadata for an open file handle (fstat)
+    ///
+    /// This is used for atomic permission checking - get metadata for the
+    /// actual file that was opened, not a path that could have changed.
+    fn fstat(&self, handle: FileHandle) -> io::Result<Metadata>;
+
+    /// Get the resolved path for an open file handle
+    ///
+    /// Returns the canonical path after symlink resolution.
+    fn handle_path(&self, handle: FileHandle) -> io::Result<String>;
 }
 
 /// Convenience wrapper for reading entire file to string

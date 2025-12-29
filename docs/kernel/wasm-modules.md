@@ -247,4 +247,4 @@ INIT → LOADING → READY → RUNNING → TERMINATED
 - [Shell](../userspace/shell.md) - Shell command execution
 - [Syscall Interface](syscalls.md) - Full syscall reference
 - [VFS](../userspace/vfs.md) - Filesystem where commands are stored
-- [Future Work](../future-work.md) - Planned enhancements
+- [Work Tracker](../WORK_TRACKER.md) - All work items and planned enhancements

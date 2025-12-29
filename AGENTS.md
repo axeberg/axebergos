@@ -22,8 +22,7 @@ Only proceed with `git add` and `git commit` if all three pass. This is **mandat
 | Document | Location | Purpose |
 |----------|----------|---------|
 | Project Analysis | `docs/PROJECT_ANALYSIS.md` | Full codebase review, security findings, architecture grades |
-| Work Tracker | `docs/WORK_TRACKER.md` | Known issues, priorities, progress log |
-| Future Work | `docs/future-work.md` | Remaining features and roadmap |
+| Work Tracker | `docs/WORK_TRACKER.md` | Known issues, priorities, progress log, and completed features |
 | Invariants | `docs/development/invariants.md` | Critical system invariants (P1-P3, S1-S5, M1-M5, etc.) |
 | Contributing Guide | `docs/development/contributing.md` | Code style, commit format, PR process |
 

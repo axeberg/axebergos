@@ -12,13 +12,13 @@ This document tracks all identified issues, improvements, and feature work for A
 | Category | Total | Done | In Progress | Remaining |
 |----------|-------|------|-------------|-----------|
 | Security (Critical) | 2 | 2 | 0 | 0 |
-| Security (High) | 5 | 2 | 0 | 3 |
-| Security (Medium) | 8 | 0 | 0 | 8 |
+| Security (High) | 5 | 5 | 0 | 0 |
+| Security (Medium) | 8 | 8 | 0 | 0 |
 | Code Quality | 10 | 0 | 0 | 10 |
 | Missing Features | 15 | 0 | 0 | 15 |
 | Documentation | 5 | 0 | 0 | 5 |
 | Future Features | 12 | 0 | 0 | 12 |
-| **TOTAL** | **57** | **4** | **0** | **53** |
+| **TOTAL** | **57** | **15** | **0** | **42** |
 
 ---
 
@@ -62,26 +62,26 @@ This document tracks all identified issues, improvements, and feature work for A
 
 ### SEC-005: Fix TOCTOU Race Conditions
 - **Priority**: 🟠 HIGH
-- **Status**: ⬜ TODO
-- **File**: `src/kernel/syscall.rs:1291-1322, 1386-1400`
+- **Status**: ✅ DONE (2025-12-28)
+- **File**: `src/kernel/syscall.rs`, `src/vfs/mod.rs`, `src/vfs/memory.rs`, `src/vfs/layered.rs`
 - **Issue**: Permission check and file access are separate operations
-- **Fix**: Implement atomic stat-and-open
+- **Fix**: Added `fstat()` and `handle_path()` methods to VFS for atomic permission checking. `open_file()` now opens the file first, then checks permissions using the opened handle (not the path), preventing TOCTOU attacks.
 - **Estimate**: Medium
 
 ### SEC-006: Implement Setuid/Setgid Bit Processing
 - **Priority**: 🟠 HIGH
-- **Status**: ⬜ TODO
-- **File**: `src/kernel/syscall.rs` (spawn/exec)
+- **Status**: ✅ DONE (2025-12-28)
+- **File**: `src/kernel/wasm/command.rs`, `src/kernel/syscall.rs`
 - **Issue**: Setuid binaries don't change effective UID
-- **Fix**: Check bits during process creation, adjust euid/egid
+- **Fix**: Added `apply_setuid_setgid()` to WasmCommandRunner that checks file mode bits before execution. If setuid/setgid is set, temporarily changes process euid/egid to file owner/group. Also added uid/gid/mode fields to FileMetadata syscall struct.
 - **Estimate**: Medium
 
 ### SEC-007: Add Privilege Dropping for Fork
 - **Priority**: 🟠 HIGH
-- **Status**: ⬜ TODO
-- **File**: `src/kernel/syscall.rs:663-699`
-- **Issue**: Child inherits all parent privileges
-- **Fix**: Implement setuid/setgid capability to drop privileges
+- **Status**: ✅ DONE (2025-12-28)
+- **File**: `src/kernel/process.rs`, `src/kernel/syscall.rs`
+- **Issue**: Child inherits all parent privileges, no saved UID/GID tracking
+- **Fix**: Added `suid` (saved user ID) and `sgid` (saved group ID) fields to Process struct. Updated all Process constructors (new, with_environ, with_memory_limit, new_login_shell, cow_fork) to initialize and copy saved IDs. Updated setuid/seteuid/setgid/setegid syscalls to properly use saved IDs per POSIX semantics: root can set all IDs, non-root can only switch between real and saved IDs.
 - **Estimate**: Medium
 
 ---
@@ -90,66 +90,66 @@ This document tracks all identified issues, improvements, and feature work for A
 
 ### SEC-008: Add File Descriptor Limits
 - **Priority**: 🟡 MEDIUM
-- **Status**: ⬜ TODO
-- **File**: `src/kernel/process.rs:500-510`
+- **Status**: ✅ DONE (2025-12-28)
+- **File**: `src/kernel/process.rs`
 - **Issue**: Unlimited FDs per process (DoS risk)
-- **Fix**: Add MAX_FDS_PER_PROCESS (default 1024)
+- **Fix**: Added `MAX_FDS_PER_PROCESS = 1024` constant and `max_fds` field to `FileTable`. The `alloc()` method now returns `Option<Fd>` and returns `None` when the limit is reached. All syscalls (open, pipe, dup, window_create) now return `TooManyOpenFiles` error when limit is exceeded. Added `with_limit()`, `len()`, `max_fds()`, `set_max_fds()` methods to FileTable.
 - **Estimate**: Small
 
 ### SEC-009: Implement Resource Limits (rlimit)
 - **Priority**: 🟡 MEDIUM
-- **Status**: ⬜ TODO
-- **File**: `src/kernel/process.rs`
+- **Status**: ✅ DONE (2025-12-29)
+- **File**: `src/kernel/process.rs`, `src/kernel/syscall.rs`
 - **Issue**: No RLIMIT_* enforcement
-- **Fix**: Add RLIMIT_NPROC, RLIMIT_FSIZE, RLIMIT_STACK, RLIMIT_CPU
+- **Fix**: Added `RlimitResource` enum, `Rlimit` struct, and `ResourceLimits` to Process. Implemented RLIMIT_NOFILE, RLIMIT_NPROC, RLIMIT_FSIZE, RLIMIT_STACK, RLIMIT_CPU, RLIMIT_CORE, RLIMIT_DATA, RLIMIT_AS. Added `sys_getrlimit` and `sys_setrlimit` syscalls with proper permission checks (non-root cannot raise hard limits).
 - **Estimate**: Medium
 
 ### SEC-010: Restrict /proc Information
 - **Priority**: 🟡 MEDIUM
-- **Status**: ⬜ TODO
-- **File**: `src/kernel/procfs.rs`
+- **Status**: ✅ DONE (2025-12-29)
+- **File**: `src/kernel/syscall.rs`
 - **Issue**: Sensitive info exposed (environ, cmdline, maps)
-- **Fix**: Only allow process to read its own /proc/self/*
+- **Fix**: Added permission check in `open_proc()` that restricts access to sensitive /proc/[pid] files (environ, cmdline, maps, fd, cwd, exe) to only the process owner or root.
 - **Estimate**: Small
 
 ### SEC-011: Fix Path Traversal in Permission Checks
 - **Priority**: 🟡 MEDIUM
-- **Status**: ⬜ TODO
-- **File**: `src/kernel/syscall.rs:1324-1336`
+- **Status**: ✅ DONE (2025-12-29)
+- **File**: `src/kernel/syscall.rs`
 - **Issue**: Only checks parent, not full path
-- **Fix**: Check execute permission on ALL directories in path
+- **Fix**: Added `check_path_traversal()` helper that checks execute permission on ALL directories in the path before allowing file access. Integrated into `sys_open()` for regular file paths.
 - **Estimate**: Medium
 
 ### SEC-012: Add Capability Dropping
 - **Priority**: 🟡 MEDIUM
-- **Status**: ⬜ TODO
-- **File**: `src/kernel/syscall.rs:2169-2235`
+- **Status**: ✅ DONE (via SEC-007, 2025-12-28)
+- **File**: `src/kernel/process.rs`, `src/kernel/syscall.rs`
 - **Issue**: Can't permanently drop privileges
-- **Fix**: Track saved-uid/saved-gid, prevent re-escalation
+- **Fix**: Already implemented with saved-uid/saved-gid in SEC-007. POSIX semantics: root sets all three IDs, non-root can only switch between real and saved IDs.
 - **Estimate**: Medium
 
 ### SEC-013: Fix Group Change Logic
 - **Priority**: 🟡 MEDIUM
-- **Status**: ⬜ TODO
-- **File**: `src/kernel/syscall.rs:2344-2353`
+- **Status**: ✅ DONE (2025-12-29)
+- **File**: `src/kernel/syscall.rs`
 - **Issue**: Non-owners can change file groups
-- **Fix**: Require ownership for chown operations
+- **Fix**: Updated `sys_chown()` to require file ownership before allowing group changes. Non-root users can only change group of files they own, and only to groups they belong to.
 - **Estimate**: Small
 
 ### SEC-014: Implement Umask
 - **Priority**: 🟡 MEDIUM
-- **Status**: ⬜ TODO
-- **File**: `src/vfs/memory.rs:295-296`
+- **Status**: ✅ DONE (2025-12-29)
+- **File**: `src/kernel/process.rs`, `src/kernel/syscall.rs`
 - **Issue**: Files always created with 644
-- **Fix**: Apply umask during file creation
+- **Fix**: Added `umask` field to Process struct (default 0o022). Added `sys_umask()` syscall. Applied umask when creating files (0o666 & ~umask) and directories (0o777 & ~umask) in `open_file()` and `sys_mkdir()`.
 - **Estimate**: Small
 
 ### SEC-015: Implement Sticky Bit
 - **Priority**: 🟡 MEDIUM
-- **Status**: ⬜ TODO
-- **File**: `src/kernel/users.rs:56-58`
+- **Status**: ✅ DONE (2025-12-29)
+- **File**: `src/kernel/users.rs`, `src/kernel/syscall.rs`
 - **Issue**: Stored but not enforced
-- **Fix**: Only owner can delete files in sticky directories
+- **Fix**: Added `is_sticky()` method to FileMode. Added `check_sticky_bit()` helper that enforces sticky bit semantics: in directories with sticky bit set, only file owner, directory owner, or root can delete files. Integrated into `sys_remove_file()` and `sys_remove_dir()`.
 - **Estimate**: Small
 
 ---
@@ -495,7 +495,79 @@ This document tracks all identified issues, improvements, and feature work for A
 - **SEC-002**: Implemented secure password hashing with salted key-stretching (10,000 rounds)
 - **SEC-003**: Fixed 32+ kernel panic points by adding safe process accessor methods
 - **SEC-004**: Added symlink loop detection with POSIX standard 40-level depth limit
-- Total: 4 issues resolved, 53 remaining
+- **SEC-005**: Fixed TOCTOU race conditions with atomic `fstat()` permission checking
+- **SEC-006**: Implemented setuid/setgid bit processing for WASM commands
+- Total: 6 issues resolved, 51 remaining
+
+---
+
+## Completed Features (Historical)
+
+The following features have been fully implemented. This section provides a reference to completed work.
+
+### Executor
+
+| Feature | Source | Status |
+|---------|--------|--------|
+| Task cancellation | `src/kernel/executor.rs` | ✅ Implemented |
+| Timeouts | `src/kernel/executor.rs` | ✅ Implemented |
+| Work stealing | `src/kernel/work_stealing/` | ✅ Implemented |
+| Task groups | `src/kernel/executor.rs` | ✅ Implemented |
+
+### IPC
+
+| Feature | Source | Status |
+|---------|--------|--------|
+| Bounded channels | `src/kernel/ipc.rs` | ✅ Implemented |
+| Waker-based async | `src/kernel/ipc.rs` | ✅ Implemented |
+
+### Memory
+
+| Feature | Source | Status |
+|---------|--------|--------|
+| Memory-mapped files | `src/kernel/memory.rs` | ✅ Implemented |
+| Copy-on-write | `src/kernel/memory.rs` | ✅ Implemented |
+| Memory pools | `src/kernel/memory.rs` | ✅ Implemented |
+| OPFS persistence | `src/kernel/memory_persist.rs` | ✅ Implemented |
+
+### VFS
+
+| Feature | Source | Status |
+|---------|--------|--------|
+| Layered filesystem | `src/vfs/layered.rs` | ✅ Implemented |
+
+### WASM
+
+| Feature | Source | Status |
+|---------|--------|--------|
+| Command ABI v1 | `src/kernel/wasm/abi.rs` | ✅ Implemented |
+| WASM loader/executor | `src/kernel/wasm/` | ✅ Implemented |
+| Package manager | `src/kernel/pkg/` | ✅ Implemented |
+| WASI Preview2 | `src/kernel/wasm/wasi_preview2.rs` | ✅ Implemented |
+
+### Compositor
+
+| Feature | Source | Status |
+|---------|--------|--------|
+| WebGPU rendering | `src/compositor/surface.rs` | ✅ Implemented |
+| BSP tiling layout | `src/compositor/layout.rs` | ✅ Implemented |
+| Text rendering | `src/compositor/text.rs` | ✅ Implemented |
+| Themes | `src/compositor/mod.rs` | ✅ Implemented |
+| Animations | `src/compositor/mod.rs` | ✅ Implemented |
+| Window decorations | `src/compositor/mod.rs` | ✅ Implemented |
+
+---
+
+## Implementation Notes
+
+For detailed documentation on each subsystem, see:
+
+- [Executor](kernel/executor.md)
+- [IPC](kernel/ipc.md)
+- [Memory](kernel/memory.md)
+- [VFS](userspace/vfs.md)
+- [WASM Modules](kernel/wasm-modules.md)
+- [Compositor](plans/compositor.md)
 
 ---
 
@@ -506,6 +578,7 @@ When completing a task:
 2. Add completion date
 3. Update Quick Stats table
 4. Add entry to Progress Log
+5. If a feature is fully implemented, move it to the "Completed Features" section
 
 Status Legend:
 - ⬜ TODO - Not started

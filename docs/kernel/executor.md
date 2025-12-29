@@ -335,4 +335,4 @@ The Chase-Lev work stealing deque provides:
 - [Kernel Overview](overview.md) - Executor's role in the kernel
 - [Process Model](processes.md) - Process-task relationship
 - [IPC](ipc.md) - Async communication primitives
-- [Future Work](../future-work.md) - Planned enhancements
+- [Work Tracker](../WORK_TRACKER.md) - All work items and planned enhancements
