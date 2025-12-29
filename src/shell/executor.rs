@@ -653,34 +653,28 @@ impl Executor {
                         }
                         last_code = 0;
                     }
-                    BuiltinResult::Alias { name, value } => {
-                        self.state.set_alias(&name, &value);
+                    BuiltinResult::Unset(vars) => {
+                        for var in vars {
+                            self.state.unset_env(&var);
+                        }
                         last_code = 0;
                     }
-                    BuiltinResult::Unalias(name) => {
-                        self.state.remove_alias(&name);
+                    BuiltinResult::SetAlias(pairs) => {
+                        for (name, value) in pairs {
+                            self.state.set_alias(&name, &value);
+                        }
                         last_code = 0;
                     }
-                    BuiltinResult::Source(path) => {
-                        let result = self.source_file(&path);
-                        last_code = result.code;
-                        stdout = result.output;
-                        stderr = result.error;
+                    BuiltinResult::UnsetAlias(names) => {
+                        for name in names {
+                            self.state.unalias(&name);
+                        }
+                        last_code = 0;
                     }
                 }
             } else if let Some(prog) = self.registry.get(&cmd.program) {
                 // Registry program - pass pipe_input as stdin
-                let args_ref: Vec<&str> = expanded_args.iter().map(|s| s.as_str()).collect();
-                match prog.run(&args_ref, &pipe_input) {
-                    Ok(output) => {
-                        stdout = output;
-                        last_code = 0;
-                    }
-                    Err(e) => {
-                        stderr = format!("{}: {}", cmd.program, e);
-                        last_code = 1;
-                    }
-                }
+                last_code = prog(&expanded_args, &pipe_input, &mut stdout, &mut stderr);
             } else if self.is_wasm_command(&cmd.program) {
                 // WASM command - execute async with pipe_input
                 let result = self
