@@ -15,10 +15,10 @@ This document tracks all identified issues, improvements, and feature work for A
 | Security (High) | 5 | 5 | 0 | 0 |
 | Security (Medium) | 8 | 8 | 0 | 0 |
 | Code Quality | 10 | 10 | 0 | 0 |
-| Missing Features | 15 | 8 | 0 | 7 |
+| Missing Features | 15 | 9 | 0 | 6 |
 | Documentation | 5 | 0 | 0 | 5 |
 | Future Features | 12 | 0 | 0 | 12 |
-| **TOTAL** | **57** | **33** | **0** | **24** |
+| **TOTAL** | **57** | **34** | **0** | **23** |
 
 ---
 
@@ -328,10 +328,15 @@ This document tracks all identified issues, improvements, and feature work for A
 
 ### FEAT-009: Complete Semaphores
 - **Priority**: 🟢 LOW
-- **Status**: ⬜ TODO
+- **Status**: ✅ DONE (2025-12-29)
 - **File**: `src/kernel/semaphore.rs`
-- **Issue**: Minimal implementation
-- **Fix**: Full sem_open/sem_wait/sem_post
+- **Issue**: Missing SEM_UNDO support
+- **Fix**: Added SEM_UNDO support for automatic semaphore adjustment on process exit:
+  - Added `SemAdj` struct to track per-process semaphore adjustments
+  - Added `semop_with_undo()` method that records adjustments when SEM_UNDO flag is set
+  - Added `undo_all()` method to reverse adjustments on process exit
+  - Added `sem_adjs` HashMap to SemaphoreManager
+  - Added 4 unit tests for SEM_UNDO functionality
 - **Estimate**: Medium
 
 ### FEAT-010: Unix Domain Sockets
@@ -508,6 +513,12 @@ This document tracks all identified issues, improvements, and feature work for A
 ## Progress Log
 
 ### 2025-12-29 (Phase 5 Continuing)
+- **FEAT-009**: Implemented SEM_UNDO for semaphores:
+  - Added `SemAdj` struct for per-process adjustment tracking
+  - Added `semop_with_undo()` with SEM_UNDO flag support
+  - Added `undo_all()` for automatic cleanup on process exit
+  - Added 4 unit tests
+
 - **FEAT-003**: Implemented file locking (fcntl/flock):
   - Created `FileLockManager` module with advisory locking
   - flock: BSD-style whole-file locks

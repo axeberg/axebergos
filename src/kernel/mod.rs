@@ -69,7 +69,9 @@ pub use pkg::{
 };
 pub use process::{Fd, Handle, OpenFlags, Pid};
 pub use flock::{FileLockManager, LockError, LockType, RangeLock};
-pub use semaphore::{SemError, SemId, SemOpResult, SemSetStats, SemaphoreManager, SemaphoreSet};
+pub use semaphore::{
+    SemAdj, SemError, SemId, SemOpResult, SemSetStats, SemaphoreManager, SemaphoreSet,
+};
 pub use signal::{Signal, SignalAction, SignalError};
 pub use syscall::{SyscallError, SyscallResult};
 pub use task::{Task, TaskId, TaskState};
