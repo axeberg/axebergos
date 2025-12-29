@@ -15,10 +15,10 @@ This document tracks all identified issues, improvements, and feature work for A
 | Security (High) | 5 | 5 | 0 | 0 |
 | Security (Medium) | 8 | 8 | 0 | 0 |
 | Code Quality | 10 | 10 | 0 | 0 |
-| Missing Features | 15 | 7 | 0 | 8 |
+| Missing Features | 15 | 8 | 0 | 7 |
 | Documentation | 5 | 0 | 0 | 5 |
 | Future Features | 12 | 0 | 0 | 12 |
-| **TOTAL** | **57** | **32** | **0** | **25** |
+| **TOTAL** | **57** | **33** | **0** | **24** |
 
 ---
 
@@ -275,10 +275,15 @@ This document tracks all identified issues, improvements, and feature work for A
 
 ### FEAT-003: File Locking (fcntl/flock)
 - **Priority**: 🟡 MEDIUM
-- **Status**: ⬜ TODO
-- **File**: `src/kernel/syscall.rs`
+- **Status**: ✅ DONE (2025-12-29)
+- **File**: `src/kernel/flock.rs`, `src/kernel/syscall.rs`
 - **Issue**: No file locking mechanism
-- **Fix**: Implement advisory and mandatory locks
+- **Fix**: Created `FileLockManager` with two locking interfaces:
+  - `flock()`: BSD-style whole-file locks (shared/exclusive)
+  - `fcntl_lock()/fcntl_getlk()`: POSIX-style byte-range locks
+  - Added to IPC subsystem with 3 syscalls (sys_flock, sys_fcntl_lock, sys_fcntl_getlk)
+  - Implements advisory locking (cooperative, doesn't block actual I/O)
+  - Added 8 unit tests for locking scenarios
 - **Estimate**: Medium
 
 ### FEAT-004: True Fork Semantics
@@ -503,6 +508,13 @@ This document tracks all identified issues, improvements, and feature work for A
 ## Progress Log
 
 ### 2025-12-29 (Phase 5 Continuing)
+- **FEAT-003**: Implemented file locking (fcntl/flock):
+  - Created `FileLockManager` module with advisory locking
+  - flock: BSD-style whole-file locks
+  - fcntl: POSIX-style byte-range locks
+  - Added 3 syscalls: sys_flock, sys_fcntl_lock, sys_fcntl_getlk
+  - Added 8 unit tests for lock conflict scenarios
+
 - **FEAT-008**: Completed message queues with IPC_SET:
   - Added `msgctl_set()` method for changing queue attributes
   - Added `get()` method for permission checking

@@ -15,6 +15,7 @@ pub mod devfs;
 pub mod events;
 pub mod executor;
 pub mod fifo;
+pub mod flock;
 pub mod init;
 pub mod ipc;
 pub mod memory;
@@ -67,6 +68,7 @@ pub use pkg::{
     ResolvedPackage, Version, VersionReq,
 };
 pub use process::{Fd, Handle, OpenFlags, Pid};
+pub use flock::{FileLockManager, LockError, LockType, RangeLock};
 pub use semaphore::{SemError, SemId, SemOpResult, SemSetStats, SemaphoreManager, SemaphoreSet};
 pub use signal::{Signal, SignalAction, SignalError};
 pub use syscall::{SyscallError, SyscallResult};

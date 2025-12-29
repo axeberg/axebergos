@@ -16,6 +16,7 @@
 
 use super::devfs::DevFs;
 use super::fifo::FifoRegistry;
+use super::flock::{FileLockManager, LockError, LockType, RangeLock};
 use super::init::InitSystem;
 use super::memory::{
     MemoryError, MemoryManager, MemoryStats, Protection, RegionId, ShmId, ShmInfo,
@@ -145,6 +146,10 @@ pub enum SyscallNr {
     Msgsnd = 326,
     Msgrcv = 327,
     Msgctl = 328,
+
+    // File Locking (350-359)
+    Flock = 350,
+    Fcntl = 351,
 }
 
 /// Macro to generate syscall name lookup
@@ -251,6 +256,9 @@ syscall_names! {
     Msgsnd => "msgsnd",
     Msgrcv => "msgrcv",
     Msgctl => "msgctl",
+    // File Locking
+    Flock => "flock",
+    Fcntl => "fcntl",
 }
 
 impl std::fmt::Display for SyscallNr {
@@ -459,6 +467,8 @@ pub struct IpcSubsystem {
     pub msgqueues: MsgQueueManager,
     /// Semaphore manager
     pub semaphores: SemaphoreManager,
+    /// File lock manager
+    pub file_locks: FileLockManager,
 }
 
 impl IpcSubsystem {
@@ -467,6 +477,7 @@ impl IpcSubsystem {
             fifos: FifoRegistry::new(),
             msgqueues: MsgQueueManager::new(),
             semaphores: SemaphoreManager::new(),
+            file_locks: FileLockManager::new(),
         }
     }
 }
@@ -2993,6 +3004,189 @@ impl Kernel {
             .msgqueues
             .msgctl_set(MsgQueueId(queue_id), uid, gid, mode, max_bytes)
             .map_err(|_| SyscallError::NotFound)
+    }
+
+    // ========== FILE LOCKING SYSCALLS ==========
+
+    /// flock - apply or remove an advisory lock on an open file
+    ///
+    /// # Arguments
+    /// * `fd` - File descriptor to lock
+    /// * `operation` - Lock operation:
+    ///   - 0 (LOCK_UN): Unlock
+    ///   - 1 (LOCK_SH): Shared lock
+    ///   - 2 (LOCK_EX): Exclusive lock
+    ///   - Add 4 (LOCK_NB) for non-blocking
+    ///
+    /// # Returns
+    /// () on success
+    pub fn sys_flock(&mut self, fd: Fd, operation: i32) -> SyscallResult<()> {
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .proc
+            .processes
+            .get(&current)
+            .ok_or(SyscallError::NoProcess)?;
+
+        // Get the file path from the fd
+        let path = {
+            let file = process
+                .files
+                .get(fd)
+                .and_then(|h| self.objects.get(h))
+                .ok_or(SyscallError::BadFd)?;
+
+            match file {
+                KernelObject::File(f) => f.path.to_string_lossy().to_string(),
+                _ => return Err(SyscallError::BadFd),
+            }
+        };
+
+        // Parse operation
+        let blocking = operation & 4 == 0; // LOCK_NB = 4
+        let lock_type = match operation & 3 {
+            0 => LockType::Unlock,
+            1 => LockType::Shared,
+            2 => LockType::Exclusive,
+            _ => return Err(SyscallError::InvalidArgument),
+        };
+
+        self.ipc
+            .file_locks
+            .flock(&path, current, lock_type, blocking)
+            .map_err(|e| match e {
+                LockError::WouldBlock => SyscallError::WouldBlock,
+                LockError::InvalidArgument => SyscallError::InvalidArgument,
+                LockError::Deadlock => SyscallError::WouldBlock, // Treat as WouldBlock
+            })
+    }
+
+    /// fcntl F_SETLK/F_SETLKW - set a byte-range lock
+    ///
+    /// # Arguments
+    /// * `fd` - File descriptor
+    /// * `lock_type` - 0=unlock, 1=read lock, 2=write lock
+    /// * `start` - Starting offset
+    /// * `len` - Length (0 = to end of file)
+    /// * `whence` - How to interpret start (0=SET, 1=CUR, 2=END)
+    /// * `blocking` - Wait for lock if blocked
+    ///
+    /// # Returns
+    /// () on success
+    pub fn sys_fcntl_lock(
+        &mut self,
+        fd: Fd,
+        lock_type: i32,
+        start: u64,
+        len: u64,
+        whence: i32,
+        blocking: bool,
+    ) -> SyscallResult<()> {
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .proc
+            .processes
+            .get(&current)
+            .ok_or(SyscallError::NoProcess)?;
+
+        // Get the file path from the fd
+        let path = {
+            let file = process
+                .files
+                .get(fd)
+                .and_then(|h| self.objects.get(h))
+                .ok_or(SyscallError::BadFd)?;
+
+            match file {
+                KernelObject::File(f) => f.path.to_string_lossy().to_string(),
+                _ => return Err(SyscallError::BadFd),
+            }
+        };
+
+        let lt = match lock_type {
+            0 => LockType::Unlock,
+            1 => LockType::Shared,
+            2 => LockType::Exclusive,
+            _ => return Err(SyscallError::InvalidArgument),
+        };
+
+        let lock = RangeLock {
+            pid: current,
+            lock_type: lt,
+            start,
+            len,
+            whence,
+        };
+
+        self.ipc
+            .file_locks
+            .fcntl_lock(&path, current, lock, blocking)
+            .map_err(|e| match e {
+                LockError::WouldBlock => SyscallError::WouldBlock,
+                LockError::InvalidArgument => SyscallError::InvalidArgument,
+                LockError::Deadlock => SyscallError::WouldBlock,
+            })
+    }
+
+    /// fcntl F_GETLK - test if a lock can be placed
+    ///
+    /// Returns information about a conflicting lock, or the input lock
+    /// with type set to UNLOCK if no conflict.
+    pub fn sys_fcntl_getlk(
+        &self,
+        fd: Fd,
+        lock_type: i32,
+        start: u64,
+        len: u64,
+        whence: i32,
+    ) -> SyscallResult<(i32, Pid, u64, u64)> {
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .proc
+            .processes
+            .get(&current)
+            .ok_or(SyscallError::NoProcess)?;
+
+        // Get the file path from the fd
+        let path = {
+            let file = process
+                .files
+                .get(fd)
+                .and_then(|h| self.objects.get(h))
+                .ok_or(SyscallError::BadFd)?;
+
+            match file {
+                KernelObject::File(f) => f.path.to_string_lossy().to_string(),
+                _ => return Err(SyscallError::BadFd),
+            }
+        };
+
+        let lt = match lock_type {
+            0 => LockType::Unlock,
+            1 => LockType::Shared,
+            2 => LockType::Exclusive,
+            _ => return Err(SyscallError::InvalidArgument),
+        };
+
+        let lock = RangeLock {
+            pid: current,
+            lock_type: lt,
+            start,
+            len,
+            whence,
+        };
+
+        match self.ipc.file_locks.get_lock(&path, current, &lock) {
+            Some(conflict) => {
+                let ctype = match conflict.lock_type {
+                    LockType::Unlock => 0,
+                    LockType::Shared => 1,
+                    LockType::Exclusive => 2,
+                };
+                Ok((ctype, conflict.pid, conflict.start, conflict.len))
+            }
+            None => Ok((0, Pid(0), 0, 0)), // No conflict, return UNLOCK
+        }
     }
 
     /// Get process state
