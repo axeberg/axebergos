@@ -141,82 +141,105 @@ pub enum SyscallNr {
     Chown = 311,
 }
 
-impl SyscallNr {
-    /// Get the syscall name (for tracing/debugging)
-    pub fn name(&self) -> &'static str {
-        match self {
-            SyscallNr::Read => "read",
-            SyscallNr::Write => "write",
-            SyscallNr::Open => "open",
-            SyscallNr::Close => "close",
-            SyscallNr::Seek => "seek",
-            SyscallNr::Pipe => "pipe",
-            SyscallNr::Dup => "dup",
-            SyscallNr::Mkdir => "mkdir",
-            SyscallNr::Readdir => "readdir",
-            SyscallNr::Unlink => "unlink",
-            SyscallNr::Rmdir => "rmdir",
-            SyscallNr::Rename => "rename",
-            SyscallNr::Symlink => "symlink",
-            SyscallNr::Readlink => "readlink",
-            SyscallNr::Stat => "stat",
-            SyscallNr::Copy => "copy",
-            SyscallNr::Exit => "exit",
-            SyscallNr::Getpid => "getpid",
-            SyscallNr::Getppid => "getppid",
-            SyscallNr::Spawn => "spawn",
-            SyscallNr::Waitpid => "waitpid",
-            SyscallNr::Getcwd => "getcwd",
-            SyscallNr::Chdir => "chdir",
-            SyscallNr::Getpgid => "getpgid",
-            SyscallNr::Setpgid => "setpgid",
-            SyscallNr::Getenv => "getenv",
-            SyscallNr::Setenv => "setenv",
-            SyscallNr::Unsetenv => "unsetenv",
-            SyscallNr::Environ => "environ",
-            SyscallNr::MemAlloc => "mem_alloc",
-            SyscallNr::MemFree => "mem_free",
-            SyscallNr::MemRead => "mem_read",
-            SyscallNr::MemWrite => "mem_write",
-            SyscallNr::Shmget => "shmget",
-            SyscallNr::Shmat => "shmat",
-            SyscallNr::Shmdt => "shmdt",
-            SyscallNr::ShmSync => "shm_sync",
-            SyscallNr::ShmRefresh => "shm_refresh",
-            SyscallNr::Kill => "kill",
-            SyscallNr::Signal => "signal",
-            SyscallNr::Sigblock => "sigblock",
-            SyscallNr::Sigunblock => "sigunblock",
-            SyscallNr::Sigpending => "sigpending",
-            SyscallNr::TimerSet => "timer_set",
-            SyscallNr::TimerInterval => "timer_interval",
-            SyscallNr::TimerCancel => "timer_cancel",
-            SyscallNr::Alarm => "alarm",
-            SyscallNr::Now => "now",
-            SyscallNr::Ioctl => "ioctl",
-            SyscallNr::WindowCreate => "window_create",
-            SyscallNr::TraceEnable => "trace_enable",
-            SyscallNr::TraceDisable => "trace_disable",
-            SyscallNr::TraceSummary => "trace_summary",
-            SyscallNr::Getuid => "getuid",
-            SyscallNr::Geteuid => "geteuid",
-            SyscallNr::Getgid => "getgid",
-            SyscallNr::Getegid => "getegid",
-            SyscallNr::Setuid => "setuid",
-            SyscallNr::Seteuid => "seteuid",
-            SyscallNr::Setgid => "setgid",
-            SyscallNr::Setegid => "setegid",
-            SyscallNr::Getgroups => "getgroups",
-            SyscallNr::Setgroups => "setgroups",
-            SyscallNr::Chmod => "chmod",
-            SyscallNr::Chown => "chown",
-        }
-    }
+/// Macro to generate syscall name lookup
+///
+/// This reduces the repetitive match statement by using a const array lookup.
+/// Each syscall variant maps to its lowercase string name.
+macro_rules! syscall_names {
+    ($($variant:ident => $name:expr),* $(,)?) => {
+        impl SyscallNr {
+            /// Get the syscall name (for tracing/debugging)
+            pub fn name(&self) -> &'static str {
+                match self {
+                    $(SyscallNr::$variant => $name,)*
+                }
+            }
 
-    /// Get the syscall number
-    pub fn num(&self) -> u32 {
-        *self as u32
-    }
+            /// Get the syscall number
+            pub fn num(&self) -> u32 {
+                *self as u32
+            }
+        }
+    };
+}
+
+// Define syscall names using the macro
+syscall_names! {
+    // File I/O
+    Read => "read",
+    Write => "write",
+    Open => "open",
+    Close => "close",
+    Seek => "seek",
+    Pipe => "pipe",
+    Dup => "dup",
+    // Filesystem
+    Mkdir => "mkdir",
+    Readdir => "readdir",
+    Unlink => "unlink",
+    Rmdir => "rmdir",
+    Rename => "rename",
+    Symlink => "symlink",
+    Readlink => "readlink",
+    Stat => "stat",
+    Copy => "copy",
+    // Process
+    Exit => "exit",
+    Getpid => "getpid",
+    Getppid => "getppid",
+    Spawn => "spawn",
+    Waitpid => "waitpid",
+    Getcwd => "getcwd",
+    Chdir => "chdir",
+    Getpgid => "getpgid",
+    Setpgid => "setpgid",
+    // Environment
+    Getenv => "getenv",
+    Setenv => "setenv",
+    Unsetenv => "unsetenv",
+    Environ => "environ",
+    // Memory
+    MemAlloc => "mem_alloc",
+    MemFree => "mem_free",
+    MemRead => "mem_read",
+    MemWrite => "mem_write",
+    Shmget => "shmget",
+    Shmat => "shmat",
+    Shmdt => "shmdt",
+    ShmSync => "shm_sync",
+    ShmRefresh => "shm_refresh",
+    // Signals
+    Kill => "kill",
+    Signal => "signal",
+    Sigblock => "sigblock",
+    Sigunblock => "sigunblock",
+    Sigpending => "sigpending",
+    // Timers
+    TimerSet => "timer_set",
+    TimerInterval => "timer_interval",
+    TimerCancel => "timer_cancel",
+    Alarm => "alarm",
+    Now => "now",
+    // Device/ioctl
+    Ioctl => "ioctl",
+    WindowCreate => "window_create",
+    // Tracing
+    TraceEnable => "trace_enable",
+    TraceDisable => "trace_disable",
+    TraceSummary => "trace_summary",
+    // Users/Security
+    Getuid => "getuid",
+    Geteuid => "geteuid",
+    Getgid => "getgid",
+    Getegid => "getegid",
+    Setuid => "setuid",
+    Seteuid => "seteuid",
+    Setgid => "setgid",
+    Setegid => "setegid",
+    Getgroups => "getgroups",
+    Setgroups => "setgroups",
+    Chmod => "chmod",
+    Chown => "chown",
 }
 
 impl std::fmt::Display for SyscallNr {
@@ -338,6 +361,8 @@ pub enum SyscallError {
     AlreadyExists,
     /// Too many open files (EMFILE)
     TooManyOpenFiles,
+    /// Value too big for data type (E2BIG/EFBIG)
+    TooBig,
 }
 
 impl std::fmt::Display for SyscallError {
@@ -360,6 +385,7 @@ impl std::fmt::Display for SyscallError {
             SyscallError::IsADirectory => write!(f, "is a directory"),
             SyscallError::AlreadyExists => write!(f, "already exists"),
             SyscallError::TooManyOpenFiles => write!(f, "too many open files"),
+            SyscallError::TooBig => write!(f, "value too large for data type"),
         }
     }
 }
@@ -408,48 +434,173 @@ pub struct FileMetadata {
 
 pub type SyscallResult<T> = Result<T, SyscallError>;
 
-/// The kernel state - manages all processes and objects
-pub struct Kernel {
-    /// All processes
-    processes: HashMap<Pid, Process>,
+// ========== KERNEL SUBSYSTEMS ==========
+// The kernel is organized into logical subsystems to reduce complexity
+// and improve maintainability. Each subsystem groups related functionality.
+
+/// IPC Subsystem - manages inter-process communication primitives
+///
+/// Groups: FIFOs (named pipes), message queues, and semaphores
+pub struct IpcSubsystem {
+    /// FIFO registry for named pipes
+    pub fifos: FifoRegistry,
+    /// Message queue manager
+    pub msgqueues: MsgQueueManager,
+    /// Semaphore manager
+    pub semaphores: SemaphoreManager,
+}
+
+impl IpcSubsystem {
+    pub fn new() -> Self {
+        Self {
+            fifos: FifoRegistry::new(),
+            msgqueues: MsgQueueManager::new(),
+            semaphores: SemaphoreManager::new(),
+        }
+    }
+}
+
+impl Default for IpcSubsystem {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Time Subsystem - manages timers and system time
+pub struct TimeSubsystem {
+    /// Timer queue for scheduled events
+    pub timers: TimerQueue,
+    /// Current monotonic time (updated by tick)
+    pub now: f64,
+}
+
+impl TimeSubsystem {
+    pub fn new() -> Self {
+        Self {
+            timers: TimerQueue::new(),
+            now: 0.0,
+        }
+    }
+
+    /// Update the current time
+    pub fn tick(&mut self, now: f64) {
+        self.now = now;
+    }
+}
+
+impl Default for TimeSubsystem {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Virtual Filesystem Subsystem - manages all filesystem-related state
+pub struct VfsSubsystem {
+    /// The main virtual filesystem
+    pub vfs: MemoryFs,
+    /// Map from kernel Handle to VFS FileHandle for open files
+    pub vfs_handles: HashMap<Handle, usize>,
+    /// Proc filesystem handler
+    pub procfs: ProcFs,
+    /// Device filesystem handler
+    pub devfs: DevFs,
+    /// Sysfs handler
+    pub sysfs: SysFs,
+    /// Mount table
+    pub mounts: MountTable,
+}
+
+impl VfsSubsystem {
+    pub fn new(now: f64) -> Self {
+        let mut vfs = MemoryFs::new();
+        // Create standard directories
+        let _ = vfs.create_dir("/dev");
+        let _ = vfs.create_dir("/home");
+        let _ = vfs.create_dir("/home/user");
+        let _ = vfs.create_dir("/tmp");
+        let _ = vfs.create_dir("/etc");
+        let _ = vfs.create_dir("/root");
+
+        Self {
+            vfs,
+            vfs_handles: HashMap::new(),
+            procfs: ProcFs::new(),
+            devfs: DevFs::new(),
+            sysfs: SysFs::new(),
+            mounts: MountTable::with_defaults(now),
+        }
+    }
+}
+
+/// Process Subsystem - manages process lifecycle and scheduling
+pub struct ProcessSubsystem {
+    /// All processes indexed by PID
+    pub processes: HashMap<Pid, Process>,
     /// Next PID to allocate
-    next_pid: u32,
-    /// Global object table
+    pub next_pid: u32,
+    /// The currently running process
+    pub current: Option<Pid>,
+}
+
+impl ProcessSubsystem {
+    pub fn new() -> Self {
+        Self {
+            processes: HashMap::new(),
+            next_pid: 1, // PID 0 is reserved
+            current: None,
+        }
+    }
+
+    /// Allocate a new PID
+    pub fn alloc_pid(&mut self) -> Pid {
+        let pid = Pid(self.next_pid);
+        self.next_pid += 1;
+        pid
+    }
+}
+
+impl Default for ProcessSubsystem {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// The kernel state - manages all processes and objects
+///
+/// Organized into logical subsystems to reduce complexity:
+/// - `proc`: Process management (PIDs, scheduling, lifecycle)
+/// - `fs`: Virtual filesystem (VFS, procfs, devfs, sysfs, mounts)
+/// - `ipc`: Inter-process communication (FIFOs, message queues, semaphores)
+/// - `time`: Timers and system time
+///
+/// Remaining fields are either cross-cutting concerns (memory, tracer)
+/// or singletons (users, init, ttys, objects).
+pub struct Kernel {
+    // ========== SUBSYSTEMS ==========
+    /// Process management subsystem
+    proc: ProcessSubsystem,
+    /// Virtual filesystem subsystem
+    fs: VfsSubsystem,
+    /// IPC subsystem (fifos, msgqueues, semaphores)
+    ipc: IpcSubsystem,
+    /// Time subsystem (timers, now)
+    time: TimeSubsystem,
+
+    // ========== CROSS-CUTTING CONCERNS ==========
+    /// Global object table (handles for files, pipes, windows, etc.)
     objects: ObjectTable,
-    /// The current running process
-    current: Option<Pid>,
-    /// Console object handle (shared by all)
+    /// Console object handle (shared by all processes)
     console_handle: Handle,
-    /// The virtual filesystem
-    vfs: MemoryFs,
-    /// Map from our Handle to VFS FileHandle for open files
-    vfs_handles: HashMap<Handle, usize>,
     /// Memory manager for shared memory and accounting
     memory: MemoryManager,
-    /// Timer queue
-    timers: TimerQueue,
-    /// Current monotonic time (updated by tick)
-    now: f64,
     /// Tracer for instrumentation and debugging
     tracer: Tracer,
+
+    // ========== SINGLETONS ==========
     /// User and group database
     users: UserDb,
-    /// Proc filesystem handler
-    procfs: ProcFs,
-    /// Device filesystem handler
-    devfs: DevFs,
-    /// Sysfs handler
-    sysfs: SysFs,
     /// Init system (service manager)
     init: InitSystem,
-    /// FIFO registry for named pipes
-    fifos: FifoRegistry,
-    /// Message queue manager
-    msgqueues: MsgQueueManager,
-    /// Semaphore manager
-    semaphores: SemaphoreManager,
-    /// Mount table
-    mounts: MountTable,
     /// TTY device manager
     ttys: TtyManager,
 }
@@ -472,37 +623,24 @@ impl Kernel {
         let console = ConsoleObject::new();
         let console_handle = objects.insert(KernelObject::Console(console));
 
-        // Create and initialize the VFS
-        let mut vfs = MemoryFs::new();
-        // Create standard directories
-        let _ = vfs.create_dir("/dev");
-        let _ = vfs.create_dir("/home");
-        let _ = vfs.create_dir("/home/user");
-        let _ = vfs.create_dir("/tmp");
-        let _ = vfs.create_dir("/etc");
-        let _ = vfs.create_dir("/root");
+        // Initialize subsystems
+        let time = TimeSubsystem::new();
+        let fs = VfsSubsystem::new(time.now);
 
         let mut kernel = Self {
-            processes: HashMap::new(),
-            next_pid: 1, // PID 0 is reserved
+            // Subsystems
+            proc: ProcessSubsystem::new(),
+            fs,
+            ipc: IpcSubsystem::new(),
+            time,
+            // Cross-cutting concerns
             objects,
-            current: None,
             console_handle,
-            vfs,
-            vfs_handles: HashMap::new(),
             memory: MemoryManager::new(),
-            timers: TimerQueue::new(),
-            now: 0.0,
             tracer: Tracer::new(),
+            // Singletons
             users: UserDb::new(),
-            procfs: ProcFs::new(),
-            devfs: DevFs::new(),
-            sysfs: SysFs::new(),
             init: InitSystem::new(),
-            fifos: FifoRegistry::new(),
-            msgqueues: MsgQueueManager::new(),
-            semaphores: SemaphoreManager::new(),
-            mounts: MountTable::with_defaults(0.0),
             ttys: TtyManager::new(),
         };
 
@@ -512,17 +650,32 @@ impl Kernel {
         kernel
     }
 
+    // ========== SUBSYSTEM ACCESSORS ==========
+    // These provide backward-compatible access to subsystem fields
+
+    /// Access to the process subsystem
+    #[inline]
+    pub fn proc(&self) -> &ProcessSubsystem {
+        &self.proc
+    }
+
+    /// Mutable access to the process subsystem
+    #[inline]
+    pub fn proc_mut(&mut self) -> &mut ProcessSubsystem {
+        &mut self.proc
+    }
+
     pub fn vfs(&self) -> &MemoryFs {
-        &self.vfs
+        &self.fs.vfs
     }
 
     pub fn vfs_mut(&mut self) -> &mut MemoryFs {
-        &mut self.vfs
+        &mut self.fs.vfs
     }
 
     /// Replace the VFS (for restoring from persistence)
     pub fn set_vfs(&mut self, vfs: MemoryFs) {
-        self.vfs = vfs;
+        self.fs.vfs = vfs;
     }
 
     pub fn init(&self) -> &InitSystem {
@@ -534,35 +687,35 @@ impl Kernel {
     }
 
     pub fn fifos(&self) -> &FifoRegistry {
-        &self.fifos
+        &self.ipc.fifos
     }
 
     pub fn fifos_mut(&mut self) -> &mut FifoRegistry {
-        &mut self.fifos
+        &mut self.ipc.fifos
     }
 
     pub fn msgqueues(&self) -> &MsgQueueManager {
-        &self.msgqueues
+        &self.ipc.msgqueues
     }
 
     pub fn msgqueues_mut(&mut self) -> &mut MsgQueueManager {
-        &mut self.msgqueues
+        &mut self.ipc.msgqueues
     }
 
     pub fn semaphores(&self) -> &SemaphoreManager {
-        &self.semaphores
+        &self.ipc.semaphores
     }
 
     pub fn semaphores_mut(&mut self) -> &mut SemaphoreManager {
-        &mut self.semaphores
+        &mut self.ipc.semaphores
     }
 
     pub fn mounts(&self) -> &MountTable {
-        &self.mounts
+        &self.fs.mounts
     }
 
     pub fn mounts_mut(&mut self) -> &mut MountTable {
-        &mut self.mounts
+        &mut self.fs.mounts
     }
 
     pub fn ttys(&self) -> &TtyManager {
@@ -574,11 +727,15 @@ impl Kernel {
     }
 
     pub fn current_process(&self) -> Option<&Process> {
-        self.current.and_then(|pid| self.processes.get(&pid))
+        self.proc
+            .current
+            .and_then(|pid| self.proc.processes.get(&pid))
     }
 
     pub fn current_process_mut(&mut self) -> Option<&mut Process> {
-        self.current.and_then(|pid| self.processes.get_mut(&pid))
+        self.proc
+            .current
+            .and_then(|pid| self.proc.processes.get_mut(&pid))
     }
 
     /// Get the current process or return an error
@@ -586,8 +743,11 @@ impl Kernel {
     /// This is the safe version of `current_process()` for syscall handlers.
     /// Returns `SyscallError::NoProcess` if no process is running.
     fn get_current_process(&self) -> SyscallResult<&Process> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
-        self.processes.get(&current).ok_or(SyscallError::NoProcess)
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
+        self.proc
+            .processes
+            .get(&current)
+            .ok_or(SyscallError::NoProcess)
     }
 
     /// Get the current process mutably or return an error
@@ -595,25 +755,26 @@ impl Kernel {
     /// This is the safe version of `current_process_mut()` for syscall handlers.
     /// Returns `SyscallError::NoProcess` if no process is running.
     fn get_current_process_mut(&mut self) -> SyscallResult<&mut Process> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
-        self.processes
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
+        self.proc
+            .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)
     }
 
     /// Get the current PID or return an error
     fn get_current_pid(&self) -> SyscallResult<Pid> {
-        self.current.ok_or(SyscallError::NoProcess)
+        self.proc.current.ok_or(SyscallError::NoProcess)
     }
 
     pub fn set_current(&mut self, pid: Pid) {
-        self.current = Some(pid);
+        self.proc.current = Some(pid);
     }
 
     /// Create a new process
     pub fn spawn_process(&mut self, name: &str, parent: Option<Pid>) -> Pid {
-        let pid = Pid(self.next_pid);
-        self.next_pid += 1;
+        let pid = Pid(self.proc.next_pid);
+        self.proc.next_pid += 1;
 
         let mut process = Process::new(pid, name.to_string(), parent);
 
@@ -627,7 +788,7 @@ impl Kernel {
         process.files.insert(Fd::STDOUT, self.console_handle);
         process.files.insert(Fd::STDERR, self.console_handle);
 
-        self.processes.insert(pid, process);
+        self.proc.processes.insert(pid, process);
         pid
     }
 
@@ -643,8 +804,8 @@ impl Kernel {
         shell: &str,
         parent: Option<Pid>,
     ) -> Pid {
-        let pid = Pid(self.next_pid);
-        self.next_pid += 1;
+        let pid = Pid(self.proc.next_pid);
+        self.proc.next_pid += 1;
 
         let shell_name = format!("-{}", shell.rsplit('/').next().unwrap_or("sh"));
         let mut process = Process::new_login_shell(
@@ -676,12 +837,12 @@ impl Kernel {
 
         // Track parent-child relationship
         if let Some(parent_pid) = parent
-            && let Some(parent_proc) = self.processes.get_mut(&parent_pid)
+            && let Some(parent_proc) = self.proc.processes.get_mut(&parent_pid)
         {
             parent_proc.children.push(pid);
         }
 
-        self.processes.insert(pid, process);
+        self.proc.processes.insert(pid, process);
         pid
     }
 
@@ -697,11 +858,11 @@ impl Kernel {
     /// - In parent: child PID
     /// - In child: 0 (simulated, since we return immediately)
     pub fn sys_fork(&mut self) -> SyscallResult<Pid> {
-        let parent_pid = self.current.ok_or(SyscallError::NoProcess)?;
+        let parent_pid = self.proc.current.ok_or(SyscallError::NoProcess)?;
 
         // Allocate child PID
-        let child_pid = Pid(self.next_pid);
-        self.next_pid += 1;
+        let child_pid = Pid(self.proc.next_pid);
+        self.proc.next_pid += 1;
 
         // Create region ID generator for COW memory
         let memory_manager = &self.memory;
@@ -709,6 +870,7 @@ impl Kernel {
 
         // Get parent and fork it
         let parent = self
+            .proc
             .processes
             .get(&parent_pid)
             .ok_or(SyscallError::NoProcess)?;
@@ -724,12 +886,12 @@ impl Kernel {
         }
 
         // Add child to parent's children list
-        if let Some(parent) = self.processes.get_mut(&parent_pid) {
+        if let Some(parent) = self.proc.processes.get_mut(&parent_pid) {
             parent.children.push(child_pid);
         }
 
         // Insert child process
-        self.processes.insert(child_pid, child);
+        self.proc.processes.insert(child_pid, child);
 
         Ok(child_pid)
     }
@@ -763,6 +925,7 @@ impl Kernel {
             None => self.get_current_pid()?,
         };
         let process = self
+            .proc
             .processes
             .get(&target_pid)
             .ok_or(SyscallError::NoProcess)?;
@@ -770,11 +933,11 @@ impl Kernel {
     }
 
     pub fn get_process(&self, pid: Pid) -> Option<&Process> {
-        self.processes.get(&pid)
+        self.proc.processes.get(&pid)
     }
 
     pub fn get_process_mut(&mut self, pid: Pid) -> Option<&mut Process> {
-        self.processes.get_mut(&pid)
+        self.proc.processes.get_mut(&pid)
     }
 
     pub fn console(&mut self) -> Option<&mut ConsoleObject> {
@@ -789,19 +952,19 @@ impl Kernel {
     /// Process a kernel tick - updates timers and returns tasks to wake.
     /// Call this each frame with the current monotonic time (e.g., performance.now()).
     pub fn tick(&mut self, now: f64) -> Vec<TaskId> {
-        self.now = now;
-        self.timers.tick(now)
+        self.time.now = now;
+        self.time.timers.tick(now)
     }
 
     pub fn now(&self) -> f64 {
-        self.now
+        self.time.now
     }
 
     // ========== TRACING ==========
 
     pub fn trace_enable(&mut self) {
         self.tracer.enable();
-        self.tracer.set_start_time(self.now);
+        self.tracer.set_start_time(self.time.now);
     }
 
     pub fn trace_disable(&mut self) {
@@ -813,7 +976,7 @@ impl Kernel {
     }
 
     pub fn trace_summary(&self) -> TraceSummary {
-        self.tracer.summary(self.now)
+        self.tracer.summary(self.time.now)
     }
 
     pub fn tracer(&self) -> &Tracer {
@@ -832,7 +995,7 @@ impl Kernel {
 
     /// Open a file or device
     pub fn sys_open(&mut self, path: &str, flags: OpenFlags) -> SyscallResult<Fd> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
 
         // Resolve path
         let resolved = self.resolve_path(current, path)?;
@@ -853,6 +1016,7 @@ impl Kernel {
 
         // Add to process file table
         let process = self
+            .proc
             .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)?;
@@ -866,26 +1030,26 @@ impl Kernel {
     /// Open a /proc file
     fn open_proc(&mut self, path: &str, current_pid: Pid) -> SyscallResult<Handle> {
         // Get list of PIDs for procfs
-        let pids: Vec<u32> = self.processes.keys().map(|p| p.0).collect();
+        let pids: Vec<u32> = self.proc.processes.keys().map(|p| p.0).collect();
 
         // Check if path exists in procfs
-        if !self.procfs.exists(path, &pids) {
+        if !self.fs.procfs.exists(path, &pids) {
             return Err(SyscallError::NotFound);
         }
 
         // Check if it's a directory
-        if self.procfs.is_dir(path, &pids) {
+        if self.fs.procfs.is_dir(path, &pids) {
             return Err(SyscallError::IsADirectory);
         }
 
         // Generate system context
         let sys_stats = self.memory.system_stats();
         let sys_ctx = SystemContext {
-            uptime_secs: self.now,
+            uptime_secs: self.time.now,
             total_memory: 64 * 1024 * 1024, // 64MB simulated
             used_memory: sys_stats.total_allocated as u64,
             free_memory: 64 * 1024 * 1024 - sys_stats.total_allocated as u64,
-            num_processes: self.processes.len(),
+            num_processes: self.proc.processes.len(),
         };
 
         // Determine which PID the path refers to
@@ -924,8 +1088,7 @@ impl Kernel {
 
         // Generate process context if needed
         let proc_ctx = target_pid.and_then(|pid| {
-            self.processes.get(&pid).map(|p| {
-                let _environ: Vec<(String, String)> = p.environ.clone().into_iter().collect();
+            self.proc.processes.get(&pid).map(|p| {
                 ProcContext {
                     pid: p.pid.0,
                     ppid: p.parent.map(|pp| pp.0),
@@ -953,46 +1116,31 @@ impl Kernel {
             .ok_or(SyscallError::NotFound)?;
 
         // Create a file object with the generated content
-        let file = FileObject {
-            path: PathBuf::from(path),
-            position: 0,
-            data: content,
-            readable: true,
-            writable: false,
-        };
-
-        let handle = self.objects.insert(KernelObject::File(file));
+        let handle = self.create_file_object(PathBuf::from(path), content, true, false);
         Ok(handle)
     }
 
     /// Open a /sys file
     fn open_sysfs(&mut self, path: &str) -> SyscallResult<Handle> {
         // Check if path exists
-        if !self.sysfs.exists(path) {
+        if !self.fs.sysfs.exists(path) {
             return Err(SyscallError::NotFound);
         }
 
         // Check if it's a directory
-        if self.sysfs.is_dir(path) {
+        if self.fs.sysfs.is_dir(path) {
             return Err(SyscallError::IsADirectory);
         }
 
         // Generate content
         let content = self
+            .fs
             .sysfs
             .generate_content(path)
             .ok_or(SyscallError::NotFound)?;
 
         // Create a file object with the generated content
-        let file = FileObject {
-            path: PathBuf::from(path),
-            position: 0,
-            data: content,
-            readable: true,
-            writable: false,
-        };
-
-        let handle = self.objects.insert(KernelObject::File(file));
+        let handle = self.create_file_object(PathBuf::from(path), content, true, false);
         Ok(handle)
     }
 
@@ -1025,8 +1173,8 @@ impl Kernel {
         // If refcount drops to 0, the object is removed
         if let Some(_removed_object) = self.objects.release(handle) {
             // Object was deallocated - clean up VFS handle if present
-            if let Some(vh) = self.vfs_handles.remove(&handle) {
-                let _ = self.vfs.close(vh);
+            if let Some(vh) = self.fs.vfs_handles.remove(&handle) {
+                let _ = self.fs.vfs.close(vh);
             }
         }
 
@@ -1042,7 +1190,7 @@ impl Kernel {
 
     /// Create a pipe (returns read_fd, write_fd)
     pub fn sys_pipe(&mut self) -> SyscallResult<(Fd, Fd)> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
 
         // Create pipe object
         let pipe = PipeObject::new(4096);
@@ -1051,6 +1199,7 @@ impl Kernel {
         // Allocate two fds pointing to same pipe
         // (In a real OS these would be separate read/write ends)
         let process = self
+            .proc
             .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)?;
@@ -1072,7 +1221,7 @@ impl Kernel {
 
     /// Create a window (returns fd for the window)
     pub fn sys_window_create(&mut self, _title: &str) -> SyscallResult<Fd> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
 
         // For now, use a placeholder window ID
         // The compositor integration will make this real
@@ -1083,6 +1232,7 @@ impl Kernel {
         let handle = self.objects.insert(KernelObject::Window(window));
 
         let process = self
+            .proc
             .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)?;
@@ -1124,12 +1274,12 @@ impl Kernel {
 
     /// Change working directory
     pub fn sys_chdir(&mut self, path: &str) -> SyscallResult<()> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
         let resolved = self.resolve_path(current, path)?;
 
         // Verify path exists and is a directory
         let path_str = resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
-        let meta = self.vfs.metadata(path_str)?;
+        let meta = self.fs.vfs.metadata(path_str)?;
         if !meta.is_dir {
             return Err(SyscallError::NotADirectory);
         }
@@ -1138,6 +1288,7 @@ impl Kernel {
         self.check_file_permission(path_str, false, false, true)?;
 
         let process = self
+            .proc
             .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)?;
@@ -1154,7 +1305,7 @@ impl Kernel {
 
     /// Get current process ID
     pub fn sys_getpid(&self) -> SyscallResult<Pid> {
-        self.current.ok_or(SyscallError::NoProcess)
+        self.proc.current.ok_or(SyscallError::NoProcess)
     }
 
     /// Get parent process ID
@@ -1208,11 +1359,12 @@ impl Kernel {
     /// - pid = 0: wait for any child in same process group
     /// - pid < -1: wait for any child in process group |pid|
     pub fn sys_waitpid(&mut self, pid: i32, flags: WaitFlags) -> SyscallResult<(Pid, WaitStatus)> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
 
         // Find matching children
         let children: Vec<Pid> = {
             let parent = self
+                .proc
                 .processes
                 .get(&current)
                 .ok_or(SyscallError::NoProcess)?;
@@ -1224,22 +1376,31 @@ impl Kernel {
                 .filter(|&child_pid| {
                     if pid > 0 {
                         // Wait for specific child
-                        child_pid.0 == pid as u32
+                        // Safe: pid > 0 guarantees positive value fits in u32
+                        u32::try_from(pid)
+                            .map(|p| child_pid.0 == p)
+                            .unwrap_or(false)
                     } else if pid == -1 {
                         // Wait for any child
                         true
                     } else if pid == 0 {
                         // Wait for any child in same process group
-                        self.processes
+                        self.proc
+                            .processes
                             .get(child_pid)
                             .map(|p| p.pgid == pgid)
                             .unwrap_or(false)
                     } else {
                         // Wait for any child in specified process group
-                        let target_pgid = Pgid((-pid) as u32);
-                        self.processes
-                            .get(child_pid)
-                            .map(|p| p.pgid == target_pgid)
+                        // Safe: pid < -1 means -pid > 1, use checked negation for i32::MIN
+                        let target_pgid = pid
+                            .checked_neg()
+                            .and_then(|n| u32::try_from(n).ok())
+                            .map(Pgid);
+                        target_pgid
+                            .and_then(|tpg| {
+                                self.proc.processes.get(child_pid).map(|p| p.pgid == tpg)
+                            })
                             .unwrap_or(false)
                     }
                 })
@@ -1253,14 +1414,14 @@ impl Kernel {
 
         // Look for a child that has changed state
         for child_pid in children {
-            if let Some(child) = self.processes.get(&child_pid) {
+            if let Some(child) = self.proc.processes.get(&child_pid) {
                 match &child.state {
                     ProcessState::Zombie(exit_code) => {
                         let status = WaitStatus::Exited(*exit_code);
                         // Reap the zombie
-                        self.processes.remove(&child_pid);
+                        self.proc.processes.remove(&child_pid);
                         // Remove from parent's children list
-                        if let Some(parent) = self.processes.get_mut(&current) {
+                        if let Some(parent) = self.proc.processes.get_mut(&current) {
                             parent.children.retain(|&p| p != child_pid);
                         }
                         return Ok((child_pid, status));
@@ -1292,17 +1453,22 @@ impl Kernel {
 
     /// Get process group ID
     pub fn sys_getpgid(&self, pid: Pid) -> SyscallResult<Pgid> {
-        let process = self.processes.get(&pid).ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .proc
+            .processes
+            .get(&pid)
+            .ok_or(SyscallError::NoProcess)?;
         Ok(process.pgid)
     }
 
     /// Set process group ID
     pub fn sys_setpgid(&mut self, pid: Pid, pgid: Pgid) -> SyscallResult<()> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
 
         // Can only setpgid on self or children
         if pid != current {
             let parent = self
+                .proc
                 .processes
                 .get(&current)
                 .ok_or(SyscallError::NoProcess)?;
@@ -1312,6 +1478,7 @@ impl Kernel {
         }
 
         let process = self
+            .proc
             .processes
             .get_mut(&pid)
             .ok_or(SyscallError::NoProcess)?;
@@ -1360,7 +1527,11 @@ impl Kernel {
 
     /// Resolve a path relative to a process's cwd
     fn resolve_path(&self, pid: Pid, path: &str) -> SyscallResult<PathBuf> {
-        let process = self.processes.get(&pid).ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .proc
+            .processes
+            .get(&pid)
+            .ok_or(SyscallError::NoProcess)?;
 
         let path = Path::new(path);
         if path.is_absolute() {
@@ -1382,7 +1553,7 @@ impl Kernel {
         let process = self.get_current_process()?;
 
         // Get file metadata
-        let meta = self.vfs.metadata(path)?;
+        let meta = self.fs.vfs.metadata(path)?;
 
         // Check permission
         let allowed = check_permission(
@@ -1419,7 +1590,7 @@ impl Kernel {
         let process = self.get_current_process()?;
 
         // Get metadata from the opened file handle (not the path)
-        let meta = self.vfs.fstat(vfs_handle)?;
+        let meta = self.fs.vfs.fstat(vfs_handle)?;
 
         // Check permission
         let allowed = check_permission(
@@ -1468,7 +1639,7 @@ impl Kernel {
                     let current_str = current_path.to_string_lossy();
                     if current_str != "/" {
                         // Check if current_path is a directory we need execute permission for
-                        if let Ok(meta) = self.vfs.metadata(&current_str)
+                        if let Ok(meta) = self.fs.vfs.metadata(&current_str)
                             && meta.is_dir
                         {
                             let allowed = check_permission(
@@ -1500,7 +1671,7 @@ impl Kernel {
             && parent != Path::new("/")
         {
             let parent_str = parent.to_string_lossy();
-            if let Ok(meta) = self.vfs.metadata(&parent_str)
+            if let Ok(meta) = self.fs.vfs.metadata(&parent_str)
                 && meta.is_dir
             {
                 let allowed = check_permission(
@@ -1561,7 +1732,7 @@ impl Kernel {
         };
 
         // Get parent directory metadata
-        let parent_meta = self.vfs.metadata(parent)?;
+        let parent_meta = self.fs.vfs.metadata(parent)?;
         let parent_mode = FileMode::new(parent_meta.mode);
 
         // If sticky bit is not set, no restriction
@@ -1577,7 +1748,7 @@ impl Kernel {
         }
 
         // Check if owner of the file being deleted
-        if let Ok(file_meta) = self.vfs.metadata(path)
+        if let Ok(file_meta) = self.fs.vfs.metadata(path)
             && file_meta.uid == process.euid.0
         {
             return Ok(());
@@ -1599,6 +1770,20 @@ impl Kernel {
         Ok(process.egid)
     }
 
+    /// Create a file object and insert it into the kernel object store
+    ///
+    /// This is a helper to reduce duplication across open_device, open_proc, open_sysfs, etc.
+    fn create_file_object(
+        &mut self,
+        path: PathBuf,
+        data: Vec<u8>,
+        readable: bool,
+        writable: bool,
+    ) -> Handle {
+        let file = FileObject::new(path, data, readable, writable);
+        self.objects.insert(KernelObject::File(file))
+    }
+
     /// Open a device (paths starting with /dev/)
     fn open_device(&mut self, path: &Path, _flags: OpenFlags) -> SyscallResult<Handle> {
         let name = path
@@ -1610,22 +1795,17 @@ impl Kernel {
             "console" => Ok(self.console_handle),
             "null" => {
                 // /dev/null - discard all writes, return EOF on read
-                // For now, just return a file object that does nothing special
-                let file = FileObject::new(path.to_path_buf(), Vec::new(), true, true);
-                Ok(self.objects.insert(KernelObject::File(file)))
+                Ok(self.create_file_object(path.to_path_buf(), Vec::new(), true, true))
             }
             "zero" => {
                 // /dev/zero - returns infinite zeros
-                // For now, return a file with some zeros
-                let file = FileObject::new(path.to_path_buf(), vec![0; 4096], true, false);
-                Ok(self.objects.insert(KernelObject::File(file)))
+                Ok(self.create_file_object(path.to_path_buf(), vec![0; 4096], true, false))
             }
             "random" | "urandom" => {
                 // /dev/random and /dev/urandom - return cryptographically secure random bytes
                 // Uses Web Crypto API in WASM environments
                 let random_data = generate_random_bytes(4096);
-                let file = FileObject::new(path.to_path_buf(), random_data, true, false);
-                Ok(self.objects.insert(KernelObject::File(file)))
+                Ok(self.create_file_object(path.to_path_buf(), random_data, true, false))
             }
             _ => Err(SyscallError::NotFound),
         }
@@ -1639,7 +1819,7 @@ impl Kernel {
         let path_str = path.to_str().ok_or(SyscallError::InvalidArgument)?;
 
         // Check if file exists (needed to determine if we're creating a new file)
-        let file_exists = self.vfs.exists(path_str);
+        let file_exists = self.fs.vfs.exists(path_str);
 
         // For new files, check parent directory permission first
         // This must happen before open since the file doesn't exist yet
@@ -1662,7 +1842,7 @@ impl Kernel {
         };
 
         // Open via VFS first (before permission check for TOCTOU safety)
-        let vfs_handle = self.vfs.open(path_str, vfs_opts)?;
+        let vfs_handle = self.fs.vfs.open(path_str, vfs_opts)?;
 
         // For existing files, check permissions AFTER opening (TOCTOU-safe)
         // This uses fstat on the opened handle, not the path that could have changed
@@ -1672,7 +1852,7 @@ impl Kernel {
                 .is_err()
         {
             // Permission denied - close the handle and return error
-            let _ = self.vfs.close(vfs_handle);
+            let _ = self.fs.vfs.close(vfs_handle);
             return Err(SyscallError::PermissionDenied);
         }
 
@@ -1680,28 +1860,29 @@ impl Kernel {
         if !file_exists && flags.create {
             let euid = self.current_euid()?;
             let egid = self.current_egid()?;
-            let _ = self.vfs.chown(path_str, Some(euid.0), Some(egid.0));
+            let _ = self.fs.vfs.chown(path_str, Some(euid.0), Some(egid.0));
 
             // SEC-014: Apply umask to new file mode
             // Default file mode is 0o666, apply umask to get final mode
             let umask = self.get_current_process()?.umask;
             let new_mode = 0o666 & !umask;
-            let _ = self.vfs.chmod(path_str, new_mode);
+            let _ = self.fs.vfs.chmod(path_str, new_mode);
         }
 
         // Read the file contents (using fstat for consistency with atomic open)
-        let meta = self.vfs.fstat(vfs_handle)?;
-        let mut data = vec![0u8; meta.size as usize];
+        let meta = self.fs.vfs.fstat(vfs_handle)?;
+        let file_size = usize::try_from(meta.size).map_err(|_| SyscallError::TooBig)?;
+        let mut data = vec![0u8; file_size];
         if !data.is_empty() {
-            self.vfs.read(vfs_handle, &mut data)?;
+            self.fs.vfs.read(vfs_handle, &mut data)?;
         }
 
         // For append mode, seek to end
         if flags.append {
-            self.vfs.seek(vfs_handle, SeekFrom::End(0))?;
+            self.fs.vfs.seek(vfs_handle, SeekFrom::End(0))?;
         } else {
             // Seek back to start
-            self.vfs.seek(vfs_handle, SeekFrom::Start(0))?;
+            self.fs.vfs.seek(vfs_handle, SeekFrom::Start(0))?;
         }
 
         // Create a FileObject that mirrors the VFS file
@@ -1714,14 +1895,14 @@ impl Kernel {
         let handle = self.objects.insert(KernelObject::File(file));
 
         // Track the VFS handle for sync/close
-        self.vfs_handles.insert(handle, vfs_handle);
+        self.fs.vfs_handles.insert(handle, vfs_handle);
 
         Ok(handle)
     }
 
     /// Sync a file back to the VFS (on close or explicit sync)
     fn sync_file(&mut self, handle: Handle) -> SyscallResult<()> {
-        let vfs_handle = self.vfs_handles.get(&handle).copied();
+        let vfs_handle = self.fs.vfs_handles.get(&handle).copied();
 
         if let Some(vh) = vfs_handle {
             // Get the file data
@@ -1730,14 +1911,14 @@ impl Kernel {
                 let path = file.path.clone();
 
                 // Write back to VFS
-                self.vfs.seek(vh, SeekFrom::Start(0))?;
+                self.fs.vfs.seek(vh, SeekFrom::Start(0))?;
 
                 // Truncate and write
                 let path_str = path.to_str().ok_or(SyscallError::InvalidArgument)?;
 
                 // Close old handle and reopen with truncate
-                let _ = self.vfs.close(vh);
-                let new_vh = self.vfs.open(
+                let _ = self.fs.vfs.close(vh);
+                let new_vh = self.fs.vfs.open(
                     path_str,
                     VfsOpenOptions {
                         read: false,
@@ -1746,8 +1927,8 @@ impl Kernel {
                         truncate: true,
                     },
                 )?;
-                self.vfs.write(new_vh, &data)?;
-                self.vfs_handles.insert(handle, new_vh);
+                self.fs.vfs.write(new_vh, &data)?;
+                self.fs.vfs_handles.insert(handle, new_vh);
             }
         }
         Ok(())
@@ -1755,39 +1936,39 @@ impl Kernel {
 
     /// Create a directory
     pub fn sys_mkdir(&mut self, path: &str) -> SyscallResult<()> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
         let resolved = self.resolve_path(current, path)?;
         let path_str = resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
 
         // Check write/execute permission on parent directory
         self.check_parent_write_permission(path_str)?;
 
-        self.vfs.create_dir(path_str)?;
+        self.fs.vfs.create_dir(path_str)?;
 
         // Set ownership to current user
         let euid = self.current_euid()?;
         let egid = self.current_egid()?;
-        let _ = self.vfs.chown(path_str, Some(euid.0), Some(egid.0));
+        let _ = self.fs.vfs.chown(path_str, Some(euid.0), Some(egid.0));
 
         // SEC-014: Apply umask to new directory mode
         // Default directory mode is 0o777, apply umask to get final mode
         let umask = self.get_current_process()?.umask;
         let new_mode = 0o777 & !umask;
-        let _ = self.vfs.chmod(path_str, new_mode);
+        let _ = self.fs.vfs.chmod(path_str, new_mode);
 
         Ok(())
     }
 
     /// List directory contents
     pub fn sys_readdir(&mut self, path: &str) -> SyscallResult<Vec<String>> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
         let resolved = self.resolve_path(current, path)?;
         let path_str = resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
 
         // Handle /proc directory listings (always readable)
         if ProcFs::is_proc_path(path_str) {
-            let pids: Vec<u32> = self.processes.keys().map(|p| p.0).collect();
-            if let Some(entries) = self.procfs.list_dir(path_str, &pids) {
+            let pids: Vec<u32> = self.proc.processes.keys().map(|p| p.0).collect();
+            if let Some(entries) = self.fs.procfs.list_dir(path_str, &pids) {
                 return Ok(entries);
             }
             return Err(SyscallError::NotFound);
@@ -1795,7 +1976,7 @@ impl Kernel {
 
         // Handle /dev directory listings (always readable)
         if DevFs::is_dev_path(path_str) {
-            if let Some(entries) = self.devfs.list_dir(path_str) {
+            if let Some(entries) = self.fs.devfs.list_dir(path_str) {
                 return Ok(entries);
             }
             return Err(SyscallError::NotFound);
@@ -1803,7 +1984,7 @@ impl Kernel {
 
         // Handle /sys directory listings (always readable)
         if SysFs::is_sys_path(path_str) {
-            if let Some(entries) = self.sysfs.list_dir(path_str) {
+            if let Some(entries) = self.fs.sysfs.list_dir(path_str) {
                 return Ok(entries);
             }
             return Err(SyscallError::NotFound);
@@ -1812,48 +1993,48 @@ impl Kernel {
         // Check read and execute permission on directory
         self.check_file_permission(path_str, true, false, true)?;
 
-        let entries = self.vfs.read_dir(path_str)?;
+        let entries = self.fs.vfs.read_dir(path_str)?;
         Ok(entries.into_iter().map(|e| e.name).collect())
     }
 
     /// Check if a path exists
     pub fn sys_exists(&self, path: &str) -> SyscallResult<bool> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
         let resolved = self.resolve_path(current, path)?;
         let path_str = resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
 
         // Handle /proc paths
         if ProcFs::is_proc_path(path_str) {
-            let pids: Vec<u32> = self.processes.keys().map(|p| p.0).collect();
-            return Ok(self.procfs.exists(path_str, &pids));
+            let pids: Vec<u32> = self.proc.processes.keys().map(|p| p.0).collect();
+            return Ok(self.fs.procfs.exists(path_str, &pids));
         }
 
         // Handle /dev paths
         if DevFs::is_dev_path(path_str) {
-            return Ok(self.devfs.exists(path_str));
+            return Ok(self.fs.devfs.exists(path_str));
         }
 
         // Handle /sys paths
         if SysFs::is_sys_path(path_str) {
-            return Ok(self.sysfs.exists(path_str));
+            return Ok(self.fs.sysfs.exists(path_str));
         }
 
-        Ok(self.vfs.exists(path_str))
+        Ok(self.fs.vfs.exists(path_str))
     }
 
     /// Get file/directory metadata
     pub fn sys_metadata(&self, path: &str) -> SyscallResult<FileMetadata> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
         let resolved = self.resolve_path(current, path)?;
         let path_str = resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
 
         // Handle /proc paths
         if ProcFs::is_proc_path(path_str) {
-            let pids: Vec<u32> = self.processes.keys().map(|p| p.0).collect();
-            if !self.procfs.exists(path_str, &pids) {
+            let pids: Vec<u32> = self.proc.processes.keys().map(|p| p.0).collect();
+            if !self.fs.procfs.exists(path_str, &pids) {
                 return Err(SyscallError::NotFound);
             }
-            let is_dir = self.procfs.is_dir(path_str, &pids);
+            let is_dir = self.fs.procfs.is_dir(path_str, &pids);
             return Ok(FileMetadata {
                 size: 0, // /proc files have dynamic size
                 is_dir,
@@ -1868,10 +2049,10 @@ impl Kernel {
 
         // Handle /dev paths
         if DevFs::is_dev_path(path_str) {
-            if !self.devfs.exists(path_str) {
+            if !self.fs.devfs.exists(path_str) {
                 return Err(SyscallError::NotFound);
             }
-            let is_dir = self.devfs.is_dir(path_str);
+            let is_dir = self.fs.devfs.is_dir(path_str);
             return Ok(FileMetadata {
                 size: 0,
                 is_dir,
@@ -1886,10 +2067,10 @@ impl Kernel {
 
         // Handle /sys paths
         if SysFs::is_sys_path(path_str) {
-            if !self.sysfs.exists(path_str) {
+            if !self.fs.sysfs.exists(path_str) {
                 return Err(SyscallError::NotFound);
             }
-            let is_dir = self.sysfs.is_dir(path_str);
+            let is_dir = self.fs.sysfs.is_dir(path_str);
             return Ok(FileMetadata {
                 size: 0,
                 is_dir,
@@ -1902,7 +2083,7 @@ impl Kernel {
             });
         }
 
-        let meta = self.vfs.metadata(path_str)?;
+        let meta = self.fs.vfs.metadata(path_str)?;
         Ok(FileMetadata {
             size: meta.size,
             is_dir: meta.is_dir,
@@ -1917,7 +2098,7 @@ impl Kernel {
 
     /// Remove a file
     pub fn sys_remove_file(&mut self, path: &str) -> SyscallResult<()> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
         let resolved = self.resolve_path(current, path)?;
         let path_str = resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
 
@@ -1927,13 +2108,13 @@ impl Kernel {
         // SEC-015: Check sticky bit restriction
         self.check_sticky_bit(path_str)?;
 
-        self.vfs.remove_file(path_str)?;
+        self.fs.vfs.remove_file(path_str)?;
         Ok(())
     }
 
     /// Remove a directory (must be empty)
     pub fn sys_remove_dir(&mut self, path: &str) -> SyscallResult<()> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
         let resolved = self.resolve_path(current, path)?;
         let path_str = resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
 
@@ -1943,13 +2124,13 @@ impl Kernel {
         // SEC-015: Check sticky bit restriction
         self.check_sticky_bit(path_str)?;
 
-        self.vfs.remove_dir(path_str)?;
+        self.fs.vfs.remove_dir(path_str)?;
         Ok(())
     }
 
     /// Rename/move a file or directory
     pub fn sys_rename(&mut self, from: &str, to: &str) -> SyscallResult<()> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
         let from_resolved = self.resolve_path(current, from)?;
         let to_resolved = self.resolve_path(current, to)?;
         let from_str = from_resolved
@@ -1961,13 +2142,13 @@ impl Kernel {
         self.check_parent_write_permission(from_str)?;
         self.check_parent_write_permission(to_str)?;
 
-        self.vfs.rename(from_str, to_str)?;
+        self.fs.vfs.rename(from_str, to_str)?;
         Ok(())
     }
 
     /// Copy a file
     pub fn sys_copy_file(&mut self, from: &str, to: &str) -> SyscallResult<u64> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
         let from_resolved = self.resolve_path(current, from)?;
         let to_resolved = self.resolve_path(current, to)?;
         let from_str = from_resolved
@@ -1980,19 +2161,19 @@ impl Kernel {
         // Check write permission on destination parent directory
         self.check_parent_write_permission(to_str)?;
 
-        let size = self.vfs.copy_file(from_str, to_str)?;
+        let size = self.fs.vfs.copy_file(from_str, to_str)?;
 
         // Set ownership of new file to current user
         let euid = self.current_euid()?;
         let egid = self.current_egid()?;
-        let _ = self.vfs.chown(to_str, Some(euid.0), Some(egid.0));
+        let _ = self.fs.vfs.chown(to_str, Some(euid.0), Some(egid.0));
 
         Ok(size)
     }
 
     /// Create a symbolic link
     pub fn sys_symlink(&mut self, target: &str, link_path: &str) -> SyscallResult<()> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
         let link_resolved = self.resolve_path(current, link_path)?;
         let link_str = link_resolved
             .to_str()
@@ -2002,22 +2183,22 @@ impl Kernel {
         self.check_parent_write_permission(link_str)?;
 
         // Target is stored as-is (can be relative or absolute)
-        self.vfs.symlink(target, link_str)?;
+        self.fs.vfs.symlink(target, link_str)?;
 
         // Set ownership of symlink to current user
         let euid = self.current_euid()?;
         let egid = self.current_egid()?;
-        let _ = self.vfs.chown(link_str, Some(euid.0), Some(egid.0));
+        let _ = self.fs.vfs.chown(link_str, Some(euid.0), Some(egid.0));
 
         Ok(())
     }
 
     /// Read the target of a symbolic link
     pub fn sys_read_link(&self, path: &str) -> SyscallResult<String> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
         let resolved = self.resolve_path(current, path)?;
         let path_str = resolved.to_str().ok_or(SyscallError::InvalidArgument)?;
-        let target = self.vfs.read_link(path_str)?;
+        let target = self.fs.vfs.read_link(path_str)?;
         Ok(target)
     }
 
@@ -2025,8 +2206,9 @@ impl Kernel {
 
     /// Allocate a memory region for the current process
     pub fn sys_alloc(&mut self, size: usize, prot: Protection) -> SyscallResult<RegionId> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
         let process = self
+            .proc
             .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)?;
@@ -2039,8 +2221,9 @@ impl Kernel {
 
     /// Free a memory region
     pub fn sys_free(&mut self, region_id: RegionId) -> SyscallResult<()> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
         let process = self
+            .proc
             .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)?;
@@ -2056,8 +2239,9 @@ impl Kernel {
         offset: usize,
         buf: &mut [u8],
     ) -> SyscallResult<usize> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
         let process = self
+            .proc
             .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)?;
@@ -2077,8 +2261,9 @@ impl Kernel {
         offset: usize,
         buf: &[u8],
     ) -> SyscallResult<usize> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
         let process = self
+            .proc
             .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)?;
@@ -2093,13 +2278,13 @@ impl Kernel {
 
     /// Create a shared memory segment
     pub fn sys_shmget(&mut self, size: usize) -> SyscallResult<ShmId> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
         Ok(self.memory.shmget(size, current)?)
     }
 
     /// Attach to a shared memory segment
     pub fn sys_shmat(&mut self, shm_id: ShmId, prot: Protection) -> SyscallResult<RegionId> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
 
         // Get the shared memory region from the manager
         let region = self.memory.shmat(shm_id, current, prot)?;
@@ -2107,6 +2292,7 @@ impl Kernel {
 
         // Attach to the process memory
         let process = self
+            .proc
             .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)?;
@@ -2117,10 +2303,11 @@ impl Kernel {
 
     /// Detach from a shared memory segment
     pub fn sys_shmdt(&mut self, shm_id: ShmId) -> SyscallResult<()> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
 
         // Sync changes back to shared memory before detaching
         let process = self
+            .proc
             .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)?;
@@ -2144,8 +2331,9 @@ impl Kernel {
 
     /// Sync shared memory region (write local changes to shared segment)
     pub fn sys_shm_sync(&mut self, shm_id: ShmId) -> SyscallResult<()> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
         let process = self
+            .proc
             .processes
             .get(&current)
             .ok_or(SyscallError::NoProcess)?;
@@ -2169,13 +2357,14 @@ impl Kernel {
 
     /// Refresh local shared memory region from shared segment
     pub fn sys_shm_refresh(&mut self, shm_id: ShmId) -> SyscallResult<()> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
 
         // Get the latest shared data
         let data = self.memory.shm_read(shm_id)?.to_vec();
 
         // Update local region
         let process = self
+            .proc
             .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)?;
@@ -2205,8 +2394,9 @@ impl Kernel {
 
     /// Get memory stats for current process
     pub fn sys_memstats(&self) -> SyscallResult<MemoryStats> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
         let process = self
+            .proc
             .processes
             .get(&current)
             .ok_or(SyscallError::NoProcess)?;
@@ -2215,8 +2405,9 @@ impl Kernel {
 
     /// Set memory limit for current process
     pub fn sys_set_memlimit(&mut self, limit: usize) -> SyscallResult<()> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
         let process = self
+            .proc
             .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)?;
@@ -2233,12 +2424,12 @@ impl Kernel {
 
     /// Get current kernel time
     pub fn sys_now(&self) -> f64 {
-        self.now
+        self.time.now
     }
 
     /// Set current kernel time (called from runtime with rAF timestamp)
     pub fn set_time(&mut self, now: f64) {
-        self.now = now;
+        self.time.now = now;
     }
 
     /// Schedule a one-shot timer
@@ -2250,7 +2441,10 @@ impl Kernel {
         if delay_ms < 0.0 {
             return Err(SyscallError::InvalidArgument);
         }
-        Ok(self.timers.schedule(delay_ms, self.now, wake_task))
+        Ok(self
+            .time
+            .timers
+            .schedule(delay_ms, self.time.now, wake_task))
     }
 
     /// Schedule a repeating interval timer
@@ -2263,39 +2457,41 @@ impl Kernel {
             return Err(SyscallError::InvalidArgument);
         }
         Ok(self
+            .time
             .timers
-            .schedule_interval(interval_ms, self.now, wake_task))
+            .schedule_interval(interval_ms, self.time.now, wake_task))
     }
 
     /// Cancel a timer
     pub fn sys_timer_cancel(&mut self, timer_id: TimerId) -> SyscallResult<bool> {
-        Ok(self.timers.cancel(timer_id))
+        Ok(self.time.timers.cancel(timer_id))
     }
 
     /// Check if a timer is pending
     pub fn sys_timer_pending(&self, timer_id: TimerId) -> SyscallResult<bool> {
-        Ok(self.timers.is_pending(timer_id))
+        Ok(self.time.timers.is_pending(timer_id))
     }
 
     /// Get time until next timer fires (for sleep optimization)
     pub fn time_until_next_timer(&self) -> Option<f64> {
-        self.timers.time_until_next(self.now)
+        self.time.timers.time_until_next(self.time.now)
     }
 
     /// Get pending timer count
     pub fn pending_timer_count(&self) -> usize {
-        self.timers.pending_count()
+        self.time.timers.pending_count()
     }
 
     /// Tick timers, returning tasks to wake
     pub fn tick_timers(&mut self) -> Vec<TaskId> {
-        self.timers.tick(self.now)
+        self.time.timers.tick(self.time.now)
     }
 
     /// Set an alarm for the current process (SIGALRM after delay)
     pub fn sys_alarm(&mut self, delay_ms: f64) -> SyscallResult<TimerId> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
         let process = self
+            .proc
             .processes
             .get(&current)
             .ok_or(SyscallError::NoProcess)?;
@@ -2308,6 +2504,7 @@ impl Kernel {
     /// Send a signal to a process
     pub fn sys_kill(&mut self, pid: Pid, signal: Signal) -> SyscallResult<()> {
         let process = self
+            .proc
             .processes
             .get_mut(&pid)
             .ok_or(SyscallError::NoProcess)?;
@@ -2329,8 +2526,9 @@ impl Kernel {
         signal: Signal,
         action: SignalAction,
     ) -> SyscallResult<SignalAction> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
         let process = self
+            .proc
             .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)?;
@@ -2343,8 +2541,9 @@ impl Kernel {
 
     /// Block a signal for current process
     pub fn sys_sigblock(&mut self, signal: Signal) -> SyscallResult<()> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
         let process = self
+            .proc
             .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)?;
@@ -2354,8 +2553,9 @@ impl Kernel {
 
     /// Unblock a signal for current process
     pub fn sys_sigunblock(&mut self, signal: Signal) -> SyscallResult<()> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
         let process = self
+            .proc
             .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)?;
@@ -2365,8 +2565,9 @@ impl Kernel {
 
     /// Check if current process has pending signals
     pub fn sys_sigpending(&self) -> SyscallResult<bool> {
-        let current = self.current.ok_or(SyscallError::NoProcess)?;
+        let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
         let process = self
+            .proc
             .processes
             .get(&current)
             .ok_or(SyscallError::NoProcess)?;
@@ -2375,7 +2576,7 @@ impl Kernel {
 
     /// Process pending signals for a process, returns action to take
     pub fn process_signals(&mut self, pid: Pid) -> Option<(Signal, SignalAction)> {
-        let process = self.processes.get_mut(&pid)?;
+        let process = self.proc.processes.get_mut(&pid)?;
 
         // Get next pending signal
         let signal = process.signals.next_pending()?;
@@ -2411,12 +2612,13 @@ impl Kernel {
 
     /// Get process state
     pub fn get_process_state(&self, pid: Pid) -> Option<ProcessState> {
-        self.processes.get(&pid).map(|p| p.state.clone())
+        self.proc.processes.get(&pid).map(|p| p.state.clone())
     }
 
     /// List all processes
     pub fn list_processes(&self) -> Vec<(Pid, String, ProcessState)> {
-        self.processes
+        self.proc
+            .processes
             .values()
             .map(|p| (p.pid, p.name.clone(), p.state.clone()))
             .collect()
@@ -2591,13 +2793,13 @@ impl Kernel {
         let group_content = self.users.to_group();
 
         // Write /etc/passwd (readable by all)
-        let _ = write_string(&mut self.vfs, "/etc/passwd", &passwd_content);
+        let _ = write_string(&mut self.fs.vfs, "/etc/passwd", &passwd_content);
 
         // Write /etc/shadow (readable only by root)
-        let _ = write_string(&mut self.vfs, "/etc/shadow", &shadow_content);
+        let _ = write_string(&mut self.fs.vfs, "/etc/shadow", &shadow_content);
 
         // Write /etc/group (readable by all)
-        let _ = write_string(&mut self.vfs, "/etc/group", &group_content);
+        let _ = write_string(&mut self.fs.vfs, "/etc/group", &group_content);
 
         // Note: File permissions would be set here if the VFS supported chmod.
         // For now, the files are created with default permissions.
@@ -2611,7 +2813,7 @@ impl Kernel {
         let mut loaded = false;
 
         // Try to read /etc/passwd
-        if let Ok(content) = read_to_string(&mut self.vfs, "/etc/passwd") {
+        if let Ok(content) = read_to_string(&mut self.fs.vfs, "/etc/passwd") {
             // Clear existing users and parse from files
             self.users = UserDb::empty();
             self.users.parse_passwd(&content);
@@ -2619,12 +2821,12 @@ impl Kernel {
         }
 
         // Try to read /etc/group
-        if let Ok(content) = read_to_string(&mut self.vfs, "/etc/group") {
+        if let Ok(content) = read_to_string(&mut self.fs.vfs, "/etc/group") {
             self.users.parse_group(&content);
         }
 
         // Try to read /etc/shadow (must be after passwd)
-        if let Ok(content) = read_to_string(&mut self.vfs, "/etc/shadow") {
+        if let Ok(content) = read_to_string(&mut self.fs.vfs, "/etc/shadow") {
             self.users.parse_shadow(&content);
         }
 
@@ -2654,14 +2856,14 @@ impl Kernel {
         let euid = process.euid;
 
         // Get file metadata to check ownership
-        let meta = self.vfs.metadata(path)?;
+        let meta = self.fs.vfs.metadata(path)?;
 
         // Only root or file owner can chmod
         if euid.0 != 0 && meta.uid != euid.0 {
             return Err(SyscallError::PermissionDenied);
         }
 
-        self.vfs.chmod(path, mode)?;
+        self.fs.vfs.chmod(path, mode)?;
         Ok(())
     }
 
@@ -2676,7 +2878,7 @@ impl Kernel {
         let euid = process.euid;
 
         // Get file metadata to check ownership
-        let meta = self.vfs.metadata(path)?;
+        let meta = self.fs.vfs.metadata(path)?;
 
         // Only root can change ownership
         if euid != Uid::ROOT {
@@ -2701,7 +2903,7 @@ impl Kernel {
             }
         }
 
-        self.vfs.chown(path, uid, gid)?;
+        self.fs.vfs.chown(path, uid, gid)?;
         Ok(())
     }
 }
@@ -2945,7 +3147,7 @@ pub fn fork() -> SyscallResult<Pid> {
 /// Creates a new session leader with proper credentials and environment
 pub fn spawn_login_shell(username: &str, uid: u32, gid: u32, home: &str, shell: &str) -> Pid {
     KERNEL.with(|k| {
-        let current = k.borrow().current;
+        let current = k.borrow().proc.current;
         k.borrow_mut()
             .spawn_login_shell(username, Uid(uid), Gid(gid), home, shell, current)
     })
@@ -3208,7 +3410,7 @@ pub fn trace_reset() {
 pub fn trace_event(category: TraceCategory, name: &str, detail: Option<&str>) {
     KERNEL.with(|k| {
         let mut kernel = k.borrow_mut();
-        let now = kernel.now;
+        let now = kernel.time.now;
         if let Some(d) = detail {
             kernel.tracer_mut().trace_detail(now, category, name, d);
         } else {
@@ -3696,7 +3898,7 @@ mod tests {
         // Timer should be pending
         KERNEL.with(|k| {
             let kernel = k.borrow();
-            assert!(kernel.timers.is_pending(timer_id));
+            assert!(kernel.time.timers.is_pending(timer_id));
         });
 
         // Cancel it
@@ -3705,7 +3907,7 @@ mod tests {
         // Timer should no longer be pending
         KERNEL.with(|k| {
             let kernel = k.borrow();
-            assert!(!kernel.timers.is_pending(timer_id));
+            assert!(!kernel.time.timers.is_pending(timer_id));
         });
     }
 
@@ -3753,14 +3955,14 @@ mod tests {
             let mut kernel = k.borrow_mut();
             kernel.tick(50.0);
             // Timer should still be pending (it repeats)
-            assert!(kernel.timers.is_pending(timer_id));
+            assert!(kernel.time.timers.is_pending(timer_id));
         });
 
         // Tick at 100 - fires again
         KERNEL.with(|k| {
             let mut kernel = k.borrow_mut();
             kernel.tick(100.0);
-            assert!(kernel.timers.is_pending(timer_id));
+            assert!(kernel.time.timers.is_pending(timer_id));
         });
 
         // Cancel it
@@ -3769,7 +3971,7 @@ mod tests {
         // Timer should not be pending anymore
         KERNEL.with(|k| {
             let kernel = k.borrow();
-            assert!(!kernel.timers.is_pending(timer_id));
+            assert!(!kernel.time.timers.is_pending(timer_id));
         });
     }
 
@@ -3834,7 +4036,7 @@ mod tests {
 
         KERNEL.with(|k| {
             let kernel = k.borrow();
-            let pid = kernel.current.unwrap();
+            let pid = kernel.proc.current.unwrap();
             let process = kernel.get_process(pid).unwrap();
             assert_eq!(
                 process.signals.disposition.get_action(Signal::SIGTERM),
