@@ -36,6 +36,7 @@ use super::task::TaskId;
 use super::timer::{TimerId, TimerQueue};
 use super::trace::{TraceCategory, TraceSummary, Tracer};
 use super::tty::TtyManager;
+use super::uds::{SockAddr, SocketId, SocketResult, SocketType, UnixSocketManager};
 use super::users::{FileMode, Gid, Group, Uid, User, UserDb, check_permission};
 use crate::vfs::{
     FileHandle as VfsFileHandle, FileSystem, MemoryFs, OpenOptions as VfsOpenOptions,
@@ -469,6 +470,8 @@ pub struct IpcSubsystem {
     pub semaphores: SemaphoreManager,
     /// File lock manager
     pub file_locks: FileLockManager,
+    /// Unix domain socket manager
+    pub sockets: UnixSocketManager,
 }
 
 impl IpcSubsystem {
@@ -478,6 +481,7 @@ impl IpcSubsystem {
             msgqueues: MsgQueueManager::new(),
             semaphores: SemaphoreManager::new(),
             file_locks: FileLockManager::new(),
+            sockets: UnixSocketManager::new(),
         }
     }
 }
@@ -3672,6 +3676,82 @@ impl Kernel {
         self.fs.vfs.chown(path, uid, gid)?;
         Ok(())
     }
+
+    // ========== SOCKET SYSCALLS ==========
+
+    /// Create a Unix domain socket
+    pub fn sys_socket(&mut self, socket_type: SocketType) -> SocketId {
+        self.ipc.sockets.socket(socket_type)
+    }
+
+    /// Close a socket
+    pub fn sys_socket_close(&mut self, id: SocketId) -> SocketResult<()> {
+        self.ipc.sockets.close(id)
+    }
+
+    /// Bind a socket to an address
+    pub fn sys_bind(&mut self, id: SocketId, addr: SockAddr) -> SocketResult<()> {
+        self.ipc.sockets.bind(id, addr)
+    }
+
+    /// Listen for connections on a socket
+    pub fn sys_listen(&mut self, id: SocketId, backlog: usize) -> SocketResult<()> {
+        self.ipc.sockets.listen(id, backlog)
+    }
+
+    /// Accept a connection on a socket
+    pub fn sys_accept(&mut self, id: SocketId) -> SocketResult<(SocketId, SockAddr)> {
+        self.ipc.sockets.accept(id)
+    }
+
+    /// Connect a socket to an address
+    pub fn sys_connect(&mut self, id: SocketId, addr: &SockAddr) -> SocketResult<()> {
+        self.ipc.sockets.connect(id, addr)
+    }
+
+    /// Send data on a connected socket
+    pub fn sys_send(&mut self, id: SocketId, data: &[u8]) -> SocketResult<usize> {
+        self.ipc.sockets.send(id, data)
+    }
+
+    /// Receive data from a connected socket
+    pub fn sys_recv(&mut self, id: SocketId) -> SocketResult<Vec<u8>> {
+        self.ipc.sockets.recv(id)
+    }
+
+    /// Send datagram to an address
+    pub fn sys_sendto(
+        &mut self,
+        id: SocketId,
+        data: &[u8],
+        addr: &SockAddr,
+    ) -> SocketResult<usize> {
+        self.ipc.sockets.sendto(id, data, addr)
+    }
+
+    /// Receive datagram
+    pub fn sys_recvfrom(&mut self, id: SocketId) -> SocketResult<(Vec<u8>, Option<SockAddr>)> {
+        self.ipc.sockets.recvfrom(id)
+    }
+
+    /// Set socket to non-blocking mode
+    pub fn sys_socket_set_nonblocking(
+        &mut self,
+        id: SocketId,
+        nonblocking: bool,
+    ) -> SocketResult<()> {
+        self.ipc.sockets.set_nonblocking(id, nonblocking)
+    }
+
+    /// Get socket local address
+    pub fn sys_getsockname(&self, id: SocketId) -> SocketResult<Option<SockAddr>> {
+        self.ipc.sockets.local_addr(id)
+    }
+
+    /// Get socket peer address
+    pub fn sys_getpeername(&self, id: SocketId) -> SocketResult<Option<SockAddr>> {
+        self.ipc.sockets.peer_addr(id)
+    }
 }
 
 impl Default for Kernel {
@@ -4462,6 +4542,73 @@ pub fn get_exec_info() -> SyscallResult<Option<(String, Vec<String>)>> {
 /// Clear exec info from current process (after execution starts)
 pub fn clear_exec_info() -> SyscallResult<()> {
     KERNEL.with(|k| k.borrow_mut().sys_clear_exec_info())
+}
+
+// ========== SOCKET API ==========
+
+/// Create a Unix domain socket
+pub fn socket(socket_type: SocketType) -> SocketId {
+    KERNEL.with(|k| k.borrow_mut().sys_socket(socket_type))
+}
+
+/// Close a Unix domain socket
+pub fn socket_close(id: SocketId) -> SocketResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_socket_close(id))
+}
+
+/// Bind a socket to a path
+pub fn bind(id: SocketId, path: &str) -> SocketResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_bind(id, SockAddr::new(path)))
+}
+
+/// Listen for connections on a socket
+pub fn listen(id: SocketId, backlog: usize) -> SocketResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_listen(id, backlog))
+}
+
+/// Accept a connection on a socket
+pub fn accept(id: SocketId) -> SocketResult<(SocketId, SockAddr)> {
+    KERNEL.with(|k| k.borrow_mut().sys_accept(id))
+}
+
+/// Connect to a Unix domain socket
+pub fn connect(id: SocketId, path: &str) -> SocketResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_connect(id, &SockAddr::new(path)))
+}
+
+/// Send data on a connected socket
+pub fn send(id: SocketId, data: &[u8]) -> SocketResult<usize> {
+    KERNEL.with(|k| k.borrow_mut().sys_send(id, data))
+}
+
+/// Receive data from a connected socket
+pub fn recv(id: SocketId) -> SocketResult<Vec<u8>> {
+    KERNEL.with(|k| k.borrow_mut().sys_recv(id))
+}
+
+/// Send datagram to address
+pub fn sendto(id: SocketId, data: &[u8], path: &str) -> SocketResult<usize> {
+    KERNEL.with(|k| k.borrow_mut().sys_sendto(id, data, &SockAddr::new(path)))
+}
+
+/// Receive datagram with sender address
+pub fn recvfrom(id: SocketId) -> SocketResult<(Vec<u8>, Option<SockAddr>)> {
+    KERNEL.with(|k| k.borrow_mut().sys_recvfrom(id))
+}
+
+/// Set socket non-blocking mode
+pub fn socket_set_nonblocking(id: SocketId, nonblocking: bool) -> SocketResult<()> {
+    KERNEL.with(|k| k.borrow_mut().sys_socket_set_nonblocking(id, nonblocking))
+}
+
+/// Get socket local address
+pub fn getsockname(id: SocketId) -> SocketResult<Option<SockAddr>> {
+    KERNEL.with(|k| k.borrow().sys_getsockname(id))
+}
+
+/// Get socket peer address
+pub fn getpeername(id: SocketId) -> SocketResult<Option<SockAddr>> {
+    KERNEL.with(|k| k.borrow().sys_getpeername(id))
 }
 
 // ========== PERSISTENCE API ==========
@@ -5599,5 +5746,70 @@ mod tests {
         // Child should be zombie with exit code 42
         let state = KERNEL.with(|k| k.borrow().get_process(child_pid).map(|p| p.state.clone()));
         assert_eq!(state, Some(ProcessState::Zombie(42)));
+    }
+
+    #[test]
+    fn test_socket_stream() {
+        setup_test_kernel();
+
+        // Create and bind server socket
+        let server = socket(SocketType::Stream);
+        assert!(bind(server, "/tmp/test_socket.sock").is_ok());
+        assert!(listen(server, 5).is_ok());
+
+        // Create client and connect
+        let client = socket(SocketType::Stream);
+        assert!(connect(client, "/tmp/test_socket.sock").is_ok());
+
+        // Accept connection
+        let (accepted, _addr) = accept(server).unwrap();
+
+        // Send data from client
+        assert_eq!(send(client, b"hello").unwrap(), 5);
+
+        // Receive on accepted socket
+        let data = recv(accepted).unwrap();
+        assert_eq!(data, b"hello");
+
+        // Clean up
+        assert!(socket_close(client).is_ok());
+        assert!(socket_close(accepted).is_ok());
+        assert!(socket_close(server).is_ok());
+    }
+
+    #[test]
+    fn test_socket_datagram() {
+        setup_test_kernel();
+
+        // Create and bind two datagram sockets
+        let sock1 = socket(SocketType::Datagram);
+        assert!(bind(sock1, "/tmp/dgram1.sock").is_ok());
+
+        let sock2 = socket(SocketType::Datagram);
+        assert!(bind(sock2, "/tmp/dgram2.sock").is_ok());
+
+        // Send from sock1 to sock2
+        assert_eq!(sendto(sock1, b"datagram", "/tmp/dgram2.sock").unwrap(), 8);
+
+        // Receive on sock2
+        let (data, _) = recvfrom(sock2).unwrap();
+        assert_eq!(data, b"datagram");
+
+        // Clean up
+        assert!(socket_close(sock1).is_ok());
+        assert!(socket_close(sock2).is_ok());
+    }
+
+    #[test]
+    fn test_socket_getsockname() {
+        setup_test_kernel();
+
+        let sock = socket(SocketType::Stream);
+        assert!(bind(sock, "/tmp/named.sock").is_ok());
+
+        let addr = getsockname(sock).unwrap();
+        assert_eq!(addr.unwrap().path, "/tmp/named.sock");
+
+        socket_close(sock).unwrap();
     }
 }

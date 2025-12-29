@@ -15,10 +15,10 @@ This document tracks all identified issues, improvements, and feature work for A
 | Security (High) | 5 | 5 | 0 | 0 |
 | Security (Medium) | 8 | 8 | 0 | 0 |
 | Code Quality | 10 | 10 | 0 | 0 |
-| Missing Features | 15 | 14 | 0 | 1 |
+| Missing Features | 15 | 15 | 0 | 0 |
 | Documentation | 5 | 0 | 0 | 5 |
 | Future Features | 12 | 0 | 0 | 12 |
-| **TOTAL** | **57** | **39** | **0** | **18** |
+| **TOTAL** | **57** | **40** | **0** | **17** |
 
 ---
 
@@ -353,10 +353,18 @@ This document tracks all identified issues, improvements, and feature work for A
 
 ### FEAT-010: Unix Domain Sockets
 - **Priority**: 🟢 LOW
-- **Status**: ⬜ TODO
-- **File**: New
+- **Status**: ✅ DONE (2025-12-29)
+- **File**: `src/kernel/uds.rs`, `src/kernel/syscall.rs`
 - **Issue**: No local socket IPC
-- **Fix**: Implement AF_UNIX socket family
+- **Fix**: Implemented complete Unix domain socket support:
+  - Added `uds.rs` module with `UnixSocketManager` and `UnixSocket` types
+  - Supports both Stream (connection-oriented) and Datagram (connectionless) sockets
+  - Socket lifecycle: socket() → bind() → listen() → accept()/connect()
+  - Stream operations: send(), recv()
+  - Datagram operations: sendto(), recvfrom()
+  - Address management: getsockname(), getpeername()
+  - Non-blocking mode support
+  - Integrated into IpcSubsystem and kernel syscall interface
 - **Estimate**: Large
 
 ### FEAT-011: Shell Functions

@@ -34,6 +34,7 @@ pub mod task;
 pub mod timer;
 pub mod trace;
 pub mod tty;
+pub mod uds;
 pub mod users;
 pub mod wasm;
 pub mod work_stealing;
@@ -78,6 +79,10 @@ pub use task::{Task, TaskId, TaskState};
 pub use timer::TimerId;
 pub use trace::{TraceCategory, TraceEvent, TraceSummary, Tracer};
 pub use tty::{Termios, Tty, TtyManager};
+pub use uds::{
+    SockAddr, SocketError, SocketId, SocketResult, SocketState, SocketType, UnixSocket,
+    UnixSocketManager,
+};
 pub use users::{FileMode, Gid, Group, Uid, User, UserDb};
 pub use work_stealing::{
     Config as WorkStealingConfig, Injector, StealResult, Stealer, TaskHandle, WorkStealingExecutor,
