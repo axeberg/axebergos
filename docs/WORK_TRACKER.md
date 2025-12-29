@@ -14,11 +14,11 @@ This document tracks all identified issues, improvements, and feature work for A
 | Security (Critical) | 2 | 2 | 0 | 0 |
 | Security (High) | 5 | 5 | 0 | 0 |
 | Security (Medium) | 8 | 8 | 0 | 0 |
-| Code Quality | 10 | 9 | 0 | 1 |
+| Code Quality | 10 | 10 | 0 | 0 |
 | Missing Features | 15 | 0 | 0 | 15 |
 | Documentation | 5 | 0 | 0 | 5 |
 | Future Features | 12 | 0 | 0 | 12 |
-| **TOTAL** | **57** | **24** | **0** | **33** |
+| **TOTAL** | **57** | **25** | **0** | **32** |
 
 ---
 
@@ -158,12 +158,17 @@ This document tracks all identified issues, improvements, and feature work for A
 
 ### CQ-001: Refactor Kernel God Object
 - **Priority**: 🟡 MEDIUM
-- **Status**: ⬜ TODO
-- **File**: `src/kernel/syscall.rs:401-444`
+- **Status**: ✅ DONE (2025-12-29)
+- **File**: `src/kernel/syscall.rs`
 - **Issue**: Kernel struct has 19 fields
-- **Fix**: Split into subsystems (ProcessManager, VfsManager, etc.)
+- **Fix**: Refactored into 4 logical subsystems:
+  - `ProcessSubsystem`: processes, next_pid, current
+  - `VfsSubsystem`: vfs, vfs_handles, procfs, devfs, sysfs, mounts
+  - `IpcSubsystem`: fifos, msgqueues, semaphores
+  - `TimeSubsystem`: timers, now
+
+  Kernel now has 11 fields (down from 20+) with clear groupings.
 - **Estimate**: Large
-- **Note**: Deferred to future phase - requires careful architectural planning
 
 ### CQ-002: Extract File Opening Helper
 - **Priority**: 🟢 LOW
@@ -489,7 +494,13 @@ This document tracks all identified issues, improvements, and feature work for A
 
 ## Progress Log
 
-### 2025-12-29 (Phase 4)
+### 2025-12-29 (Phase 4 Complete!)
+- **CQ-001**: Refactored Kernel God Object into 4 subsystems:
+  - `ProcessSubsystem`: process lifecycle and scheduling
+  - `VfsSubsystem`: virtual filesystem management
+  - `IpcSubsystem`: FIFOs, message queues, semaphores
+  - `TimeSubsystem`: timers and system time
+  - Reduced Kernel from 20+ fields to 11 with clear organization
 - **CQ-002**: Extracted `create_file_object()` helper to reduce file opening duplication
 - **CQ-003**: Fixed unsafe integer casts with `try_from()` and checked arithmetic
 - **CQ-004**: Reviewed complex functions - determined they are well-organized
@@ -499,8 +510,8 @@ This document tracks all identified issues, improvements, and feature work for A
 - **CQ-008**: Fixed production panics in fifo.rs and init.rs
 - **CQ-009**: Implemented full async pipeline support with `execute_piped_async()`, `execute_pipeline_async()`, `execute_command_list_async()`
 - **CQ-010**: Added `FdFlags` and `FD_CLOEXEC` support with `clone_for_exec()`
-- Total: 9 code quality issues resolved (CQ-001 deferred)
-- Phase 4 nearly complete: 24 total issues resolved, 33 remaining
+- **Phase 4 COMPLETE**: All 10 code quality issues resolved
+- Overall: 25 total issues resolved, 32 remaining
 
 ### 2025-12-28
 - Created work tracker document
