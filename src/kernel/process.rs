@@ -136,6 +136,136 @@ impl std::fmt::Display for Sid {
     }
 }
 
+/// Resource limit type (like Linux RLIMIT_*)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum RlimitResource {
+    /// Maximum number of open file descriptors
+    NoFile = 0,
+    /// Maximum number of processes for this user
+    NProc = 1,
+    /// Maximum file size that can be created (bytes)
+    FSize = 2,
+    /// Maximum stack size (bytes)
+    Stack = 3,
+    /// Maximum CPU time (seconds)
+    Cpu = 4,
+    /// Maximum size of core dump file (bytes)
+    Core = 5,
+    /// Maximum data segment size (bytes)
+    Data = 6,
+    /// Maximum address space (bytes)
+    As = 7,
+}
+
+impl RlimitResource {
+    pub fn from_u32(n: u32) -> Option<Self> {
+        match n {
+            0 => Some(RlimitResource::NoFile),
+            1 => Some(RlimitResource::NProc),
+            2 => Some(RlimitResource::FSize),
+            3 => Some(RlimitResource::Stack),
+            4 => Some(RlimitResource::Cpu),
+            5 => Some(RlimitResource::Core),
+            6 => Some(RlimitResource::Data),
+            7 => Some(RlimitResource::As),
+            _ => None,
+        }
+    }
+}
+
+/// A single resource limit with soft and hard values
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rlimit {
+    /// Current (soft) limit - can be raised up to hard limit
+    pub soft: u64,
+    /// Maximum (hard) limit - only root can raise
+    pub hard: u64,
+}
+
+impl Rlimit {
+    pub const INFINITY: u64 = u64::MAX;
+
+    pub fn new(soft: u64, hard: u64) -> Self {
+        Self { soft, hard }
+    }
+
+    pub fn unlimited() -> Self {
+        Self {
+            soft: Self::INFINITY,
+            hard: Self::INFINITY,
+        }
+    }
+}
+
+/// Resource limits for a process (like Linux rlimit)
+#[derive(Debug, Clone)]
+pub struct ResourceLimits {
+    /// Maximum number of open file descriptors (RLIMIT_NOFILE)
+    pub nofile: Rlimit,
+    /// Maximum number of processes for this user (RLIMIT_NPROC)
+    pub nproc: Rlimit,
+    /// Maximum file size (RLIMIT_FSIZE)
+    pub fsize: Rlimit,
+    /// Maximum stack size (RLIMIT_STACK)
+    pub stack: Rlimit,
+    /// Maximum CPU time in seconds (RLIMIT_CPU)
+    pub cpu: Rlimit,
+    /// Maximum core dump size (RLIMIT_CORE)
+    pub core: Rlimit,
+    /// Maximum data segment size (RLIMIT_DATA)
+    pub data: Rlimit,
+    /// Maximum address space (RLIMIT_AS)
+    pub address_space: Rlimit,
+}
+
+impl Default for ResourceLimits {
+    fn default() -> Self {
+        Self {
+            nofile: Rlimit::new(1024, 4096),
+            nproc: Rlimit::new(1024, 4096),
+            fsize: Rlimit::unlimited(),
+            stack: Rlimit::new(8 * 1024 * 1024, Rlimit::INFINITY), // 8MB soft
+            cpu: Rlimit::unlimited(),
+            core: Rlimit::new(0, Rlimit::INFINITY), // Core dumps disabled by default
+            data: Rlimit::unlimited(),
+            address_space: Rlimit::unlimited(),
+        }
+    }
+}
+
+impl ResourceLimits {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn get(&self, resource: RlimitResource) -> Rlimit {
+        match resource {
+            RlimitResource::NoFile => self.nofile,
+            RlimitResource::NProc => self.nproc,
+            RlimitResource::FSize => self.fsize,
+            RlimitResource::Stack => self.stack,
+            RlimitResource::Cpu => self.cpu,
+            RlimitResource::Core => self.core,
+            RlimitResource::Data => self.data,
+            RlimitResource::As => self.address_space,
+        }
+    }
+
+    pub fn set(&mut self, resource: RlimitResource, limit: Rlimit) {
+        match resource {
+            RlimitResource::NoFile => self.nofile = limit,
+            RlimitResource::NProc => self.nproc = limit,
+            RlimitResource::FSize => self.fsize = limit,
+            RlimitResource::Stack => self.stack = limit,
+            RlimitResource::Cpu => self.cpu = limit,
+            RlimitResource::Core => self.core = limit,
+            RlimitResource::Data => self.data = limit,
+            RlimitResource::As => self.address_space = limit,
+        }
+    }
+}
+
 /// A process in the system
 pub struct Process {
     /// Unique process identifier
@@ -186,6 +316,9 @@ pub struct Process {
     /// Signal handling
     pub signals: ProcessSignals,
 
+    /// Resource limits (like Linux rlimit)
+    pub rlimits: ResourceLimits,
+
     /// Environment variables (inherited on spawn, like Linux environ)
     pub environ: HashMap<String, String>,
 
@@ -206,6 +339,10 @@ pub struct Process {
 
     /// Is this process a session leader?
     pub is_session_leader: bool,
+
+    /// File mode creation mask (umask)
+    /// Bits set in umask are cleared from the mode when creating files
+    pub umask: u16,
 }
 
 impl Process {
@@ -244,6 +381,7 @@ impl Process {
             files: FileTable::new(),
             memory: ProcessMemory::new(),
             signals: ProcessSignals::new(),
+            rlimits: ResourceLimits::new(),
             environ,
             cwd: PathBuf::from("/"),
             task: None,
@@ -251,6 +389,7 @@ impl Process {
             children: Vec::new(),
             ctty: None,
             is_session_leader: true, // New processes are session leaders by default
+            umask: 0o022,            // Default umask (files=644, dirs=755)
         }
     }
 
@@ -284,6 +423,7 @@ impl Process {
             files: FileTable::new(),
             memory: ProcessMemory::new(),
             signals: ProcessSignals::new(),
+            rlimits: ResourceLimits::new(),
             environ,
             cwd,
             task: None,
@@ -291,6 +431,7 @@ impl Process {
             children: Vec::new(),
             ctty: None,
             is_session_leader: false,
+            umask: 0o022,
         }
     }
 
@@ -324,6 +465,7 @@ impl Process {
             files: FileTable::new(),
             memory: ProcessMemory::with_limit(limit),
             signals: ProcessSignals::new(),
+            rlimits: ResourceLimits::new(),
             environ,
             cwd: PathBuf::from("/"),
             task: None,
@@ -331,6 +473,7 @@ impl Process {
             children: Vec::new(),
             ctty: None,
             is_session_leader: true,
+            umask: 0o022,
         }
     }
 
@@ -380,6 +523,7 @@ impl Process {
             files: FileTable::new(),
             memory: ProcessMemory::new(),
             signals: ProcessSignals::new(),
+            rlimits: ResourceLimits::new(),
             environ,
             cwd: PathBuf::from(home),
             task: None,
@@ -387,6 +531,7 @@ impl Process {
             children: Vec::new(),
             ctty: Some("tty1".to_string()),
             is_session_leader: true,
+            umask: 0o022,
         }
     }
 
@@ -467,6 +612,7 @@ impl Process {
             files: FileTable::new(), // Caller sets up fds
             memory: child_memory,
             signals: super::signal::ProcessSignals::new(), // Fresh signal state
+            rlimits: self.rlimits.clone(), // Inherit resource limits
             environ: self.environ.clone(),
             cwd: self.cwd.clone(),
             task: None, // Caller sets up task
@@ -474,6 +620,7 @@ impl Process {
             children: Vec::new(), // No children yet
             ctty: self.ctty.clone(),
             is_session_leader: false, // Child is not session leader
+            umask: self.umask,         // Inherit umask
         };
 
         (child, region_mapping)

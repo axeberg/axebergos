@@ -13,12 +13,12 @@ This document tracks all identified issues, improvements, and feature work for A
 |----------|-------|------|-------------|-----------|
 | Security (Critical) | 2 | 2 | 0 | 0 |
 | Security (High) | 5 | 5 | 0 | 0 |
-| Security (Medium) | 8 | 1 | 0 | 7 |
+| Security (Medium) | 8 | 8 | 0 | 0 |
 | Code Quality | 10 | 0 | 0 | 10 |
 | Missing Features | 15 | 0 | 0 | 15 |
 | Documentation | 5 | 0 | 0 | 5 |
 | Future Features | 12 | 0 | 0 | 12 |
-| **TOTAL** | **57** | **8** | **0** | **49** |
+| **TOTAL** | **57** | **15** | **0** | **42** |
 
 ---
 
@@ -98,58 +98,58 @@ This document tracks all identified issues, improvements, and feature work for A
 
 ### SEC-009: Implement Resource Limits (rlimit)
 - **Priority**: 🟡 MEDIUM
-- **Status**: ⬜ TODO
-- **File**: `src/kernel/process.rs`
+- **Status**: ✅ DONE (2025-12-29)
+- **File**: `src/kernel/process.rs`, `src/kernel/syscall.rs`
 - **Issue**: No RLIMIT_* enforcement
-- **Fix**: Add RLIMIT_NPROC, RLIMIT_FSIZE, RLIMIT_STACK, RLIMIT_CPU
+- **Fix**: Added `RlimitResource` enum, `Rlimit` struct, and `ResourceLimits` to Process. Implemented RLIMIT_NOFILE, RLIMIT_NPROC, RLIMIT_FSIZE, RLIMIT_STACK, RLIMIT_CPU, RLIMIT_CORE, RLIMIT_DATA, RLIMIT_AS. Added `sys_getrlimit` and `sys_setrlimit` syscalls with proper permission checks (non-root cannot raise hard limits).
 - **Estimate**: Medium
 
 ### SEC-010: Restrict /proc Information
 - **Priority**: 🟡 MEDIUM
-- **Status**: ⬜ TODO
-- **File**: `src/kernel/procfs.rs`
+- **Status**: ✅ DONE (2025-12-29)
+- **File**: `src/kernel/syscall.rs`
 - **Issue**: Sensitive info exposed (environ, cmdline, maps)
-- **Fix**: Only allow process to read its own /proc/self/*
+- **Fix**: Added permission check in `open_proc()` that restricts access to sensitive /proc/[pid] files (environ, cmdline, maps, fd, cwd, exe) to only the process owner or root.
 - **Estimate**: Small
 
 ### SEC-011: Fix Path Traversal in Permission Checks
 - **Priority**: 🟡 MEDIUM
-- **Status**: ⬜ TODO
-- **File**: `src/kernel/syscall.rs:1324-1336`
+- **Status**: ✅ DONE (2025-12-29)
+- **File**: `src/kernel/syscall.rs`
 - **Issue**: Only checks parent, not full path
-- **Fix**: Check execute permission on ALL directories in path
+- **Fix**: Added `check_path_traversal()` helper that checks execute permission on ALL directories in the path before allowing file access. Integrated into `sys_open()` for regular file paths.
 - **Estimate**: Medium
 
 ### SEC-012: Add Capability Dropping
 - **Priority**: 🟡 MEDIUM
-- **Status**: ⬜ TODO
-- **File**: `src/kernel/syscall.rs:2169-2235`
+- **Status**: ✅ DONE (via SEC-007, 2025-12-28)
+- **File**: `src/kernel/process.rs`, `src/kernel/syscall.rs`
 - **Issue**: Can't permanently drop privileges
-- **Fix**: Track saved-uid/saved-gid, prevent re-escalation
+- **Fix**: Already implemented with saved-uid/saved-gid in SEC-007. POSIX semantics: root sets all three IDs, non-root can only switch between real and saved IDs.
 - **Estimate**: Medium
 
 ### SEC-013: Fix Group Change Logic
 - **Priority**: 🟡 MEDIUM
-- **Status**: ⬜ TODO
-- **File**: `src/kernel/syscall.rs:2344-2353`
+- **Status**: ✅ DONE (2025-12-29)
+- **File**: `src/kernel/syscall.rs`
 - **Issue**: Non-owners can change file groups
-- **Fix**: Require ownership for chown operations
+- **Fix**: Updated `sys_chown()` to require file ownership before allowing group changes. Non-root users can only change group of files they own, and only to groups they belong to.
 - **Estimate**: Small
 
 ### SEC-014: Implement Umask
 - **Priority**: 🟡 MEDIUM
-- **Status**: ⬜ TODO
-- **File**: `src/vfs/memory.rs:295-296`
+- **Status**: ✅ DONE (2025-12-29)
+- **File**: `src/kernel/process.rs`, `src/kernel/syscall.rs`
 - **Issue**: Files always created with 644
-- **Fix**: Apply umask during file creation
+- **Fix**: Added `umask` field to Process struct (default 0o022). Added `sys_umask()` syscall. Applied umask when creating files (0o666 & ~umask) and directories (0o777 & ~umask) in `open_file()` and `sys_mkdir()`.
 - **Estimate**: Small
 
 ### SEC-015: Implement Sticky Bit
 - **Priority**: 🟡 MEDIUM
-- **Status**: ⬜ TODO
-- **File**: `src/kernel/users.rs:56-58`
+- **Status**: ✅ DONE (2025-12-29)
+- **File**: `src/kernel/users.rs`, `src/kernel/syscall.rs`
 - **Issue**: Stored but not enforced
-- **Fix**: Only owner can delete files in sticky directories
+- **Fix**: Added `is_sticky()` method to FileMode. Added `check_sticky_bit()` helper that enforces sticky bit semantics: in directories with sticky bit set, only file owner, directory owner, or root can delete files. Integrated into `sys_remove_file()` and `sys_remove_dir()`.
 - **Estimate**: Small
 
 ---
