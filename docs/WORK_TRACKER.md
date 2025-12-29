@@ -15,10 +15,10 @@ This document tracks all identified issues, improvements, and feature work for A
 | Security (High) | 5 | 5 | 0 | 0 |
 | Security (Medium) | 8 | 8 | 0 | 0 |
 | Code Quality | 10 | 10 | 0 | 0 |
-| Missing Features | 15 | 0 | 0 | 15 |
+| Missing Features | 15 | 1 | 0 | 14 |
 | Documentation | 5 | 0 | 0 | 5 |
 | Future Features | 12 | 0 | 0 | 12 |
-| **TOTAL** | **57** | **25** | **0** | **32** |
+| **TOTAL** | **57** | **26** | **0** | **31** |
 
 ---
 
@@ -251,10 +251,18 @@ This document tracks all identified issues, improvements, and feature work for A
 
 ### FEAT-001: File Timestamps
 - **Priority**: 🟡 MEDIUM
-- **Status**: ⬜ TODO
-- **File**: `src/vfs/memory.rs`
+- **Status**: ✅ DONE (2025-12-29)
+- **File**: `src/vfs/memory.rs`, `src/vfs/mod.rs`, `src/vfs/layered.rs`
 - **Issue**: No atime, mtime, ctime
-- **Fix**: Add timestamp fields to metadata, update on access/modify
+- **Fix**: Added `atime`, `mtime`, `ctime` timestamp fields to `Metadata` and `NodeMeta`. Added `clock` field to `MemoryFs` for time tracking. Timestamps are now updated on:
+  - File/directory/symlink creation: all three timestamps set
+  - File read: atime updated
+  - File write: mtime and ctime updated
+  - File truncate: mtime and ctime updated
+  - chmod/chown: ctime updated
+  - Added `set_clock()` and `utimes()` methods to FileSystem trait
+  - LayeredFs delegates to underlying MemoryFs layers
+  - 10 unit tests added for timestamp functionality
 - **Estimate**: Medium
 
 ### FEAT-002: Hard Links
@@ -493,6 +501,17 @@ This document tracks all identified issues, improvements, and feature work for A
 ---
 
 ## Progress Log
+
+### 2025-12-29 (Phase 5 Started!)
+- **FEAT-001**: Implemented file timestamps (atime, mtime, ctime):
+  - Added timestamp fields to `Metadata` and `NodeMeta` structs
+  - Added `clock` field to `MemoryFs` for tracking current time
+  - Timestamps updated on: file create, read, write, truncate, chmod, chown, mkdir, symlink
+  - Added `set_clock()` method for kernel to set filesystem time
+  - Added `utimes()` method for setting atime/mtime explicitly (touch command support)
+  - Implemented in both `MemoryFs` and `LayeredFs`
+  - Added 10 comprehensive unit tests
+- Overall: 26 total issues resolved, 31 remaining
 
 ### 2025-12-29 (Phase 4 Complete!)
 - **CQ-001**: Refactored Kernel God Object into 4 subsystems:

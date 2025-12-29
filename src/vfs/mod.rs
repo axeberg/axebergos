@@ -78,6 +78,12 @@ pub struct Metadata {
     pub gid: u32,
     /// Unix permission mode (rwxrwxrwx)
     pub mode: u16,
+    /// Access time (last read) in milliseconds since epoch
+    pub atime: f64,
+    /// Modification time (last write to content) in milliseconds since epoch
+    pub mtime: f64,
+    /// Change time (last metadata change) in milliseconds since epoch
+    pub ctime: f64,
 }
 
 impl Default for Metadata {
@@ -91,6 +97,9 @@ impl Default for Metadata {
             uid: 1000, // Default to regular user
             gid: 1000,
             mode: 0o644, // rw-r--r--
+            atime: 0.0,
+            mtime: 0.0,
+            ctime: 0.0,
         }
     }
 }
@@ -166,6 +175,16 @@ pub trait FileSystem {
     ///
     /// Returns the canonical path after symlink resolution.
     fn handle_path(&self, handle: FileHandle) -> io::Result<String>;
+
+    /// Set the filesystem clock for timestamp updates
+    ///
+    /// Called by the kernel before operations to ensure timestamps are accurate.
+    fn set_clock(&mut self, now: f64);
+
+    /// Update access and modification times (utimes/touch)
+    ///
+    /// If atime or mtime is None, the current clock time is used.
+    fn utimes(&mut self, path: &str, atime: Option<f64>, mtime: Option<f64>) -> io::Result<()>;
 }
 
 /// Convenience wrapper for reading entire file to string

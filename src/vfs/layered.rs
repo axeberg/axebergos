@@ -858,6 +858,32 @@ impl FileSystem for LayeredFs {
             Layer::Lower => self.lower.handle_path(layer_handle.inner_handle),
         }
     }
+
+    fn set_clock(&mut self, now: f64) {
+        // Set clock on both layers
+        self.upper.set_clock(now);
+        self.lower.set_clock(now);
+    }
+
+    fn utimes(&mut self, path: &str, atime: Option<f64>, mtime: Option<f64>) -> io::Result<()> {
+        let path = Self::normalize_path(path);
+
+        // Check if whited out
+        if self.is_whiteout(&path) {
+            return Err(io::Error::new(io::ErrorKind::NotFound, "Path not found"));
+        }
+
+        // Need to copy up before modifying
+        if !self.upper.exists(&path) && self.lower.exists(&path) {
+            self.copy_up(&path)?;
+        }
+
+        if self.upper.exists(&path) {
+            self.upper.utimes(&path, atime, mtime)
+        } else {
+            Err(io::Error::new(io::ErrorKind::NotFound, "Path not found"))
+        }
+    }
 }
 
 #[cfg(test)]
