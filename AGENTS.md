@@ -9,8 +9,10 @@ This document provides instructions for LLM agents (Claude, GPT, etc.) working o
 ```bash
 cargo fmt
 cargo clippy --lib -- -D warnings
-cargo test --lib
+RUSTFLAGS="-Dwarnings" cargo test --lib
 ```
+
+**IMPORTANT:** The `RUSTFLAGS="-Dwarnings"` is critical - CI uses this flag which turns all warnings into errors. Running `cargo test --lib` without it will miss unused variable warnings and other issues that will fail CI.
 
 Only proceed with `git add` and `git commit` if all three pass. This is **mandatory** - never skip these steps.
 

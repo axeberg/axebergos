@@ -17,8 +17,8 @@ This document tracks all identified issues, improvements, and feature work for A
 | Code Quality | 10 | 10 | 0 | 0 |
 | Missing Features | 15 | 15 | 0 | 0 |
 | Documentation | 5 | 0 | 0 | 5 |
-| Future Features | 12 | 0 | 0 | 12 |
-| **TOTAL** | **57** | **40** | **0** | **17** |
+| Future Features | 12 | 3 | 0 | 9 |
+| **TOTAL** | **57** | **43** | **0** | **14** |
 
 ---
 
@@ -490,8 +490,18 @@ This document tracks all identified issues, improvements, and feature work for A
 
 ### FUT-004: Kernel Visualization
 - **Priority**: 🟢 LOW
-- **Status**: ⬜ TODO
+- **Status**: ✅ DONE (2025-12-29)
+- **File**: `src/kernel/visualizer.rs`
 - **Description**: Real-time view of processes, memory, scheduling
+- **Fix**: Implemented comprehensive kernel visualization module:
+  - `ProcessTree` with parent-child relationships and ASCII rendering
+  - `SystemMemoryView` with bar charts and detailed stats
+  - `ProcessMemoryLayout` with memory region types and hex dump
+  - `SchedulerView` showing task queues by priority level
+  - `ResourceDashboard` with CPU, memory, FD, I/O metrics
+  - `SyscallMonitor` with activity log and frequency analysis
+  - `KernelSnapshot` for complete system state capture
+  - 8 unit tests
 - **Estimate**: Large
 
 ### FUT-005: Terminal Multiplexer
@@ -508,14 +518,38 @@ This document tracks all identified issues, improvements, and feature work for A
 
 ### FUT-007: Built-in Debugger
 - **Priority**: 🟢 LOW
-- **Status**: ⬜ TODO
+- **Status**: ✅ DONE (2025-12-29)
+- **File**: `src/kernel/debugger.rs`
 - **Description**: Step through WASM modules
+- **Fix**: Implemented syscall-level WASM debugger:
+  - `WasmDebugger` with enable/disable and debug target selection
+  - Breakpoints with conditions (pid, argument values, hit count)
+  - Memory watches (access, write, read, change detection)
+  - Step modes: step, step-over, step-out, continue
+  - Execution history with syscall arguments and results
+  - Memory view with hex dump and value parsing
+  - Syscall argument interpretation (fd, path, flags, pointers)
+  - Status rendering and breakpoint list display
+  - 13 unit tests
 - **Estimate**: Large
 
 ### FUT-008: Performance Profiler
 - **Priority**: 🟢 LOW
-- **Status**: ⬜ TODO
+- **Status**: ✅ DONE (2025-12-29)
+- **File**: `src/kernel/profiler.rs`
 - **Description**: CPU and memory analysis tools
+- **Fix**: Implemented comprehensive performance profiler:
+  - `CpuProfile` with task sampling and CPU time tracking
+  - `SyscallProfile` with timing histograms and call rates
+  - `MemoryProfile` with snapshots and allocation tracking
+  - `FlameGraphBuilder` for hierarchical CPU visualization
+  - Profiler state machine (stopped/recording/paused)
+  - Per-process and per-task CPU percentage
+  - Allocation size distribution analysis
+  - COW fault rate tracking
+  - JSON export for external tools
+  - Collapsed stack format for flame graph generation
+  - 10 unit tests
 - **Estimate**: Medium
 
 ### FUT-009: Virtual Network Stack
@@ -545,6 +579,41 @@ This document tracks all identified issues, improvements, and feature work for A
 ---
 
 ## Progress Log
+
+### 2025-12-29 (Phase 7 - Future Features)
+- **FUT-004**: Implemented Kernel Visualization (`src/kernel/visualizer.rs`):
+  - `ProcessTree` with parent-child relationships and ASCII tree rendering
+  - `SystemMemoryView` with bar charts and detailed memory stats
+  - `ProcessMemoryLayout` with memory region types and hex dump view
+  - `SchedulerView` showing task queues organized by priority level
+  - `ResourceDashboard` with CPU, memory, FD, I/O metrics in ASCII UI
+  - `SyscallMonitor` with activity log and frequency table
+  - `KernelSnapshot` combining all views for complete system state
+  - 8 unit tests
+
+- **FUT-007**: Implemented Built-in WASM Debugger (`src/kernel/debugger.rs`):
+  - `WasmDebugger` with syscall-level debugging (practical without bytecode manipulation)
+  - Breakpoints with conditions: pid filter, argument value checks, hit counts
+  - Memory watches: access, write, read, and change detection types
+  - Step modes: step (next syscall), step-over, step-out, continue
+  - Execution history tracking with syscall arguments and results
+  - `MemoryView` with hex dump rendering and value parsing (u8/u16/u32/cstring)
+  - Syscall argument interpretation (fd, path, flags, pointers, sizes)
+  - Status and breakpoint list rendering for UI integration
+  - 13 unit tests
+
+- **FUT-008**: Implemented Performance Profiler (`src/kernel/profiler.rs`):
+  - `CpuProfile` with task sampling and per-process/task CPU time tracking
+  - `SyscallProfile` with timing histograms (0-1ms, 1-10ms, 10-100ms, 100ms+)
+  - `MemoryProfile` with periodic snapshots and allocation event tracking
+  - `FlameGraphBuilder` for hierarchical CPU visualization with collapsed stack export
+  - Profiler state machine: stopped, recording, paused with duration tracking
+  - Allocation size distribution analysis (histogram buckets)
+  - COW fault rate tracking and memory pressure indicators
+  - JSON export format for external tools
+  - 10 unit tests
+
+- Overall: 43 total issues resolved, 14 remaining (5 docs, 9 future features)
 
 ### 2025-12-29 (Phase 5 Continuing)
 - **FEAT-012**: Implemented shell arrays:

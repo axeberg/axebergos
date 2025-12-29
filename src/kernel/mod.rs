@@ -11,6 +11,7 @@
 //! - KernelObject: file, pipe, console, window, etc.
 //! - Syscall: the interface between user code and the kernel
 
+pub mod debugger;
 pub mod devfs;
 pub mod events;
 pub mod executor;
@@ -26,6 +27,7 @@ pub mod object;
 pub mod pkg;
 pub mod process;
 pub mod procfs;
+pub mod profiler;
 pub mod semaphore;
 pub mod signal;
 pub mod syscall;
@@ -36,6 +38,7 @@ pub mod trace;
 pub mod tty;
 pub mod uds;
 pub mod users;
+pub mod visualizer;
 pub mod wasm;
 pub mod work_stealing;
 
@@ -45,6 +48,10 @@ pub mod network;
 #[cfg(test)]
 mod invariants_test;
 
+pub use debugger::{
+    Breakpoint, BreakpointAction, BreakpointCondition, BreakpointId, DebugMode, DebugTarget,
+    DebuggerStatus, MemoryView, MemoryWatch, SyscallArg, SyscallRecord, WasmDebugger, WatchType,
+};
 pub use executor::{Executor, Priority};
 pub use fifo::{FifoBuffer, FifoError, FifoRegistry};
 pub use flock::{FileLockManager, LockError, LockType, RangeLock};
@@ -70,6 +77,11 @@ pub use pkg::{
     ResolvedPackage, Version, VersionReq,
 };
 pub use process::{Fd, Handle, OpenFlags, Pid};
+pub use profiler::{
+    AllocationEvent, AllocationSizeDistribution, CpuProfile, FlameGraphBuilder, FlameNode,
+    MemoryProfile, MemorySnapshot, ProcessMemorySnapshot, ProfileSummary, Profiler, ProfilerState,
+    SyscallProfile, TaskSample, TaskSampleState,
+};
 pub use semaphore::{
     SemAdj, SemError, SemId, SemOpResult, SemSetStats, SemaphoreManager, SemaphoreSet,
 };
@@ -84,6 +96,11 @@ pub use uds::{
     UnixSocketManager,
 };
 pub use users::{FileMode, Gid, Group, Uid, User, UserDb};
+pub use visualizer::{
+    KernelSnapshot, MemoryRegionType, MemoryRegionView, ProcessMemoryLayout, ProcessTree,
+    ProcessTreeNode, ResourceDashboard, ResourceLimitView, SchedulerView, SyscallActivity,
+    SyscallMonitor, SystemMemoryView, TaskView, TaskViewState,
+};
 pub use work_stealing::{
     Config as WorkStealingConfig, Injector, StealResult, Stealer, TaskHandle, WorkStealingExecutor,
     Worker,
