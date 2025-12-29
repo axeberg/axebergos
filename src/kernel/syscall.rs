@@ -904,20 +904,20 @@ impl Kernel {
 
         // SEC-010: Permission check for /proc/[pid]/* access
         // Only allow process to read its own /proc/[pid]/* files, or root can read any
-        if let Some(target) = target_pid {
-            if target != current_pid {
-                // Accessing another process's /proc entries
-                let current_process = self.get_current_process()?;
-                let is_root = current_process.euid == Uid::ROOT;
+        if let Some(target) = target_pid
+            && target != current_pid
+        {
+            // Accessing another process's /proc entries
+            let current_process = self.get_current_process()?;
+            let is_root = current_process.euid == Uid::ROOT;
 
-                if !is_root {
-                    // Check if this is a sensitive file that requires ownership
-                    let sensitive_files = ["environ", "cmdline", "maps", "fd", "cwd", "exe"];
-                    let is_sensitive = sensitive_files.iter().any(|f| path.contains(f));
+            if !is_root {
+                // Check if this is a sensitive file that requires ownership
+                let sensitive_files = ["environ", "cmdline", "maps", "fd", "cwd", "exe"];
+                let is_sensitive = sensitive_files.iter().any(|f| path.contains(f));
 
-                    if is_sensitive {
-                        return Err(SyscallError::PermissionDenied);
-                    }
+                if is_sensitive {
+                    return Err(SyscallError::PermissionDenied);
                 }
             }
         }
@@ -1468,22 +1468,22 @@ impl Kernel {
                     let current_str = current_path.to_string_lossy();
                     if current_str != "/" {
                         // Check if current_path is a directory we need execute permission for
-                        if let Ok(meta) = self.vfs.metadata(&current_str) {
-                            if meta.is_dir {
-                                let allowed = check_permission(
-                                    Uid(meta.uid),
-                                    Gid(meta.gid),
-                                    FileMode::new(meta.mode),
-                                    process.euid,
-                                    process.egid,
-                                    &process.groups,
-                                    false,
-                                    false,
-                                    true, // Need execute to traverse
-                                );
-                                if !allowed {
-                                    return Err(SyscallError::PermissionDenied);
-                                }
+                        if let Ok(meta) = self.vfs.metadata(&current_str)
+                            && meta.is_dir
+                        {
+                            let allowed = check_permission(
+                                Uid(meta.uid),
+                                Gid(meta.gid),
+                                FileMode::new(meta.mode),
+                                process.euid,
+                                process.egid,
+                                &process.groups,
+                                false,
+                                false,
+                                true, // Need execute to traverse
+                            );
+                            if !allowed {
+                                return Err(SyscallError::PermissionDenied);
                             }
                         }
                     }
@@ -1495,26 +1495,27 @@ impl Kernel {
 
         // Check the final directory component if the path is a directory path
         // (for the parent directory of a file)
-        if let Some(parent) = path.parent() {
-            if parent != Path::new("") && parent != Path::new("/") {
-                let parent_str = parent.to_string_lossy();
-                if let Ok(meta) = self.vfs.metadata(&parent_str) {
-                    if meta.is_dir {
-                        let allowed = check_permission(
-                            Uid(meta.uid),
-                            Gid(meta.gid),
-                            FileMode::new(meta.mode),
-                            process.euid,
-                            process.egid,
-                            &process.groups,
-                            false,
-                            false,
-                            true,
-                        );
-                        if !allowed {
-                            return Err(SyscallError::PermissionDenied);
-                        }
-                    }
+        if let Some(parent) = path.parent()
+            && parent != Path::new("")
+            && parent != Path::new("/")
+        {
+            let parent_str = parent.to_string_lossy();
+            if let Ok(meta) = self.vfs.metadata(&parent_str)
+                && meta.is_dir
+            {
+                let allowed = check_permission(
+                    Uid(meta.uid),
+                    Gid(meta.gid),
+                    FileMode::new(meta.mode),
+                    process.euid,
+                    process.egid,
+                    &process.groups,
+                    false,
+                    false,
+                    true,
+                );
+                if !allowed {
+                    return Err(SyscallError::PermissionDenied);
                 }
             }
         }
@@ -1576,10 +1577,10 @@ impl Kernel {
         }
 
         // Check if owner of the file being deleted
-        if let Ok(file_meta) = self.vfs.metadata(path) {
-            if file_meta.uid == process.euid.0 {
-                return Ok(());
-            }
+        if let Ok(file_meta) = self.vfs.metadata(path)
+            && file_meta.uid == process.euid.0
+        {
+            return Ok(());
         }
 
         // Not allowed

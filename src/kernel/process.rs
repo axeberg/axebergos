@@ -612,7 +612,7 @@ impl Process {
             files: FileTable::new(), // Caller sets up fds
             memory: child_memory,
             signals: super::signal::ProcessSignals::new(), // Fresh signal state
-            rlimits: self.rlimits.clone(), // Inherit resource limits
+            rlimits: self.rlimits.clone(),                 // Inherit resource limits
             environ: self.environ.clone(),
             cwd: self.cwd.clone(),
             task: None, // Caller sets up task
@@ -620,7 +620,7 @@ impl Process {
             children: Vec::new(), // No children yet
             ctty: self.ctty.clone(),
             is_session_leader: false, // Child is not session leader
-            umask: self.umask,         // Inherit umask
+            umask: self.umask,        // Inherit umask
         };
 
         (child, region_mapping)
