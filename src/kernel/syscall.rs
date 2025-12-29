@@ -727,11 +727,15 @@ impl Kernel {
     }
 
     pub fn current_process(&self) -> Option<&Process> {
-        self.proc.current.and_then(|pid| self.proc.processes.get(&pid))
+        self.proc
+            .current
+            .and_then(|pid| self.proc.processes.get(&pid))
     }
 
     pub fn current_process_mut(&mut self) -> Option<&mut Process> {
-        self.proc.current.and_then(|pid| self.proc.processes.get_mut(&pid))
+        self.proc
+            .current
+            .and_then(|pid| self.proc.processes.get_mut(&pid))
     }
 
     /// Get the current process or return an error
@@ -740,7 +744,10 @@ impl Kernel {
     /// Returns `SyscallError::NoProcess` if no process is running.
     fn get_current_process(&self) -> SyscallResult<&Process> {
         let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
-        self.proc.processes.get(&current).ok_or(SyscallError::NoProcess)
+        self.proc
+            .processes
+            .get(&current)
+            .ok_or(SyscallError::NoProcess)
     }
 
     /// Get the current process mutably or return an error
@@ -749,7 +756,8 @@ impl Kernel {
     /// Returns `SyscallError::NoProcess` if no process is running.
     fn get_current_process_mut(&mut self) -> SyscallResult<&mut Process> {
         let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
-        self.proc.processes
+        self.proc
+            .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)
     }
@@ -862,7 +870,8 @@ impl Kernel {
 
         // Get parent and fork it
         let parent = self
-            .proc.processes
+            .proc
+            .processes
             .get(&parent_pid)
             .ok_or(SyscallError::NoProcess)?;
 
@@ -916,7 +925,8 @@ impl Kernel {
             None => self.get_current_pid()?,
         };
         let process = self
-            .proc.processes
+            .proc
+            .processes
             .get(&target_pid)
             .ok_or(SyscallError::NoProcess)?;
         Ok(process.sid.0)
@@ -1006,7 +1016,8 @@ impl Kernel {
 
         // Add to process file table
         let process = self
-            .proc.processes
+            .proc
+            .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)?;
         let fd = process
@@ -1123,7 +1134,8 @@ impl Kernel {
 
         // Generate content
         let content = self
-            .fs.sysfs
+            .fs
+            .sysfs
             .generate_content(path)
             .ok_or(SyscallError::NotFound)?;
 
@@ -1187,7 +1199,8 @@ impl Kernel {
         // Allocate two fds pointing to same pipe
         // (In a real OS these would be separate read/write ends)
         let process = self
-            .proc.processes
+            .proc
+            .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)?;
         let read_fd = process
@@ -1219,7 +1232,8 @@ impl Kernel {
         let handle = self.objects.insert(KernelObject::Window(window));
 
         let process = self
-            .proc.processes
+            .proc
+            .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)?;
         let fd = process
@@ -1274,7 +1288,8 @@ impl Kernel {
         self.check_file_permission(path_str, false, false, true)?;
 
         let process = self
-            .proc.processes
+            .proc
+            .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)?;
         process.cwd = resolved;
@@ -1349,7 +1364,8 @@ impl Kernel {
         // Find matching children
         let children: Vec<Pid> = {
             let parent = self
-                .proc.processes
+                .proc
+                .processes
                 .get(&current)
                 .ok_or(SyscallError::NoProcess)?;
             let pgid = parent.pgid;
@@ -1369,7 +1385,8 @@ impl Kernel {
                         true
                     } else if pid == 0 {
                         // Wait for any child in same process group
-                        self.proc.processes
+                        self.proc
+                            .processes
                             .get(child_pid)
                             .map(|p| p.pgid == pgid)
                             .unwrap_or(false)
@@ -1436,7 +1453,11 @@ impl Kernel {
 
     /// Get process group ID
     pub fn sys_getpgid(&self, pid: Pid) -> SyscallResult<Pgid> {
-        let process = self.proc.processes.get(&pid).ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .proc
+            .processes
+            .get(&pid)
+            .ok_or(SyscallError::NoProcess)?;
         Ok(process.pgid)
     }
 
@@ -1447,7 +1468,8 @@ impl Kernel {
         // Can only setpgid on self or children
         if pid != current {
             let parent = self
-                .proc.processes
+                .proc
+                .processes
                 .get(&current)
                 .ok_or(SyscallError::NoProcess)?;
             if !parent.children.contains(&pid) {
@@ -1456,7 +1478,8 @@ impl Kernel {
         }
 
         let process = self
-            .proc.processes
+            .proc
+            .processes
             .get_mut(&pid)
             .ok_or(SyscallError::NoProcess)?;
         process.pgid = pgid;
@@ -1504,7 +1527,11 @@ impl Kernel {
 
     /// Resolve a path relative to a process's cwd
     fn resolve_path(&self, pid: Pid, path: &str) -> SyscallResult<PathBuf> {
-        let process = self.proc.processes.get(&pid).ok_or(SyscallError::NoProcess)?;
+        let process = self
+            .proc
+            .processes
+            .get(&pid)
+            .ok_or(SyscallError::NoProcess)?;
 
         let path = Path::new(path);
         if path.is_absolute() {
@@ -1746,7 +1773,13 @@ impl Kernel {
     /// Create a file object and insert it into the kernel object store
     ///
     /// This is a helper to reduce duplication across open_device, open_proc, open_sysfs, etc.
-    fn create_file_object(&mut self, path: PathBuf, data: Vec<u8>, readable: bool, writable: bool) -> Handle {
+    fn create_file_object(
+        &mut self,
+        path: PathBuf,
+        data: Vec<u8>,
+        readable: bool,
+        writable: bool,
+    ) -> Handle {
         let file = FileObject::new(path, data, readable, writable);
         self.objects.insert(KernelObject::File(file))
     }
@@ -2175,7 +2208,8 @@ impl Kernel {
     pub fn sys_alloc(&mut self, size: usize, prot: Protection) -> SyscallResult<RegionId> {
         let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
         let process = self
-            .proc.processes
+            .proc
+            .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)?;
 
@@ -2189,7 +2223,8 @@ impl Kernel {
     pub fn sys_free(&mut self, region_id: RegionId) -> SyscallResult<()> {
         let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
         let process = self
-            .proc.processes
+            .proc
+            .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)?;
 
@@ -2206,7 +2241,8 @@ impl Kernel {
     ) -> SyscallResult<usize> {
         let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
         let process = self
-            .proc.processes
+            .proc
+            .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)?;
 
@@ -2227,7 +2263,8 @@ impl Kernel {
     ) -> SyscallResult<usize> {
         let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
         let process = self
-            .proc.processes
+            .proc
+            .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)?;
 
@@ -2255,7 +2292,8 @@ impl Kernel {
 
         // Attach to the process memory
         let process = self
-            .proc.processes
+            .proc
+            .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)?;
         process.memory.attach_shm(shm_id, region)?;
@@ -2269,7 +2307,8 @@ impl Kernel {
 
         // Sync changes back to shared memory before detaching
         let process = self
-            .proc.processes
+            .proc
+            .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)?;
 
@@ -2294,7 +2333,8 @@ impl Kernel {
     pub fn sys_shm_sync(&mut self, shm_id: ShmId) -> SyscallResult<()> {
         let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
         let process = self
-            .proc.processes
+            .proc
+            .processes
             .get(&current)
             .ok_or(SyscallError::NoProcess)?;
 
@@ -2324,7 +2364,8 @@ impl Kernel {
 
         // Update local region
         let process = self
-            .proc.processes
+            .proc
+            .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)?;
         let region_id = process
@@ -2355,7 +2396,8 @@ impl Kernel {
     pub fn sys_memstats(&self) -> SyscallResult<MemoryStats> {
         let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
         let process = self
-            .proc.processes
+            .proc
+            .processes
             .get(&current)
             .ok_or(SyscallError::NoProcess)?;
         Ok(process.memory.stats())
@@ -2365,7 +2407,8 @@ impl Kernel {
     pub fn sys_set_memlimit(&mut self, limit: usize) -> SyscallResult<()> {
         let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
         let process = self
-            .proc.processes
+            .proc
+            .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)?;
         process.memory.set_limit(limit);
@@ -2398,7 +2441,10 @@ impl Kernel {
         if delay_ms < 0.0 {
             return Err(SyscallError::InvalidArgument);
         }
-        Ok(self.time.timers.schedule(delay_ms, self.time.now, wake_task))
+        Ok(self
+            .time
+            .timers
+            .schedule(delay_ms, self.time.now, wake_task))
     }
 
     /// Schedule a repeating interval timer
@@ -2411,7 +2457,8 @@ impl Kernel {
             return Err(SyscallError::InvalidArgument);
         }
         Ok(self
-            .time.timers
+            .time
+            .timers
             .schedule_interval(interval_ms, self.time.now, wake_task))
     }
 
@@ -2444,7 +2491,8 @@ impl Kernel {
     pub fn sys_alarm(&mut self, delay_ms: f64) -> SyscallResult<TimerId> {
         let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
         let process = self
-            .proc.processes
+            .proc
+            .processes
             .get(&current)
             .ok_or(SyscallError::NoProcess)?;
         let task = process.task;
@@ -2456,7 +2504,8 @@ impl Kernel {
     /// Send a signal to a process
     pub fn sys_kill(&mut self, pid: Pid, signal: Signal) -> SyscallResult<()> {
         let process = self
-            .proc.processes
+            .proc
+            .processes
             .get_mut(&pid)
             .ok_or(SyscallError::NoProcess)?;
 
@@ -2479,7 +2528,8 @@ impl Kernel {
     ) -> SyscallResult<SignalAction> {
         let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
         let process = self
-            .proc.processes
+            .proc
+            .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)?;
 
@@ -2493,7 +2543,8 @@ impl Kernel {
     pub fn sys_sigblock(&mut self, signal: Signal) -> SyscallResult<()> {
         let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
         let process = self
-            .proc.processes
+            .proc
+            .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)?;
         process.signals.block(signal)?;
@@ -2504,7 +2555,8 @@ impl Kernel {
     pub fn sys_sigunblock(&mut self, signal: Signal) -> SyscallResult<()> {
         let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
         let process = self
-            .proc.processes
+            .proc
+            .processes
             .get_mut(&current)
             .ok_or(SyscallError::NoProcess)?;
         process.signals.unblock(signal);
@@ -2515,7 +2567,8 @@ impl Kernel {
     pub fn sys_sigpending(&self) -> SyscallResult<bool> {
         let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
         let process = self
-            .proc.processes
+            .proc
+            .processes
             .get(&current)
             .ok_or(SyscallError::NoProcess)?;
         Ok(process.signals.has_pending())
@@ -2564,7 +2617,8 @@ impl Kernel {
 
     /// List all processes
     pub fn list_processes(&self) -> Vec<(Pid, String, ProcessState)> {
-        self.proc.processes
+        self.proc
+            .processes
             .values()
             .map(|p| (p.pid, p.name.clone(), p.state.clone()))
             .collect()

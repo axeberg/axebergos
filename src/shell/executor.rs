@@ -683,7 +683,9 @@ impl Executor {
                 }
             } else if self.is_wasm_command(&cmd.program) {
                 // WASM command - execute async with pipe_input
-                let result = self.execute_wasm_command(&cmd.program, &expanded_args, &pipe_input).await;
+                let result = self
+                    .execute_wasm_command(&cmd.program, &expanded_args, &pipe_input)
+                    .await;
                 stdout = result.output;
                 stderr = result.error;
                 last_code = result.code;
