@@ -249,6 +249,48 @@ impl ShellFunction {
     }
 }
 
+/// An array assignment
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArrayAssignment {
+    /// Array name
+    pub name: String,
+    /// Array elements (for definition) or single value (for element assignment)
+    pub elements: Vec<String>,
+    /// If Some, this is an element assignment at the given index
+    pub index: Option<usize>,
+    /// If true, append to array instead of replace
+    pub append: bool,
+}
+
+impl ArrayAssignment {
+    pub fn definition(name: impl Into<String>, elements: Vec<String>) -> Self {
+        Self {
+            name: name.into(),
+            elements,
+            index: None,
+            append: false,
+        }
+    }
+
+    pub fn element(name: impl Into<String>, index: usize, value: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            elements: vec![value.into()],
+            index: Some(index),
+            append: false,
+        }
+    }
+
+    pub fn append(name: impl Into<String>, elements: Vec<String>) -> Self {
+        Self {
+            name: name.into(),
+            elements,
+            index: None,
+            append: true,
+        }
+    }
+}
+
 /// Result of parsing a line - could be a command or a function definition
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParsedLine {
@@ -256,6 +298,8 @@ pub enum ParsedLine {
     Command(CommandList),
     /// A function definition
     Function(ShellFunction),
+    /// An array assignment
+    Array(ArrayAssignment),
     /// Empty line
     Empty,
 }
@@ -297,6 +341,10 @@ enum Token {
     LeftBrace,
     /// Right brace: }
     RightBrace,
+    /// Left bracket: [
+    LeftBracket,
+    /// Right bracket: ]
+    RightBracket,
 }
 
 impl<'a> Lexer<'a> {
@@ -418,6 +466,14 @@ impl<'a> Lexer<'a> {
                 self.chars.next();
                 Ok(Some(Token::RightBrace))
             }
+            '[' => {
+                self.chars.next();
+                Ok(Some(Token::LeftBracket))
+            }
+            ']' => {
+                self.chars.next();
+                Ok(Some(Token::RightBracket))
+            }
             _ => self.read_word(),
         }
     }
@@ -428,7 +484,8 @@ impl<'a> Lexer<'a> {
         while let Some(&c) = self.chars.peek() {
             match c {
                 // These terminate a word
-                ' ' | '\t' | '\n' | '\r' | '|' | '&' | '<' | '>' | ';' | '(' | ')' | '{' | '}' => {
+                ' ' | '\t' | '\n' | '\r' | '|' | '&' | '<' | '>' | ';' | '(' | ')' | '{' | '}'
+                | '[' | ']' => {
                     break;
                 }
                 // Quotes can appear mid-word: foo"bar"baz
@@ -481,6 +538,7 @@ impl<'a> Lexer<'a> {
 /// Parse a line that may be a command or a function definition
 ///
 /// Detects shell function syntax: `name() { body... }`
+/// Detects array syntax: `arr=(elem1 elem2)`, `arr+=(elem)`, `arr[0]=value`
 pub fn parse_line(input: &str) -> Result<ParsedLine, ParseError> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
@@ -492,9 +550,127 @@ pub fn parse_line(input: &str) -> Result<ParsedLine, ParseError> {
         return Ok(ParsedLine::Function(func));
     }
 
+    // Try to parse as array assignment
+    if let Some(arr) = try_parse_array(trimmed)? {
+        return Ok(ParsedLine::Array(arr));
+    }
+
     // Otherwise parse as a command list
     let cmd_list = parse_command_list(input)?;
     Ok(ParsedLine::Command(cmd_list))
+}
+
+/// Try to parse an array assignment: `arr=(...)`, `arr+=(...)`, `arr[n]=value`
+fn try_parse_array(input: &str) -> Result<Option<ArrayAssignment>, ParseError> {
+    let mut lexer = Lexer::new(input);
+
+    // First token must be a word (array name, possibly with = or +=)
+    let first_word = match lexer.next_token()? {
+        Some(Token::Word(w)) => w,
+        _ => return Ok(None),
+    };
+
+    // Check for arr=( or arr+=(
+    if let Some(name) = first_word.strip_suffix("=(") {
+        // Tokenize the rest - we need to put back the '(' context
+        // Actually, since we consumed "arr=(", the next tokens should be the elements
+        // But we already consumed past the '(' so we need to handle this differently
+        // Let's use a simpler approach - detect the pattern and reparse
+        if !name.is_empty() && !name.contains('+') {
+            let elements = collect_array_elements(&mut lexer)?;
+            return Ok(Some(ArrayAssignment::definition(name, elements)));
+        }
+    }
+
+    // Check for arr+=(
+    if let Some(name) = first_word.strip_suffix("+=(") {
+        if !name.is_empty() {
+            let elements = collect_array_elements(&mut lexer)?;
+            return Ok(Some(ArrayAssignment::append(name, elements)));
+        }
+    }
+
+    // Check for arr= followed by ( - first word ends with =
+    if let Some(name) = first_word.strip_suffix('=') {
+        if !name.is_empty() && !name.contains('+') {
+            match lexer.next_token()? {
+                Some(Token::LeftParen) => {
+                    let elements = collect_array_elements(&mut lexer)?;
+                    return Ok(Some(ArrayAssignment::definition(name, elements)));
+                }
+                _ => return Ok(None), // Regular assignment like FOO=bar
+            }
+        }
+    }
+
+    // Check for arr+= followed by (
+    if let Some(name) = first_word.strip_suffix("+=") {
+        if !name.is_empty() {
+            match lexer.next_token()? {
+                Some(Token::LeftParen) => {
+                    let elements = collect_array_elements(&mut lexer)?;
+                    return Ok(Some(ArrayAssignment::append(name, elements)));
+                }
+                _ => return Ok(None),
+            }
+        }
+    }
+
+    // Check for arr[ - element assignment: arr[n]=value
+    let name = &first_word;
+    match lexer.next_token()? {
+        Some(Token::LeftBracket) => {
+            // Get index
+            let index = match lexer.next_token()? {
+                Some(Token::Word(w)) => w.parse::<usize>().map_err(|_| {
+                    ParseError::UnexpectedToken(format!("invalid array index: {}", w))
+                })?,
+                _ => return Ok(None),
+            };
+
+            // Expect closing bracket
+            match lexer.next_token()? {
+                Some(Token::RightBracket) => {}
+                _ => return Ok(None),
+            }
+
+            // Get value (which includes the =)
+            let value_with_eq = match lexer.next_token()? {
+                Some(Token::Word(w)) => w,
+                None => return Ok(None),
+                _ => return Ok(None),
+            };
+
+            // Value should start with =
+            if let Some(value) = value_with_eq.strip_prefix('=') {
+                return Ok(Some(ArrayAssignment::element(name.clone(), index, value)));
+            }
+
+            Ok(None)
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Collect array elements until closing paren
+fn collect_array_elements(lexer: &mut Lexer) -> Result<Vec<String>, ParseError> {
+    let mut elements = Vec::new();
+
+    loop {
+        match lexer.next_token()? {
+            Some(Token::RightParen) => break,
+            Some(Token::Word(w)) => elements.push(w),
+            None => return Err(ParseError::UnexpectedEnd),
+            Some(t) => {
+                return Err(ParseError::UnexpectedToken(format!(
+                    "unexpected token in array: {:?}",
+                    t
+                )));
+            }
+        }
+    }
+
+    Ok(elements)
 }
 
 /// Try to parse a function definition: `name() { body... }`
@@ -560,6 +736,8 @@ fn try_parse_function(input: &str) -> Result<Option<ShellFunction>, ParseError> 
             Some(Token::Semicolon) => body_parts.push(";".to_string()),
             Some(Token::LeftParen) => body_parts.push("(".to_string()),
             Some(Token::RightParen) => body_parts.push(")".to_string()),
+            Some(Token::LeftBracket) => body_parts.push("[".to_string()),
+            Some(Token::RightBracket) => body_parts.push("]".to_string()),
             None => {
                 return Err(ParseError::UnexpectedEnd);
             }
@@ -703,6 +881,10 @@ fn parse_pipeline_internal(
             // Braces and parentheses are for function definitions/subshells
             // In a regular command context, treat them as unexpected
             Token::LeftParen | Token::RightParen | Token::LeftBrace | Token::RightBrace => {
+                return Err(ParseError::UnexpectedToken(format!("{:?}", token)));
+            }
+            // Brackets are for array syntax - unexpected in command context
+            Token::LeftBracket | Token::RightBracket => {
                 return Err(ParseError::UnexpectedToken(format!("{:?}", token)));
             }
         }
@@ -1317,5 +1499,106 @@ mod tests {
         let func = ShellFunction::new("myfunc", "echo test");
         assert_eq!(func.name, "myfunc");
         assert_eq!(func.body, "echo test");
+    }
+
+    // ============ Shell Arrays ============
+
+    #[test]
+    fn test_parse_array_definition() {
+        let result = parse_line("arr=(one two three)").unwrap();
+        match result {
+            ParsedLine::Array(arr) => {
+                assert_eq!(arr.name, "arr");
+                assert_eq!(arr.elements, vec!["one", "two", "three"]);
+                assert!(arr.index.is_none());
+                assert!(!arr.append);
+            }
+            _ => panic!("Expected array, got {:?}", result),
+        }
+    }
+
+    #[test]
+    fn test_parse_array_definition_empty() {
+        let result = parse_line("arr=()").unwrap();
+        match result {
+            ParsedLine::Array(arr) => {
+                assert_eq!(arr.name, "arr");
+                assert!(arr.elements.is_empty());
+            }
+            _ => panic!("Expected array"),
+        }
+    }
+
+    #[test]
+    fn test_parse_array_append() {
+        let result = parse_line("arr+=(new)").unwrap();
+        match result {
+            ParsedLine::Array(arr) => {
+                assert_eq!(arr.name, "arr");
+                assert_eq!(arr.elements, vec!["new"]);
+                assert!(arr.append);
+            }
+            _ => panic!("Expected array"),
+        }
+    }
+
+    #[test]
+    fn test_parse_array_element_assignment() {
+        let result = parse_line("arr[0]=value").unwrap();
+        match result {
+            ParsedLine::Array(arr) => {
+                assert_eq!(arr.name, "arr");
+                assert_eq!(arr.index, Some(0));
+                assert_eq!(arr.elements, vec!["value"]);
+            }
+            _ => panic!("Expected array"),
+        }
+    }
+
+    #[test]
+    fn test_parse_array_element_assignment_large_index() {
+        let result = parse_line("arr[42]=hello").unwrap();
+        match result {
+            ParsedLine::Array(arr) => {
+                assert_eq!(arr.name, "arr");
+                assert_eq!(arr.index, Some(42));
+                assert_eq!(arr.elements, vec!["hello"]);
+            }
+            _ => panic!("Expected array"),
+        }
+    }
+
+    #[test]
+    fn test_parse_array_not_regular_assignment() {
+        // FOO=bar should be a command (export-style), not an array
+        let result = parse_line("FOO=bar").unwrap();
+        assert!(matches!(result, ParsedLine::Command(_)));
+    }
+
+    #[test]
+    fn test_parse_array_definition_with_spaces() {
+        let result = parse_line("arr=( one two )").unwrap();
+        match result {
+            ParsedLine::Array(arr) => {
+                assert_eq!(arr.name, "arr");
+                assert_eq!(arr.elements, vec!["one", "two"]);
+            }
+            _ => panic!("Expected array"),
+        }
+    }
+
+    #[test]
+    fn test_array_assignment_struct() {
+        let def = ArrayAssignment::definition("arr", vec!["a".into(), "b".into()]);
+        assert_eq!(def.name, "arr");
+        assert!(!def.append);
+        assert!(def.index.is_none());
+
+        let elem = ArrayAssignment::element("arr", 5, "val");
+        assert_eq!(elem.name, "arr");
+        assert_eq!(elem.index, Some(5));
+
+        let append = ArrayAssignment::append("arr", vec!["x".into()]);
+        assert!(append.append);
     }
 }

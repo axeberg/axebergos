@@ -39,6 +39,8 @@ pub struct ShellState {
     pub aliases: HashMap<String, String>,
     /// Shell functions (name -> body)
     pub functions: HashMap<String, String>,
+    /// Shell arrays (name -> elements)
+    pub arrays: HashMap<String, Vec<String>>,
     /// Last command exit code
     pub last_status: i32,
 }
@@ -50,6 +52,7 @@ impl ShellState {
             env: HashMap::new(),
             aliases: HashMap::new(),
             functions: HashMap::new(),
+            arrays: HashMap::new(),
             last_status: 0,
         }
     }
@@ -102,6 +105,54 @@ impl ShellState {
     /// Check if a function exists
     pub fn has_function(&self, name: &str) -> bool {
         self.functions.contains_key(name)
+    }
+
+    /// Get an array
+    pub fn get_array(&self, name: &str) -> Option<&Vec<String>> {
+        self.arrays.get(name)
+    }
+
+    /// Get an array element
+    pub fn get_array_element(&self, name: &str, index: usize) -> Option<&str> {
+        self.arrays
+            .get(name)
+            .and_then(|arr| arr.get(index).map(|s| s.as_str()))
+    }
+
+    /// Set an array
+    pub fn set_array(&mut self, name: impl Into<String>, elements: Vec<String>) {
+        self.arrays.insert(name.into(), elements);
+    }
+
+    /// Set an array element
+    pub fn set_array_element(&mut self, name: &str, index: usize, value: impl Into<String>) {
+        let arr = self.arrays.entry(name.to_string()).or_default();
+        // Extend array if necessary
+        if index >= arr.len() {
+            arr.resize(index + 1, String::new());
+        }
+        arr[index] = value.into();
+    }
+
+    /// Append to an array
+    pub fn push_array(&mut self, name: &str, value: impl Into<String>) {
+        let arr = self.arrays.entry(name.to_string()).or_default();
+        arr.push(value.into());
+    }
+
+    /// Get array length
+    pub fn array_len(&self, name: &str) -> usize {
+        self.arrays.get(name).map(|arr| arr.len()).unwrap_or(0)
+    }
+
+    /// Check if an array exists
+    pub fn has_array(&self, name: &str) -> bool {
+        self.arrays.contains_key(name)
+    }
+
+    /// Remove an array
+    pub fn unset_array(&mut self, name: &str) -> bool {
+        self.arrays.remove(name).is_some()
     }
 }
 

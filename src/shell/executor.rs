@@ -8,7 +8,7 @@
 //! 5. Running WASM command modules from /bin
 
 use super::builtins::{self, BuiltinResult, ShellState};
-use super::parser::{CommandList, LogicalOp, ParsedLine, Pipeline, SimpleCommand};
+use super::parser::{ArrayAssignment, CommandList, LogicalOp, ParsedLine, Pipeline, SimpleCommand};
 use super::programs;
 use crate::kernel::syscall;
 use crate::kernel::wasm::WasmCommandRunner;
@@ -400,6 +400,11 @@ impl Executor {
                 self.state.set_function(&func.name, &func.body);
                 ExecResult::success()
             }
+            ParsedLine::Array(arr) => {
+                // Handle array assignment
+                self.execute_array_assignment(&arr);
+                ExecResult::success()
+            }
             ParsedLine::Command(cmd_list) => self.execute_command_list(&cmd_list),
         };
 
@@ -409,6 +414,31 @@ impl Executor {
         }
 
         result
+    }
+
+    /// Execute an array assignment
+    fn execute_array_assignment(&mut self, arr: &ArrayAssignment) {
+        if let Some(index) = arr.index {
+            // Element assignment: arr[n]=value
+            let value = arr.elements.first().cloned().unwrap_or_default();
+            // Expand variables in the value
+            let expanded = self.expand_substitution_in_arg(&value);
+            self.state.set_array_element(&arr.name, index, expanded);
+        } else if arr.append {
+            // Append: arr+=(elem1 elem2 ...)
+            for elem in &arr.elements {
+                let expanded = self.expand_substitution_in_arg(elem);
+                self.state.push_array(&arr.name, expanded);
+            }
+        } else {
+            // Definition: arr=(elem1 elem2 ...)
+            let expanded: Vec<String> = arr
+                .elements
+                .iter()
+                .map(|e| self.expand_substitution_in_arg(e))
+                .collect();
+            self.state.set_array(arr.name.clone(), expanded);
+        }
     }
 
     /// Execute a command list (multiple pipelines with &&, ||, ;)
@@ -2469,5 +2499,93 @@ mod tests {
         assert_eq!(result.code, 0);
         assert!(result.output.contains("one"));
         assert!(result.output.contains("two"));
+    }
+
+    // ============ Shell Arrays ============
+
+    #[test]
+    fn test_array_definition() {
+        let mut exec = Executor::new();
+
+        exec.execute_line("arr=(one two three)");
+
+        assert!(exec.state.has_array("arr"));
+        assert_eq!(exec.state.array_len("arr"), 3);
+        assert_eq!(exec.state.get_array_element("arr", 0), Some("one"));
+        assert_eq!(exec.state.get_array_element("arr", 1), Some("two"));
+        assert_eq!(exec.state.get_array_element("arr", 2), Some("three"));
+    }
+
+    #[test]
+    fn test_array_empty_definition() {
+        let mut exec = Executor::new();
+
+        exec.execute_line("arr=()");
+
+        assert!(exec.state.has_array("arr"));
+        assert_eq!(exec.state.array_len("arr"), 0);
+    }
+
+    #[test]
+    fn test_array_element_assignment() {
+        let mut exec = Executor::new();
+
+        exec.execute_line("arr[0]=first");
+        exec.execute_line("arr[2]=third");
+
+        assert_eq!(exec.state.get_array_element("arr", 0), Some("first"));
+        assert_eq!(exec.state.get_array_element("arr", 1), Some("")); // Gap filled with empty
+        assert_eq!(exec.state.get_array_element("arr", 2), Some("third"));
+    }
+
+    #[test]
+    fn test_array_append() {
+        let mut exec = Executor::new();
+
+        exec.execute_line("arr=(one)");
+        exec.execute_line("arr+=(two three)");
+
+        assert_eq!(exec.state.array_len("arr"), 3);
+        assert_eq!(exec.state.get_array_element("arr", 0), Some("one"));
+        assert_eq!(exec.state.get_array_element("arr", 1), Some("two"));
+        assert_eq!(exec.state.get_array_element("arr", 2), Some("three"));
+    }
+
+    #[test]
+    fn test_array_redefine() {
+        let mut exec = Executor::new();
+
+        exec.execute_line("arr=(one two three)");
+        assert_eq!(exec.state.array_len("arr"), 3);
+
+        exec.execute_line("arr=(new)");
+        assert_eq!(exec.state.array_len("arr"), 1);
+        assert_eq!(exec.state.get_array_element("arr", 0), Some("new"));
+    }
+
+    #[test]
+    fn test_array_state_methods() {
+        let mut exec = Executor::new();
+
+        // Initial state
+        assert!(!exec.state.has_array("myarr"));
+        assert_eq!(exec.state.array_len("myarr"), 0);
+
+        // Set array
+        exec.state.set_array("myarr", vec!["a".into(), "b".into()]);
+        assert!(exec.state.has_array("myarr"));
+        assert_eq!(exec.state.array_len("myarr"), 2);
+
+        // Push
+        exec.state.push_array("myarr", "c");
+        assert_eq!(exec.state.array_len("myarr"), 3);
+
+        // Set element
+        exec.state.set_array_element("myarr", 1, "changed");
+        assert_eq!(exec.state.get_array_element("myarr", 1), Some("changed"));
+
+        // Unset
+        assert!(exec.state.unset_array("myarr"));
+        assert!(!exec.state.has_array("myarr"));
     }
 }

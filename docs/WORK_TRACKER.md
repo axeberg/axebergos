@@ -15,10 +15,10 @@ This document tracks all identified issues, improvements, and feature work for A
 | Security (High) | 5 | 5 | 0 | 0 |
 | Security (Medium) | 8 | 8 | 0 | 0 |
 | Code Quality | 10 | 10 | 0 | 0 |
-| Missing Features | 15 | 10 | 0 | 5 |
+| Missing Features | 15 | 11 | 0 | 4 |
 | Documentation | 5 | 0 | 0 | 5 |
 | Future Features | 12 | 0 | 0 | 12 |
-| **TOTAL** | **57** | **35** | **0** | **22** |
+| **TOTAL** | **57** | **36** | **0** | **21** |
 
 ---
 
@@ -364,10 +364,17 @@ This document tracks all identified issues, improvements, and feature work for A
 
 ### FEAT-012: Shell Arrays
 - **Priority**: 🟢 LOW
-- **Status**: ⬜ TODO
-- **File**: `src/shell/parser.rs`
+- **Status**: ✅ DONE (2025-12-29)
+- **File**: `src/shell/parser.rs`, `src/shell/executor.rs`, `src/shell/builtins.rs`
 - **Issue**: No array support
-- **Fix**: Implement bash-like arrays
+- **Fix**: Implemented bash-like array syntax:
+  - Array definition: `arr=(one two three)`
+  - Array append: `arr+=(new)`
+  - Element assignment: `arr[0]=value`
+  - Added `ArrayAssignment` struct and `ParsedLine::Array` variant
+  - Added `arrays` HashMap to `ShellState` with get/set/push/len/unset methods
+  - 9 parser tests, 6 executor tests
+  - Note: Array expansion syntax (`${arr[@]}`) not yet implemented
 - **Estimate**: Medium
 
 ### FEAT-013: Process Substitution
@@ -520,6 +527,14 @@ This document tracks all identified issues, improvements, and feature work for A
 ## Progress Log
 
 ### 2025-12-29 (Phase 5 Continuing)
+- **FEAT-012**: Implemented shell arrays:
+  - Array definition: `arr=(one two three)`
+  - Array append: `arr+=(new)`
+  - Element assignment: `arr[0]=value`
+  - Added `ArrayAssignment` struct and `ParsedLine::Array` variant to parser
+  - Added `arrays` HashMap to `ShellState` with full API
+  - 15 total tests (9 parser + 6 executor)
+
 - **FEAT-011**: Implemented shell functions:
   - Added `ShellFunction` struct and `ParsedLine` enum to parser
   - Added tokens for `(){}` characters
@@ -561,7 +576,7 @@ This document tracks all identified issues, improvements, and feature work for A
 - **FEAT-007**: Implemented signal masking (sigprocmask syscall)
 - **FEAT-014**: Implemented heredocs (<<DELIM and <<-DELIM syntax)
 - **FEAT-015**: Implemented process priority (nice/getpriority/setpriority)
-- Overall: 35 total issues resolved, 22 remaining
+- Overall: 36 total issues resolved, 21 remaining
 
 ### 2025-12-29 (Phase 5 Started!)
 - **FEAT-001**: Implemented file timestamps (atime, mtime, ctime):
