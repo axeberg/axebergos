@@ -229,6 +229,37 @@ impl CommandList {
     }
 }
 
+/// A shell function definition
+///
+/// Represents: `name() { body... }`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellFunction {
+    /// Function name
+    pub name: String,
+    /// Function body as raw command string
+    pub body: String,
+}
+
+impl ShellFunction {
+    pub fn new(name: impl Into<String>, body: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            body: body.into(),
+        }
+    }
+}
+
+/// Result of parsing a line - could be a command or a function definition
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParsedLine {
+    /// A regular command list
+    Command(CommandList),
+    /// A function definition
+    Function(ShellFunction),
+    /// Empty line
+    Empty,
+}
+
 /// Token types
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Token {
@@ -258,6 +289,14 @@ enum Token {
     Or,
     /// Semicolon: ;
     Semicolon,
+    /// Left parenthesis: (
+    LeftParen,
+    /// Right parenthesis: )
+    RightParen,
+    /// Left brace: {
+    LeftBrace,
+    /// Right brace: }
+    RightBrace,
 }
 
 impl<'a> Lexer<'a> {
@@ -363,6 +402,22 @@ impl<'a> Lexer<'a> {
                 }
             }
             '"' | '\'' => self.read_quoted_string(c),
+            '(' => {
+                self.chars.next();
+                Ok(Some(Token::LeftParen))
+            }
+            ')' => {
+                self.chars.next();
+                Ok(Some(Token::RightParen))
+            }
+            '{' => {
+                self.chars.next();
+                Ok(Some(Token::LeftBrace))
+            }
+            '}' => {
+                self.chars.next();
+                Ok(Some(Token::RightBrace))
+            }
             _ => self.read_word(),
         }
     }
@@ -373,7 +428,9 @@ impl<'a> Lexer<'a> {
         while let Some(&c) = self.chars.peek() {
             match c {
                 // These terminate a word
-                ' ' | '\t' | '\n' | '\r' | '|' | '&' | '<' | '>' | ';' => break,
+                ' ' | '\t' | '\n' | '\r' | '|' | '&' | '<' | '>' | ';' | '(' | ')' | '{' | '}' => {
+                    break;
+                }
                 // Quotes can appear mid-word: foo"bar"baz
                 '"' | '\'' => {
                     self.chars.next();
@@ -419,6 +476,99 @@ impl<'a> Lexer<'a> {
 
         Ok(content)
     }
+}
+
+/// Parse a line that may be a command or a function definition
+///
+/// Detects shell function syntax: `name() { body... }`
+pub fn parse_line(input: &str) -> Result<ParsedLine, ParseError> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Ok(ParsedLine::Empty);
+    }
+
+    // Try to parse as function definition first
+    if let Some(func) = try_parse_function(trimmed)? {
+        return Ok(ParsedLine::Function(func));
+    }
+
+    // Otherwise parse as a command list
+    let cmd_list = parse_command_list(input)?;
+    Ok(ParsedLine::Command(cmd_list))
+}
+
+/// Try to parse a function definition: `name() { body... }`
+///
+/// Returns None if this doesn't look like a function definition.
+fn try_parse_function(input: &str) -> Result<Option<ShellFunction>, ParseError> {
+    let mut lexer = Lexer::new(input);
+
+    // First token must be a word (function name)
+    let name = match lexer.next_token()? {
+        Some(Token::Word(w)) => w,
+        _ => return Ok(None),
+    };
+
+    // Next must be `(`
+    match lexer.next_token()? {
+        Some(Token::LeftParen) => {}
+        _ => return Ok(None),
+    }
+
+    // Next must be `)`
+    match lexer.next_token()? {
+        Some(Token::RightParen) => {}
+        _ => return Ok(None),
+    }
+
+    // Next must be `{`
+    match lexer.next_token()? {
+        Some(Token::LeftBrace) => {}
+        _ => return Ok(None),
+    }
+
+    // Now collect everything until matching `}`
+    let mut body_parts: Vec<String> = Vec::new();
+    let mut brace_depth = 1;
+
+    // Collect rest of input as body, tracking brace depth
+    loop {
+        match lexer.next_token()? {
+            Some(Token::LeftBrace) => {
+                brace_depth += 1;
+                body_parts.push("{".to_string());
+            }
+            Some(Token::RightBrace) => {
+                brace_depth -= 1;
+                if brace_depth == 0 {
+                    break;
+                }
+                body_parts.push("}".to_string());
+            }
+            Some(Token::Word(w)) => body_parts.push(w),
+            Some(Token::Pipe) => body_parts.push("|".to_string()),
+            Some(Token::RedirectIn) => body_parts.push("<".to_string()),
+            Some(Token::RedirectOut) => body_parts.push(">".to_string()),
+            Some(Token::RedirectAppend) => body_parts.push(">>".to_string()),
+            Some(Token::RedirectErr) => body_parts.push("2>".to_string()),
+            Some(Token::RedirectErrAppend) => body_parts.push("2>>".to_string()),
+            Some(Token::HeredocStart) => body_parts.push("<<".to_string()),
+            Some(Token::HeredocStripStart) => body_parts.push("<<-".to_string()),
+            Some(Token::Background) => body_parts.push("&".to_string()),
+            Some(Token::And) => body_parts.push("&&".to_string()),
+            Some(Token::Or) => body_parts.push("||".to_string()),
+            Some(Token::Semicolon) => body_parts.push(";".to_string()),
+            Some(Token::LeftParen) => body_parts.push("(".to_string()),
+            Some(Token::RightParen) => body_parts.push(")".to_string()),
+            None => {
+                return Err(ParseError::UnexpectedEnd);
+            }
+        }
+    }
+
+    let body = body_parts.join(" ");
+
+    Ok(Some(ShellFunction::new(name, body.trim())))
 }
 
 /// Parse a command line into a command list (handles &&, ||, ;)
@@ -549,6 +699,11 @@ fn parse_pipeline_internal(
                         break;
                     }
                 }
+            }
+            // Braces and parentheses are for function definitions/subshells
+            // In a regular command context, treat them as unexpected
+            Token::LeftParen | Token::RightParen | Token::LeftBrace | Token::RightBrace => {
+                return Err(ParseError::UnexpectedToken(format!("{:?}", token)));
             }
         }
     }
@@ -1031,5 +1186,136 @@ mod tests {
     fn test_heredoc_with_content() {
         let heredoc = Heredoc::new("EOF", false).with_content("hello\nworld");
         assert_eq!(heredoc.content, Some("hello\nworld".to_string()));
+    }
+
+    // ============ Shell Functions ============
+
+    #[test]
+    fn test_parse_simple_function() {
+        let result = parse_line("hello() { echo hello }").unwrap();
+        match result {
+            ParsedLine::Function(func) => {
+                assert_eq!(func.name, "hello");
+                assert_eq!(func.body, "echo hello");
+            }
+            _ => panic!("Expected function, got {:?}", result),
+        }
+    }
+
+    #[test]
+    fn test_parse_function_with_args() {
+        let result = parse_line("greet() { echo hello $1 }").unwrap();
+        match result {
+            ParsedLine::Function(func) => {
+                assert_eq!(func.name, "greet");
+                assert_eq!(func.body, "echo hello $1");
+            }
+            _ => panic!("Expected function"),
+        }
+    }
+
+    #[test]
+    fn test_parse_function_with_pipe() {
+        let result = parse_line("count() { ls | wc -l }").unwrap();
+        match result {
+            ParsedLine::Function(func) => {
+                assert_eq!(func.name, "count");
+                assert_eq!(func.body, "ls | wc -l");
+            }
+            _ => panic!("Expected function"),
+        }
+    }
+
+    #[test]
+    fn test_parse_function_with_redirect() {
+        let result = parse_line("save() { echo data > file.txt }").unwrap();
+        match result {
+            ParsedLine::Function(func) => {
+                assert_eq!(func.name, "save");
+                assert_eq!(func.body, "echo data > file.txt");
+            }
+            _ => panic!("Expected function"),
+        }
+    }
+
+    #[test]
+    fn test_parse_function_with_logical_ops() {
+        let result = parse_line("check() { test -f file && echo exists || echo missing }").unwrap();
+        match result {
+            ParsedLine::Function(func) => {
+                assert_eq!(func.name, "check");
+                assert_eq!(func.body, "test -f file && echo exists || echo missing");
+            }
+            _ => panic!("Expected function"),
+        }
+    }
+
+    #[test]
+    fn test_parse_function_nested_braces() {
+        let result = parse_line("outer() { if true { echo nested } }").unwrap();
+        match result {
+            ParsedLine::Function(func) => {
+                assert_eq!(func.name, "outer");
+                assert!(func.body.contains("nested"));
+            }
+            _ => panic!("Expected function"),
+        }
+    }
+
+    #[test]
+    fn test_parse_function_unterminated() {
+        let result = parse_line("broken() { echo hello");
+        assert!(matches!(result, Err(ParseError::UnexpectedEnd)));
+    }
+
+    #[test]
+    fn test_parse_line_empty() {
+        let result = parse_line("").unwrap();
+        assert!(matches!(result, ParsedLine::Empty));
+    }
+
+    #[test]
+    fn test_parse_line_whitespace() {
+        let result = parse_line("   ").unwrap();
+        assert!(matches!(result, ParsedLine::Empty));
+    }
+
+    #[test]
+    fn test_parse_line_command() {
+        let result = parse_line("echo hello").unwrap();
+        match result {
+            ParsedLine::Command(cmd_list) => {
+                assert_eq!(cmd_list.first.commands[0].program, "echo");
+            }
+            _ => panic!("Expected command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_line_not_function_missing_parens() {
+        // Without `()`, `{` is not valid in a command context
+        let result = parse_line("hello { echo }");
+        // Should fail since `{` is unexpected in a regular command
+        assert!(matches!(result, Err(ParseError::UnexpectedToken(_))));
+    }
+
+    #[test]
+    fn test_parse_regular_command_not_function() {
+        // A simple word that looks like a function name but isn't
+        let result = parse_line("myfunc arg1 arg2").unwrap();
+        match result {
+            ParsedLine::Command(cmd_list) => {
+                assert_eq!(cmd_list.first.commands[0].program, "myfunc");
+                assert_eq!(cmd_list.first.commands[0].args, vec!["arg1", "arg2"]);
+            }
+            _ => panic!("Expected command"),
+        }
+    }
+
+    #[test]
+    fn test_shell_function_struct() {
+        let func = ShellFunction::new("myfunc", "echo test");
+        assert_eq!(func.name, "myfunc");
+        assert_eq!(func.body, "echo test");
     }
 }

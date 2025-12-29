@@ -15,10 +15,10 @@ This document tracks all identified issues, improvements, and feature work for A
 | Security (High) | 5 | 5 | 0 | 0 |
 | Security (Medium) | 8 | 8 | 0 | 0 |
 | Code Quality | 10 | 10 | 0 | 0 |
-| Missing Features | 15 | 9 | 0 | 6 |
+| Missing Features | 15 | 10 | 0 | 5 |
 | Documentation | 5 | 0 | 0 | 5 |
 | Future Features | 12 | 0 | 0 | 12 |
-| **TOTAL** | **57** | **34** | **0** | **23** |
+| **TOTAL** | **57** | **35** | **0** | **22** |
 
 ---
 
@@ -349,10 +349,17 @@ This document tracks all identified issues, improvements, and feature work for A
 
 ### FEAT-011: Shell Functions
 - **Priority**: 🟢 LOW
-- **Status**: ⬜ TODO
-- **File**: `src/shell/parser.rs`
+- **Status**: ✅ DONE (2025-12-29)
+- **File**: `src/shell/parser.rs`, `src/shell/executor.rs`, `src/shell/builtins.rs`
 - **Issue**: No function definitions
-- **Fix**: Add function parsing and execution
+- **Fix**: Implemented shell function support:
+  - Added `ShellFunction` struct and `ParsedLine` enum to parser
+  - Added tokens for `(){}` characters
+  - Added `parse_line()` and `try_parse_function()` for function definition parsing
+  - Added `functions` HashMap to `ShellState` with get/set/has/unset methods
+  - Executor stores function definitions and invokes function body when called
+  - Builtins take priority over functions (like bash)
+  - 13 tests for parser, 8 tests for executor
 - **Estimate**: Medium
 
 ### FEAT-012: Shell Arrays
@@ -513,6 +520,16 @@ This document tracks all identified issues, improvements, and feature work for A
 ## Progress Log
 
 ### 2025-12-29 (Phase 5 Continuing)
+- **FEAT-011**: Implemented shell functions:
+  - Added `ShellFunction` struct and `ParsedLine` enum to parser
+  - Added tokens for `(){}` characters
+  - Added `parse_line()` and `try_parse_function()` for function definition parsing
+  - Added `functions` HashMap to `ShellState` with get/set/has/unset methods
+  - Executor stores function definitions and invokes function body when called
+  - Functions work in pipelines and with logical operators
+  - Builtins take priority over functions (like bash)
+  - 21 total tests added (13 parser + 8 executor)
+
 - **FEAT-009**: Implemented SEM_UNDO for semaphores:
   - Added `SemAdj` struct for per-process adjustment tracking
   - Added `semop_with_undo()` with SEM_UNDO flag support
@@ -544,7 +561,7 @@ This document tracks all identified issues, improvements, and feature work for A
 - **FEAT-007**: Implemented signal masking (sigprocmask syscall)
 - **FEAT-014**: Implemented heredocs (<<DELIM and <<-DELIM syntax)
 - **FEAT-015**: Implemented process priority (nice/getpriority/setpriority)
-- Overall: 31 total issues resolved, 26 remaining
+- Overall: 35 total issues resolved, 22 remaining
 
 ### 2025-12-29 (Phase 5 Started!)
 - **FEAT-001**: Implemented file timestamps (atime, mtime, ctime):

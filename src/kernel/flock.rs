@@ -179,7 +179,8 @@ impl FileLockManager {
                 }
 
                 // Check for conflict
-                if existing.lock_type == LockType::Exclusive || lock.lock_type == LockType::Exclusive
+                if existing.lock_type == LockType::Exclusive
+                    || lock.lock_type == LockType::Exclusive
                 {
                     return Err(LockError::WouldBlock);
                 }
@@ -211,7 +212,8 @@ impl FileLockManager {
                     continue;
                 }
 
-                if existing.lock_type == LockType::Exclusive || lock.lock_type == LockType::Exclusive
+                if existing.lock_type == LockType::Exclusive
+                    || lock.lock_type == LockType::Exclusive
                 {
                     return Some(existing.clone());
                 }
@@ -291,9 +293,10 @@ mod tests {
         let mut mgr = FileLockManager::new();
 
         // First exclusive lock succeeds
-        assert!(mgr
-            .flock("/test", Pid(1), LockType::Exclusive, false)
-            .is_ok());
+        assert!(
+            mgr.flock("/test", Pid(1), LockType::Exclusive, false)
+                .is_ok()
+        );
 
         // Second exclusive lock fails
         assert_eq!(
@@ -321,15 +324,17 @@ mod tests {
         let mut mgr = FileLockManager::new();
 
         // Lock and unlock
-        assert!(mgr
-            .flock("/test", Pid(1), LockType::Exclusive, false)
-            .is_ok());
+        assert!(
+            mgr.flock("/test", Pid(1), LockType::Exclusive, false)
+                .is_ok()
+        );
         assert!(mgr.flock("/test", Pid(1), LockType::Unlock, false).is_ok());
 
         // Now another process can lock
-        assert!(mgr
-            .flock("/test", Pid(2), LockType::Exclusive, false)
-            .is_ok());
+        assert!(
+            mgr.flock("/test", Pid(2), LockType::Exclusive, false)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -338,9 +343,10 @@ mod tests {
 
         // Shared then exclusive by same process
         assert!(mgr.flock("/test", Pid(1), LockType::Shared, false).is_ok());
-        assert!(mgr
-            .flock("/test", Pid(1), LockType::Exclusive, false)
-            .is_ok());
+        assert!(
+            mgr.flock("/test", Pid(1), LockType::Exclusive, false)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -398,21 +404,25 @@ mod tests {
     fn test_release_all() {
         let mut mgr = FileLockManager::new();
 
-        assert!(mgr
-            .flock("/test1", Pid(1), LockType::Exclusive, false)
-            .is_ok());
-        assert!(mgr
-            .flock("/test2", Pid(1), LockType::Exclusive, false)
-            .is_ok());
+        assert!(
+            mgr.flock("/test1", Pid(1), LockType::Exclusive, false)
+                .is_ok()
+        );
+        assert!(
+            mgr.flock("/test2", Pid(1), LockType::Exclusive, false)
+                .is_ok()
+        );
 
         mgr.release_all(Pid(1));
 
         // Now other processes can lock
-        assert!(mgr
-            .flock("/test1", Pid(2), LockType::Exclusive, false)
-            .is_ok());
-        assert!(mgr
-            .flock("/test2", Pid(2), LockType::Exclusive, false)
-            .is_ok());
+        assert!(
+            mgr.flock("/test1", Pid(2), LockType::Exclusive, false)
+                .is_ok()
+        );
+        assert!(
+            mgr.flock("/test2", Pid(2), LockType::Exclusive, false)
+                .is_ok()
+        );
     }
 }

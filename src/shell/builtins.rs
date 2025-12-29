@@ -37,6 +37,8 @@ pub struct ShellState {
     pub env: HashMap<String, String>,
     /// Shell aliases
     pub aliases: HashMap<String, String>,
+    /// Shell functions (name -> body)
+    pub functions: HashMap<String, String>,
     /// Last command exit code
     pub last_status: i32,
 }
@@ -47,6 +49,7 @@ impl ShellState {
             cwd: PathBuf::from("/home"),
             env: HashMap::new(),
             aliases: HashMap::new(),
+            functions: HashMap::new(),
             last_status: 0,
         }
     }
@@ -79,6 +82,26 @@ impl ShellState {
     /// Remove an alias
     pub fn unalias(&mut self, name: &str) -> bool {
         self.aliases.remove(name).is_some()
+    }
+
+    /// Get a shell function body
+    pub fn get_function(&self, name: &str) -> Option<&str> {
+        self.functions.get(name).map(|s| s.as_str())
+    }
+
+    /// Define a shell function
+    pub fn set_function(&mut self, name: impl Into<String>, body: impl Into<String>) {
+        self.functions.insert(name.into(), body.into());
+    }
+
+    /// Remove a shell function
+    pub fn unset_function(&mut self, name: &str) -> bool {
+        self.functions.remove(name).is_some()
+    }
+
+    /// Check if a function exists
+    pub fn has_function(&self, name: &str) -> bool {
+        self.functions.contains_key(name)
     }
 }
 

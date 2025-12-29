@@ -8,7 +8,7 @@
 //! 5. Running WASM command modules from /bin
 
 use super::builtins::{self, BuiltinResult, ShellState};
-use super::parser::{CommandList, LogicalOp, Pipeline, SimpleCommand};
+use super::parser::{CommandList, LogicalOp, ParsedLine, Pipeline, SimpleCommand};
 use super::programs;
 use crate::kernel::syscall;
 use crate::kernel::wasm::WasmCommandRunner;
@@ -341,6 +341,11 @@ impl Executor {
             return Some(self.execute_builtin(cmd));
         }
 
+        // Shell functions are sync
+        if self.state.has_function(&cmd.program) {
+            return Some(self.execute_single(cmd));
+        }
+
         // Registry programs are sync
         if self.registry.contains(&cmd.program) {
             return Some(self.execute_single(cmd));
@@ -382,13 +387,21 @@ impl Executor {
         #[cfg(all(target_arch = "wasm32", not(test)))]
         crate::console_log!("[exec] Running: {}", line);
 
-        // Parse the command list (handles &&, ||, ;)
-        let cmd_list = match super::parser::parse_command_list(&line) {
-            Ok(c) => c,
+        // Parse the line (may be a command or function definition)
+        let parsed = match super::parser::parse_line(&line) {
+            Ok(p) => p,
             Err(e) => return ExecResult::success().with_error(format!("parse error: {}", e)),
         };
 
-        let result = self.execute_command_list(&cmd_list);
+        let result = match parsed {
+            ParsedLine::Empty => ExecResult::success(),
+            ParsedLine::Function(func) => {
+                // Store the function definition
+                self.state.set_function(&func.name, &func.body);
+                ExecResult::success()
+            }
+            ParsedLine::Command(cmd_list) => self.execute_command_list(&cmd_list),
+        };
 
         #[cfg(all(target_arch = "wasm32", not(test)))]
         if !result.error.is_empty() {
@@ -466,6 +479,12 @@ impl Executor {
             return self.execute_builtin(cmd);
         }
 
+        // Handle shell functions
+        if let Some(body) = self.state.get_function(&cmd.program).map(|s| s.to_string()) {
+            // Execute the function body
+            return self.execute_line(&body);
+        }
+
         // Handle external programs from registry
         if let Some(prog) = self.registry.get(&cmd.program) {
             let mut stdout = String::new();
@@ -539,6 +558,11 @@ impl Executor {
         // Handle built-in commands (sync)
         if builtins::is_builtin(&cmd.program) {
             return self.execute_builtin(cmd);
+        }
+
+        // Handle shell functions (sync)
+        if self.state.has_function(&cmd.program) {
+            return self.execute_single(cmd);
         }
 
         // Handle registry programs (sync)
@@ -672,6 +696,13 @@ impl Executor {
                         last_code = 0;
                     }
                 }
+            } else if let Some(body) = self.state.get_function(&cmd.program).map(|s| s.to_string())
+            {
+                // Execute shell function
+                let result = self.execute_line(&body);
+                stdout = result.output;
+                stderr = result.error;
+                last_code = result.code;
             } else if let Some(prog) = self.registry.get(&cmd.program) {
                 // Registry program - pass pipe_input as stdin
                 last_code = prog(&expanded_args, &pipe_input, &mut stdout, &mut stderr);
@@ -910,6 +941,13 @@ impl Executor {
                         last_code = 0;
                     }
                 }
+            } else if let Some(body) = self.state.get_function(&cmd.program).map(|s| s.to_string())
+            {
+                // Execute shell function - function output becomes pipe output
+                let result = self.execute_line(&body);
+                stdout = result.output;
+                stderr = result.error;
+                last_code = result.code;
             } else if let Some(prog) = self.registry.get(&cmd.program) {
                 // Pass pipe input directly via stdin parameter
                 last_code = prog(&expanded_args, &pipe_input, &mut stdout, &mut stderr);
@@ -2333,5 +2371,103 @@ mod tests {
         assert_eq!(result.code, 42);
         assert!(result.output.contains("before"));
         assert!(!result.output.contains("after"));
+    }
+
+    // ============ Shell Functions ============
+
+    #[test]
+    fn test_define_and_call_function() {
+        let mut exec = Executor::new();
+
+        // Define a simple function
+        let result = exec.execute_line("hello() { echo hello world }");
+        assert_eq!(result.code, 0);
+
+        // Call the function
+        let result = exec.execute_line("hello");
+        assert_eq!(result.code, 0);
+        assert_eq!(result.output, "hello world");
+    }
+
+    #[test]
+    fn test_function_with_pipeline() {
+        let mut exec = Executor::new();
+
+        // Define a function that uses a pipeline
+        let result = exec.execute_line("greet() { echo hello | cat }");
+        assert_eq!(result.code, 0);
+
+        // Call the function
+        let result = exec.execute_line("greet");
+        assert_eq!(result.code, 0);
+        assert_eq!(result.output, "hello");
+    }
+
+    #[test]
+    fn test_function_with_logical_ops() {
+        let mut exec = Executor::new();
+
+        // Define a function with logical operators
+        let result = exec.execute_line("check() { true && echo success }");
+        assert_eq!(result.code, 0);
+
+        // Call the function
+        let result = exec.execute_line("check");
+        assert_eq!(result.code, 0);
+        assert_eq!(result.output, "success");
+    }
+
+    #[test]
+    fn test_function_redefine() {
+        let mut exec = Executor::new();
+
+        // Define function
+        exec.execute_line("foo() { echo first }");
+        let result = exec.execute_line("foo");
+        assert_eq!(result.output, "first");
+
+        // Redefine function
+        exec.execute_line("foo() { echo second }");
+        let result = exec.execute_line("foo");
+        assert_eq!(result.output, "second");
+    }
+
+    #[test]
+    fn test_function_builtin_priority() {
+        let mut exec = Executor::new();
+
+        // Define a function with the same name as a builtin should NOT override
+        // (builtins take priority in our implementation)
+        exec.execute_line("echo() { echo override }");
+
+        // The builtin echo should still work
+        let result = exec.execute_line("echo test");
+        // Note: in our implementation builtins take priority over functions
+        assert_eq!(result.output, "test");
+    }
+
+    #[test]
+    fn test_function_state_persists() {
+        let mut exec = Executor::new();
+
+        // Define function
+        exec.execute_line("myfunc() { echo stored }");
+
+        // Function should be stored in state
+        assert!(exec.state.has_function("myfunc"));
+        assert_eq!(exec.state.get_function("myfunc"), Some("echo stored"));
+    }
+
+    #[test]
+    fn test_function_multiple_commands() {
+        let mut exec = Executor::new();
+
+        // Define function with multiple commands using ;
+        exec.execute_line("multi() { echo one ; echo two }");
+
+        let result = exec.execute_line("multi");
+        assert_eq!(result.code, 0);
+        assert!(result.output.contains("one"));
+        assert!(result.output.contains("two"));
     }
 }

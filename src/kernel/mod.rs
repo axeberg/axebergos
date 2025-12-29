@@ -46,6 +46,7 @@ mod invariants_test;
 
 pub use executor::{Executor, Priority};
 pub use fifo::{FifoBuffer, FifoError, FifoRegistry};
+pub use flock::{FileLockManager, LockError, LockType, RangeLock};
 pub use init::{
     InitSystem, RestartPolicy, Service, ServiceConfig, ServiceState, ServiceStatus, Target,
 };
@@ -68,7 +69,6 @@ pub use pkg::{
     ResolvedPackage, Version, VersionReq,
 };
 pub use process::{Fd, Handle, OpenFlags, Pid};
-pub use flock::{FileLockManager, LockError, LockType, RangeLock};
 pub use semaphore::{
     SemAdj, SemError, SemId, SemOpResult, SemSetStats, SemaphoreManager, SemaphoreSet,
 };
