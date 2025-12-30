@@ -136,50 +136,50 @@ Negative return values indicate errors:
 ## Loader Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      Shell                                   │
+┌────────────────────────────────────────────────────────────┐
+│                      Shell                                 │
 │  ┌─────────────────────────────────────────────────────┐   │
-│  │ user types: cat file.txt                              │   │
+│  │ user types: cat file.txt                            │   │
 │  └─────────────────────────┬───────────────────────────┘   │
-│                            │                                 │
-│                            ▼                                 │
+│                            │                               │
+│                            ▼                               │
 │  ┌─────────────────────────────────────────────────────┐   │
-│  │ 1. Resolve command: /bin/cat.wasm                    │   │
-│  │ 2. Load module bytes from VFS                        │   │
-│  │ 3. Validate against ABI                              │   │
+│  │ 1. Resolve command: /bin/cat.wasm                   │   │
+│  │ 2. Load module bytes from VFS                       │   │
+│  │ 3. Validate against ABI                             │   │
 │  └─────────────────────────┬───────────────────────────┘   │
-│                            │                                 │
-│                            ▼                                 │
+│                            │                               │
+│                            ▼                               │
 │  ┌─────────────────────────────────────────────────────┐   │
-│  │ ModuleValidator                                       │   │
-│  │ - Check WASM magic/version                           │   │
-│  │ - Verify 'memory' export exists                      │   │
-│  │ - Verify 'main' export with correct signature        │   │
+│  │ ModuleValidator                                     │   │
+│  │ - Check WASM magic/version                          │   │
+│  │ - Verify 'memory' export exists                     │   │
+│  │ - Verify 'main' export with correct signature       │   │
 │  └─────────────────────────┬───────────────────────────┘   │
-│                            │                                 │
-│                            ▼                                 │
+│                            │                               │
+│                            ▼                               │
 │  ┌─────────────────────────────────────────────────────┐   │
-│  │ Loader                                                │   │
-│  │ - Instantiate WASM module                            │   │
-│  │ - Bind syscall imports to Runtime                    │   │
-│  │ - Setup arguments in memory                          │   │
-│  │ - Call main(argc, argv)                              │   │
+│  │ Loader                                              │   │
+│  │ - Instantiate WASM module                           │   │
+│  │ - Bind syscall imports to Runtime                   │   │
+│  │ - Setup arguments in memory                         │   │
+│  │ - Call main(argc, argv)                             │   │
 │  └─────────────────────────┬───────────────────────────┘   │
-│                            │                                 │
-│                            ▼                                 │
+│                            │                               │
+│                            ▼                               │
 │  ┌─────────────────────────────────────────────────────┐   │
-│  │ Runtime                                               │   │
-│  │ - Captures stdout/stderr                             │   │
-│  │ - Provides stdin                                     │   │
-│  │ - Handles syscall implementations                    │   │
-│  │ - Manages file descriptor table                      │   │
+│  │ Runtime                                             │   │
+│  │ - Captures stdout/stderr                            │   │
+│  │ - Provides stdin                                    │   │
+│  │ - Handles syscall implementations                   │   │
+│  │ - Manages file descriptor table                     │   │
 │  └─────────────────────────┬───────────────────────────┘   │
-│                            │                                 │
-│                            ▼                                 │
+│                            │                               │
+│                            ▼                               │
 │  ┌─────────────────────────────────────────────────────┐   │
-│  │ CommandResult { exit_code, stdout, stderr }          │   │
+│  │ CommandResult { exit_code, stdout, stderr }         │   │
 │  └─────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
+└────────────────────────────────────────────────────────────┘
 ```
 
 ## Writing a Command (Rust Example)
