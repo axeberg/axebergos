@@ -13,7 +13,7 @@
 use super::TaskId;
 use super::memory::ProcessMemory;
 use super::signal::ProcessSignals;
-use super::users::{Gid, Uid};
+use super::users::{Gid, ProcessCapabilities, Uid};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -304,6 +304,10 @@ pub struct Process {
     /// Supplementary group IDs
     pub groups: Vec<Gid>,
 
+    /// POSIX capabilities (fine-grained privileges)
+    /// Root processes get all capabilities by default
+    pub capabilities: ProcessCapabilities,
+
     /// Current state
     pub state: ProcessState,
 
@@ -378,6 +382,7 @@ pub struct ProcessBuilder {
     euid: Option<Uid>,
     egid: Option<Gid>,
     groups: Vec<Gid>,
+    capabilities: Option<ProcessCapabilities>,
     environ: HashMap<String, String>,
     cwd: PathBuf,
     memory_limit: Option<usize>,
@@ -401,6 +406,7 @@ impl ProcessBuilder {
             euid: None,
             egid: None,
             groups: Vec::new(),
+            capabilities: None,
             environ: HashMap::new(),
             cwd: PathBuf::from("/"),
             memory_limit: None,
@@ -409,6 +415,12 @@ impl ProcessBuilder {
             ctty: None,
             nice: 0,
         }
+    }
+
+    /// Set the process capabilities explicitly
+    pub fn capabilities(mut self, caps: ProcessCapabilities) -> Self {
+        self.capabilities = Some(caps);
+        self
     }
 
     /// Set the scheduling priority (nice value)
@@ -528,6 +540,11 @@ impl ProcessBuilder {
             ProcessMemory::new()
         };
 
+        // Default capabilities based on UID (root gets all, others get none)
+        let capabilities = self
+            .capabilities
+            .unwrap_or_else(|| ProcessCapabilities::for_uid(self.uid));
+
         Process {
             pid: self.pid,
             parent: self.parent,
@@ -540,6 +557,7 @@ impl ProcessBuilder {
             suid: self.uid,
             sgid: self.gid,
             groups,
+            capabilities,
             state: ProcessState::Running,
             files: FileTable::new(),
             memory,
@@ -591,6 +609,7 @@ impl Process {
             suid: uid, // Saved IDs start same as real IDs
             sgid: gid,
             groups: vec![gid],
+            capabilities: ProcessCapabilities::for_uid(uid), // Regular user: no capabilities
             state: ProcessState::Running,
             files: FileTable::new(),
             memory: ProcessMemory::new(),
@@ -635,6 +654,7 @@ impl Process {
             suid: uid,
             sgid: gid,
             groups,
+            capabilities: ProcessCapabilities::for_uid(uid),
             state: ProcessState::Running,
             files: FileTable::new(),
             memory: ProcessMemory::new(),
@@ -679,6 +699,7 @@ impl Process {
             suid: uid,
             sgid: gid,
             groups: vec![gid],
+            capabilities: ProcessCapabilities::for_uid(uid),
             state: ProcessState::Running,
             files: FileTable::new(),
             memory: ProcessMemory::with_limit(limit),
@@ -739,6 +760,7 @@ impl Process {
             suid: uid,
             sgid: gid,
             groups,
+            capabilities: ProcessCapabilities::for_uid(uid),
             state: ProcessState::Running,
             files: FileTable::new(),
             memory: ProcessMemory::new(),
@@ -830,6 +852,7 @@ impl Process {
             suid: self.suid, // Inherit saved UID
             sgid: self.sgid, // Inherit saved GID
             groups: self.groups.clone(),
+            capabilities: self.capabilities.for_fork(), // Inherit capabilities
             state: ProcessState::Running,
             files: FileTable::new(), // Caller sets up fds
             memory: child_memory,

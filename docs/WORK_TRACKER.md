@@ -1,7 +1,7 @@
 # AxebergOS Work Tracker
 
 **Created**: 2025-12-28
-**Last Updated**: 2025-12-29
+**Last Updated**: 2025-12-30
 
 This document tracks all identified issues, improvements, and feature work for AxebergOS.
 
@@ -17,8 +17,8 @@ This document tracks all identified issues, improvements, and feature work for A
 | Code Quality | 10 | 10 | 0 | 0 |
 | Missing Features | 15 | 15 | 0 | 0 |
 | Documentation | 5 | 0 | 0 | 5 |
-| Future Features | 12 | 3 | 0 | 9 |
-| **TOTAL** | **57** | **43** | **0** | **14** |
+| Future Features | 12 | 4 | 0 | 8 |
+| **TOTAL** | **57** | **44** | **0** | **13** |
 
 ---
 
@@ -478,8 +478,23 @@ This document tracks all identified issues, improvements, and feature work for A
 
 ### FUT-002: Capability-Based Security
 - **Priority**: 🟡 MEDIUM
-- **Status**: ⬜ TODO
+- **Status**: ✅ DONE (2025-12-30)
+- **Files**: `src/kernel/users.rs`, `src/kernel/process.rs`, `src/kernel/syscall.rs`
 - **Description**: Fine-grained permissions beyond rwx
+- **Fix**: Implemented Linux-style POSIX capabilities:
+  - Added `Capability` enum with 24 capabilities (DAC_OVERRIDE, SETUID, KILL, SYS_ADMIN, etc.)
+  - Added `CapabilitySet` bitfield for efficient capability storage
+  - Added `ProcessCapabilities` with permitted/effective/inheritable sets
+  - Added `capabilities` field to Process struct, initialized based on UID
+  - Syscalls: `capget`, `capset`, `cap_raise`, `cap_lower`, `cap_drop`, `cap_check`
+  - Integrated into permission checks:
+    - `check_permission_with_caps()` for DAC_OVERRIDE, DAC_READ_SEARCH, FOWNER
+    - `sys_setuid/seteuid` check CAP_SETUID
+    - `sys_setgid/setegid/setgroups` check CAP_SETGID
+    - `sys_kill` checks CAP_KILL
+    - `sys_setrlimit` checks CAP_SYS_RESOURCE
+  - Capability inheritance: fork copies capabilities, exec transforms based on UID
+  - 20+ unit tests for capability operations
 - **Estimate**: Large
 
 ### FUT-003: Process Sandboxing/Jails
@@ -579,6 +594,23 @@ This document tracks all identified issues, improvements, and feature work for A
 ---
 
 ## Progress Log
+
+### 2025-12-30 (FUT-002 Complete)
+- **FUT-002**: Implemented Capability-Based Security:
+  - Added `Capability` enum with 24 Linux-style capabilities (CAP_DAC_OVERRIDE, CAP_SETUID, CAP_KILL, CAP_SYS_ADMIN, etc.)
+  - Added `CapabilitySet` as u32 bitfield with set operations (union, intersection, difference, subset)
+  - Added `ProcessCapabilities` with permitted/effective/inheritable sets per process
+  - Added `capabilities` field to Process struct, auto-initialized based on UID (root gets all, others get none)
+  - Added syscalls: `capget` (get process caps), `capset` (set caps), `cap_raise`, `cap_lower`, `cap_drop`, `cap_check`
+  - Integrated into existing syscalls:
+    - `sys_setuid/seteuid` now check CAP_SETUID instead of just root
+    - `sys_setgid/setegid/setgroups` check CAP_SETGID
+    - `sys_kill` checks CAP_KILL for signaling other processes
+    - `sys_setrlimit` checks CAP_SYS_RESOURCE for raising hard limits
+  - Added `check_permission_with_caps()` for capability-aware file permission checks
+  - Capability inheritance: fork copies capabilities unchanged, exec transforms based on UID
+  - 20+ comprehensive unit tests
+- Overall: 44 total issues resolved, 13 remaining (5 docs, 8 future features)
 
 ### 2025-12-29 (Phase 7 - Future Features)
 - **FUT-004**: Implemented Kernel Visualization (`src/kernel/visualizer.rs`):

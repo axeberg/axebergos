@@ -37,7 +37,9 @@ use super::timer::{TimerId, TimerQueue};
 use super::trace::{TraceCategory, TraceSummary, Tracer};
 use super::tty::TtyManager;
 use super::uds::{SockAddr, SocketId, SocketResult, SocketType, UnixSocketManager};
-use super::users::{FileMode, Gid, Group, Uid, User, UserDb, check_permission};
+use super::users::{
+    Capability, FileMode, Gid, Group, ProcessCapabilities, Uid, User, UserDb, check_permission,
+};
 use crate::vfs::{
     FileHandle as VfsFileHandle, FileSystem, MemoryFs, OpenOptions as VfsOpenOptions,
 };
@@ -141,6 +143,8 @@ pub enum SyscallNr {
     Setgroups = 309,
     Chmod = 310,
     Chown = 311,
+    Capget = 312,
+    Capset = 313,
 
     // Message Queues (325-349)
     Msgget = 325,
@@ -252,6 +256,8 @@ syscall_names! {
     Setgroups => "setgroups",
     Chmod => "chmod",
     Chown => "chown",
+    Capget => "capget",
+    Capset => "capset",
     // Message Queues
     Msgget => "msgget",
     Msgsnd => "msgsnd",
@@ -1000,6 +1006,12 @@ impl Kernel {
 
         // Clear pending signals (except those that can't be caught)
         process.signals.clear_pending();
+
+        // Transform capabilities on exec
+        // For now, we don't support file capabilities, so we use for_exec()
+        // which clears capabilities for non-root processes
+        let is_root = process.euid == Uid::ROOT;
+        process.capabilities = process.capabilities.for_exec(is_root);
 
         // Store args in process environment for retrieval
         // (Convention: EXEC_ARGS_N for each argument)
@@ -2725,20 +2737,50 @@ impl Kernel {
     // ========== SIGNAL SYSCALLS ==========
 
     /// Send a signal to a process
+    ///
+    /// Permission rules:
+    /// - A process can signal itself
+    /// - Root (UID 0) can signal any process
+    /// - CAP_KILL allows signaling any process
+    /// - Same real or effective UID can signal a process
     pub fn sys_kill(&mut self, pid: Pid, signal: Signal) -> SyscallResult<()> {
-        let process = self
+        // Get current process info for permission check
+        let current_pid = self.proc.current.ok_or(SyscallError::NoProcess)?;
+        let current = self
+            .proc
+            .processes
+            .get(&current_pid)
+            .ok_or(SyscallError::NoProcess)?;
+
+        let current_euid = current.euid;
+        let current_uid = current.uid;
+        let has_cap_kill = current.capabilities.has_effective(Capability::Kill);
+
+        // Get target process
+        let target = self
             .proc
             .processes
             .get_mut(&pid)
             .ok_or(SyscallError::NoProcess)?;
 
         // Can't signal zombies
-        if matches!(process.state, ProcessState::Zombie(_)) {
+        if matches!(target.state, ProcessState::Zombie(_)) {
             return Err(SyscallError::NoProcess);
         }
 
+        // Permission check
+        let can_signal = current_pid == pid  // Can signal self
+            || current_euid == Uid::ROOT      // Root can signal anyone
+            || has_cap_kill                    // CAP_KILL can signal anyone
+            || current_euid == target.euid     // Same effective UID
+            || current_uid == target.uid; // Same real UID
+
+        if !can_signal {
+            return Err(SyscallError::PermissionDenied);
+        }
+
         // Queue the signal
-        process.signals.send(signal);
+        target.signals.send(signal);
 
         Ok(())
     }
@@ -3426,17 +3468,21 @@ impl Kernel {
         Ok(process.groups.clone())
     }
 
-    /// Set real user ID (requires root or setting to own uid)
+    /// Set real user ID (requires root or CAP_SETUID, or setting to own uid)
     pub fn sys_setuid(&mut self, uid: Uid) -> SyscallResult<()> {
         let process = self.get_current_process_mut()?;
 
-        if process.euid == Uid::ROOT {
-            // Root: set all three IDs (real, effective, saved)
+        // Check for CAP_SETUID or root
+        let has_setuid_cap =
+            process.euid == Uid::ROOT || process.capabilities.has_effective(Capability::Setuid);
+
+        if has_setuid_cap {
+            // Privileged: set all three IDs (real, effective, saved)
             process.uid = uid;
             process.euid = uid;
             process.suid = uid;
         } else {
-            // Non-root: can only set effective UID to real or saved UID
+            // Non-privileged: can only set effective UID to real or saved UID
             if uid != process.uid && uid != process.suid {
                 return Err(SyscallError::PermissionDenied);
             }
@@ -3449,8 +3495,12 @@ impl Kernel {
     pub fn sys_seteuid(&mut self, euid: Uid) -> SyscallResult<()> {
         let process = self.get_current_process_mut()?;
 
-        // Can set euid to real uid, saved uid, or if root any uid
-        if process.euid != Uid::ROOT && euid != process.uid && euid != process.suid {
+        // Check for CAP_SETUID or root
+        let has_setuid_cap =
+            process.euid == Uid::ROOT || process.capabilities.has_effective(Capability::Setuid);
+
+        // Can set euid to real uid, saved uid, or if privileged any uid
+        if !has_setuid_cap && euid != process.uid && euid != process.suid {
             return Err(SyscallError::PermissionDenied);
         }
 
@@ -3458,17 +3508,21 @@ impl Kernel {
         Ok(())
     }
 
-    /// Set real group ID (requires root or setting to own gid)
+    /// Set real group ID (requires root or CAP_SETGID, or setting to own gid)
     pub fn sys_setgid(&mut self, gid: Gid) -> SyscallResult<()> {
         let process = self.get_current_process_mut()?;
 
-        if process.euid == Uid::ROOT {
-            // Root: set all three IDs (real, effective, saved)
+        // Check for CAP_SETGID or root
+        let has_setgid_cap =
+            process.euid == Uid::ROOT || process.capabilities.has_effective(Capability::Setgid);
+
+        if has_setgid_cap {
+            // Privileged: set all three IDs (real, effective, saved)
             process.gid = gid;
             process.egid = gid;
             process.sgid = gid;
         } else {
-            // Non-root: can only set effective GID to real or saved GID
+            // Non-privileged: can only set effective GID to real or saved GID
             if gid != process.gid && gid != process.sgid {
                 return Err(SyscallError::PermissionDenied);
             }
@@ -3481,8 +3535,12 @@ impl Kernel {
     pub fn sys_setegid(&mut self, egid: Gid) -> SyscallResult<()> {
         let process = self.get_current_process_mut()?;
 
-        // Can set egid to real gid, saved gid, or if root any gid
-        if process.euid != Uid::ROOT && egid != process.gid && egid != process.sgid {
+        // Check for CAP_SETGID or root
+        let has_setgid_cap =
+            process.euid == Uid::ROOT || process.capabilities.has_effective(Capability::Setgid);
+
+        // Can set egid to real gid, saved gid, or if privileged any gid
+        if !has_setgid_cap && egid != process.gid && egid != process.sgid {
             return Err(SyscallError::PermissionDenied);
         }
 
@@ -3490,11 +3548,15 @@ impl Kernel {
         Ok(())
     }
 
-    /// Set supplementary group list (requires root)
+    /// Set supplementary group list (requires root or CAP_SETGID)
     pub fn sys_setgroups(&mut self, groups: Vec<Gid>) -> SyscallResult<()> {
         let process = self.get_current_process_mut()?;
 
-        if process.euid != Uid::ROOT {
+        // Check for CAP_SETGID or root
+        let has_setgid_cap =
+            process.euid == Uid::ROOT || process.capabilities.has_effective(Capability::Setgid);
+
+        if !has_setgid_cap {
             return Err(SyscallError::PermissionDenied);
         }
 
@@ -3536,13 +3598,122 @@ impl Kernel {
             return Err(SyscallError::InvalidArgument);
         }
 
-        // Non-root cannot raise hard limit
-        if limit.hard > current.hard && process.euid != Uid::ROOT {
+        // Check for CAP_SYS_RESOURCE or root to raise hard limit
+        let has_resource_cap = process.euid == Uid::ROOT
+            || process.capabilities.has_effective(Capability::SysResource);
+
+        // Cannot raise hard limit without CAP_SYS_RESOURCE
+        if limit.hard > current.hard && !has_resource_cap {
             return Err(SyscallError::PermissionDenied);
         }
 
         process.rlimits.set(resource, limit);
         Ok(())
+    }
+
+    // ========== CAPABILITY SYSCALLS ==========
+
+    /// Get capabilities for a process
+    ///
+    /// If pid is 0, returns capabilities of the current process.
+    /// Otherwise, returns capabilities of the specified process (requires CAP_SYS_PTRACE
+    /// or same UID).
+    ///
+    /// Returns (permitted, effective, inheritable) capability sets.
+    pub fn sys_capget(&self, pid: Pid) -> SyscallResult<ProcessCapabilities> {
+        let current = self.get_current_process()?;
+        let target_pid = if pid.0 == 0 { current.pid } else { pid };
+
+        // Check if requesting own capabilities
+        if target_pid == current.pid {
+            return Ok(current.capabilities);
+        }
+
+        // Requesting another process's capabilities
+        let target = self
+            .proc
+            .processes
+            .get(&target_pid)
+            .ok_or(SyscallError::NoProcess)?;
+
+        // Must have CAP_SYS_PTRACE or be same UID to read other process capabilities
+        if current.euid != Uid::ROOT
+            && !current.capabilities.has_effective(Capability::SysPtrace)
+            && current.euid != target.euid
+        {
+            return Err(SyscallError::PermissionDenied);
+        }
+
+        Ok(target.capabilities)
+    }
+
+    /// Set capabilities for the current process
+    ///
+    /// Rules:
+    /// - Can only modify own process capabilities
+    /// - Cannot add capabilities not in permitted set to effective set
+    /// - Cannot add capabilities not in permitted set to inheritable set (unless CAP_SETPCAP)
+    /// - Removing from permitted is permanent (cannot be undone)
+    pub fn sys_capset(&mut self, caps: ProcessCapabilities) -> SyscallResult<()> {
+        let process = self.get_current_process_mut()?;
+
+        // Validate: effective must be subset of permitted
+        if !caps.effective.is_subset_of(&caps.permitted) {
+            return Err(SyscallError::InvalidArgument);
+        }
+
+        // Validate: new permitted must be subset of current permitted (can only drop, not gain)
+        if !caps.permitted.is_subset_of(&process.capabilities.permitted) {
+            return Err(SyscallError::PermissionDenied);
+        }
+
+        // Validate: inheritable changes require CAP_SETPCAP to add new capabilities
+        let new_inheritable = caps
+            .inheritable
+            .difference(&process.capabilities.inheritable);
+        if !new_inheritable.is_empty() && !process.capabilities.has_effective(Capability::Setpcap) {
+            // Without CAP_SETPCAP, can only add capabilities that are in permitted
+            if !new_inheritable.is_subset_of(&process.capabilities.permitted) {
+                return Err(SyscallError::PermissionDenied);
+            }
+        }
+
+        process.capabilities = caps;
+        Ok(())
+    }
+
+    /// Raise a capability (add to effective set if in permitted)
+    /// Convenience wrapper around capset
+    pub fn sys_cap_raise(&mut self, cap: Capability) -> SyscallResult<()> {
+        let process = self.get_current_process_mut()?;
+
+        if !process.capabilities.raise(cap) {
+            return Err(SyscallError::PermissionDenied);
+        }
+
+        Ok(())
+    }
+
+    /// Lower a capability (remove from effective set)
+    /// Convenience wrapper around capset
+    pub fn sys_cap_lower(&mut self, cap: Capability) -> SyscallResult<()> {
+        let process = self.get_current_process_mut()?;
+        process.capabilities.lower(cap);
+        Ok(())
+    }
+
+    /// Drop a capability permanently (remove from all sets)
+    /// This cannot be undone!
+    pub fn sys_cap_drop(&mut self, cap: Capability) -> SyscallResult<()> {
+        let process = self.get_current_process_mut()?;
+        process.capabilities.drop_cap(cap);
+        Ok(())
+    }
+
+    /// Check if a capability is effective for the current process
+    pub fn sys_cap_check(&self, cap: Capability) -> SyscallResult<bool> {
+        let process = self.get_current_process()?;
+        Ok(process.capabilities.has_effective(cap))
     }
 
     pub fn users(&self) -> &UserDb {
