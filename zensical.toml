@@ -32,6 +32,16 @@ code = "JetBrains Mono"
 [project.theme.icon]
 logo = "simple/rust"
 
+# Markdown extensions for code block syntax highlighting
+[project.markdown_extensions.pymdownx.highlight]
+anchor_linenums = true
+line_spans = "__span"
+pygments_lang_class = true
+
+[project.markdown_extensions.pymdownx.inlinehilite]
+
+[project.markdown_extensions.pymdownx.superfences]
+
 # Navigation is auto-derived from docs directory structure
 # Explicit nav can be defined as:
 # nav = [
