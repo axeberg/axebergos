@@ -6,10 +6,10 @@ A mini operating system written in Rust, compiled to WebAssembly.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                                  Browser                                     │
+│                                  Browser                                    │
 │  ┌───────────────────────────────────────────────────────────────────────┐  │
-│  │                             axeberg OS                                 │  │
-│  │                                                                        │  │
+│  │                             axeberg OS                                │  │
+│  │                                                                       │  │
 │  │  ┌──────────────────────────────────────────────────────────────────┐ │  │
 │  │  │ Shell                     $ cat file | grep pattern | wc -l      │ │  │
 │  │  └─────────────────────────────────────┬────────────────────────────┘ │  │
@@ -21,7 +21,7 @@ A mini operating system written in Rust, compiled to WebAssembly.
 │  │                                        │                              │  │
 │  │                                        ▼                              │  │
 │  │  ┌──────────────────────────────────────────────────────────────────┐ │  │
-│  │  │                            Kernel                                 │ │  │
+│  │  │                            Kernel                                │ │  │
 │  │  │  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐  │ │  │
 │  │  │  │ Syscalls   │  │ Processes  │  │   VFS      │  │  Memory    │  │ │  │
 │  │  │  │ (300+)     │  │ + Signals  │  │ MemoryFs   │  │  COW/mmap  │  │ │  │
@@ -34,7 +34,7 @@ A mini operating system written in Rust, compiled to WebAssembly.
 │  │                                        │                              │  │
 │  │                                        ▼                              │  │
 │  │  ┌──────────────────────────────────────────────────────────────────┐ │  │
-│  │  │                    Compositor (WebGPU) / Terminal                 │ │  │
+│  │  │                    Compositor (WebGPU) / Terminal                │ │  │
 │  │  └──────────────────────────────────────────────────────────────────┘ │  │
 │  └───────────────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -47,15 +47,6 @@ A mini operating system written in Rust, compiled to WebAssembly.
 | **Tractable** | Entire system comprehensible by one person |
 | **Immediate** | Changes take effect instantly |
 | **Personal** | Your computing environment, under your control |
-
-## Statistics
-
-| Metric | Value |
-|--------|-------|
-| Lines of Rust | ~62,000 |
-| Tests | ~1,000+ |
-| Shell commands | 80+ |
-| Syscalls | 300+ |
 
 ## Documentation
 
@@ -132,22 +123,22 @@ User Input: "cat file.txt | grep hello"
      │
      ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│ Parser                                                               │
+│ Parser                                                              │
 │  ├─ Tokenize: ["cat", "file.txt", "|", "grep", "hello"]             │
-│  └─ Build: Pipeline { commands: [SimpleCommand, SimpleCommand] }     │
+│  └─ Build: Pipeline { commands: [SimpleCommand, SimpleCommand] }    │
 └─────────────────────────────────────────────────────────────────────┘
      │
      ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│ Executor                                                             │
-│  ├─ Create pipe for stdout → stdin                                   │
-│  ├─ Spawn process for "cat" with redirected stdout                   │
-│  └─ Spawn process for "grep" with redirected stdin                   │
+│ Executor                                                            │
+│  ├─ Create pipe for stdout → stdin                                  │
+│  ├─ Spawn process for "cat" with redirected stdout                  │
+│  └─ Spawn process for "grep" with redirected stdin                  │
 └─────────────────────────────────────────────────────────────────────┘
      │
      ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│ Kernel                                                               │
+│ Kernel                                                              │
 │  ├─ Process 1: cat reads /file.txt via VFS, writes to pipe          │
 │  └─ Process 2: grep reads from pipe, writes matches to terminal     │
 └─────────────────────────────────────────────────────────────────────┘
