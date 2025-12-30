@@ -10,21 +10,21 @@ The `Tracer` collects:
 - **Kernel Statistics**: Process, signal, timer, and I/O metrics
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                      Tracer                          │
-│  ┌─────────────────────────────────────────────┐    │
-│  │              Event Ring Buffer               │    │
-│  │  [Event 1] [Event 2] [Event 3] ... [Event N] │    │
-│  │  (max 1000 events, oldest evicted first)     │    │
-│  └─────────────────────────────────────────────┘    │
-│                                                      │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────┐   │
-│  │ SyscallStats │  │SchedulerStats│  │KernelStats│  │
-│  │ open: 42     │  │ ticks: 1000  │  │ spawned: 5│  │
-│  │ read: 156    │  │ avg: 0.5ms   │  │ signals: 3│  │
-│  │ write: 89    │  │ max: 2.1ms   │  │ timers: 12│  │
-│  └──────────────┘  └──────────────┘  └──────────┘   │
-└─────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────┐
+│                      Tracer                            │
+│  ┌──────────────────────────────────────────────┐      │
+│  │              Event Ring Buffer               │      │
+│  │  [Event 1] [Event 2] [Event 3] ... [Event N] │      │
+│  │  (max 1000 events, oldest evicted first)     │      │
+│  └──────────────────────────────────────────────┘      │
+│                                                        │
+│  ┌──────────────┐  ┌────────────────┐  ┌────────────┐  │
+│  │ SyscallStats │  │ SchedulerStats │  │KernelStats │  │
+│  │ open: 42     │  │ ticks: 1000    │  │ spawned: 5 │  │
+│  │ read: 156    │  │ avg: 0.5ms     │  │ signals: 3 │  │
+│  │ write: 89    │  │ max: 2.1ms     │  │ timers: 12 │  │
+│  └──────────────┘  └────────────────┘  └────────────┘  │
+└────────────────────────────────────────────────────────┘
 ```
 
 ## Quick Start

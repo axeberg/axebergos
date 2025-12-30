@@ -14,9 +14,9 @@ axeberg currently uses **xterm.js** for terminal rendering instead of a custom c
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                      Browser Tab                         │
+│                      Browser Tab                        │
 │  ┌───────────────────────────────────────────────────┐  │
-│  │                   xterm.js                         │  │
+│  │                   xterm.js                        │  │
 │  │  ┌─────────────────────────────────────────────┐  │  │
 │  │  │ user@axeberg:~$ ls -la                      │  │  │
 │  │  │ drwxr-xr-x  5 user user 4096 Dec 26 README  │  │  │

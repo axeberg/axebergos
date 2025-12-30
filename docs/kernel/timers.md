@@ -7,17 +7,17 @@ The timer system provides time-based scheduling for the kernel, enabling async s
 Timers are managed by a `TimerQueue` that uses a min-heap for efficient scheduling. When a timer fires, it wakes the associated task (if any).
 
 ```
-┌─────────────────────────────────────────┐
-│              TimerQueue                  │
-│  ┌─────────────────────────────────┐    │
-│  │         Min-Heap                │    │
-│  │  ┌─────┐ ┌─────┐ ┌─────┐       │    │
-│  │  │ 50ms│ │100ms│ │150ms│  ...  │    │
-│  │  └─────┘ └─────┘ └─────┘       │    │
-│  └─────────────────────────────────┘    │
-│                                          │
-│  tick(now) → Vec<TaskId> to wake        │
-└─────────────────────────────────────────┘
+┌──────────────────────────────────────┐
+│              TimerQueue              │
+│  ┌────────────────────────────────┐  │
+│  │         Min-Heap               │  │
+│  │  ┌─────┐ ┌─────┐ ┌─────┐       │  │
+│  │  │ 50ms│ │100ms│ │150ms│  ...  │  │
+│  │  └─────┘ └─────┘ └─────┘       │  │
+│  └────────────────────────────────┘  │
+│                                      │
+│  tick(now) → Vec<TaskId> to wake     │
+└──────────────────────────────────────┘
 ```
 
 ## Timer Types

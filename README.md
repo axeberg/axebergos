@@ -6,22 +6,22 @@ A mini operating system written in Rust, compiled to WebAssembly, running entire
 
 ## Overview
 
-axeberg is an operating system designed to be understood by one person. Clean abstractions, comprehensive tests (~1,000+), and ~62,000 lines of documented Rust code.
+axeberg is an operating system designed to be understood by one person.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                              Browser                                     │
+│                              Browser                                    │
 │  ┌───────────────────────────────────────────────────────────────────┐  │
-│  │                           axeberg OS                               │  │
-│  │                                                                    │  │
+│  │                           axeberg OS                              │  │
+│  │                                                                   │  │
 │  │   ┌──────────────────────────────────────────────────────────┐    │  │
-│  │   │ Shell                                                     │    │  │
+│  │   │ Shell                                                    │    │  │
 │  │   │  $ cat log.txt | grep ERROR | wc -l                      │    │  │
 │  │   └─────────────────────────┬────────────────────────────────┘    │  │
-│  │                             │                                      │  │
-│  │                             ▼                                      │  │
+│  │                             │                                     │  │
+│  │                             ▼                                     │  │
 │  │   ┌──────────────────────────────────────────────────────────┐    │  │
-│  │   │                        Kernel                             │    │  │
+│  │   │                        Kernel                            │    │  │
 │  │   │  ┌────────────┐ ┌────────────┐ ┌────────────────────┐    │    │  │
 │  │   │  │ Processes  │ │   Memory   │ │       VFS          │    │    │  │
 │  │   │  │  + Signals │ │  + COW     │ │ MemoryFs/LayeredFs │    │    │  │
@@ -31,10 +31,10 @@ axeberg is an operating system designed to be understood by one person. Clean ab
 │  │   │  │  + Groups  │ │ pipe/shm/uds│ │  + WASI Preview2  │    │    │  │
 │  │   │  └────────────┘ └────────────┘ └────────────────────┘    │    │  │
 │  │   └──────────────────────────────────────────────────────────┘    │  │
-│  │                             │                                      │  │
-│  │                             ▼                                      │  │
+│  │                             │                                     │  │
+│  │                             ▼                                     │  │
 │  │   ┌──────────────────────────────────────────────────────────┐    │  │
-│  │   │              Terminal (xterm.js) / Compositor             │    │  │
+│  │   │              Terminal (xterm.js) / Compositor            │    │  │
 │  │   └──────────────────────────────────────────────────────────┘    │  │
 │  └───────────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -50,7 +50,7 @@ axeberg is an operating system designed to be understood by one person. Clean ab
 | **Process** | Fork/exec, signals, resource limits, priority (nice), jails (chroot) |
 | **IPC** | Pipes, FIFOs, message queues, semaphores, Unix domain sockets, file locking |
 | **Security** | Capability-based security, process sandboxing, salted password hashing |
-| **WASM** | Module loader, WASI Preview2, package manager |
+| **WASM** | Module loader, WASI Preview2 |
 
 ## Quick Start
 

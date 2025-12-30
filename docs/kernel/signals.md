@@ -12,7 +12,7 @@ Signals are asynchronous notifications sent to processes. Each process can:
 
 ```
 ┌─────────────────────────────────────────────────┐
-│                    Process                       │
+│                    Process                      │
 │  ┌─────────────────┐  ┌─────────────────────┐   │
 │  │   Disposition   │  │   Pending Queue     │   │
 │  │ SIGTERM→Handle  │  │ [SIGUSR1, SIGALRM]  │   │
