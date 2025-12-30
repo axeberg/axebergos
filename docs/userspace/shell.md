@@ -4,12 +4,16 @@ The axeberg shell is a command-line interpreter providing a Unix-like interface 
 
 ## Features
 
-- **Command parsing** with pipes, redirections, and quotes
-- **Built-in commands** that run in the shell process
-- **External programs** that run via the executor
-- **Pipes** for chaining commands: `cat file.txt | grep pattern | wc -l`
-- **Redirections** for file I/O: `ls > files.txt`, `sort < input.txt`
-- **Terminal** with scrollback and line editing
+- **Pipes**: `cat file.txt | grep pattern | wc -l`
+- **Redirections**: `ls > files.txt`, `sort < input.txt`
+- **Logical operators**: `cmd1 && cmd2`, `cmd1 || cmd2`
+- **Background jobs**: `sleep 100 &`, `jobs`, `fg`, `bg`
+- **Functions**: `greet() { echo "Hello $1"; }`
+- **Arrays**: `arr=(one two three)`, `arr[0]=value`
+- **Heredocs**: `cat <<EOF ... EOF`
+- **Process substitution**: `diff <(cmd1) <(cmd2)`
+- **Variable expansion**: `$VAR`, `${VAR}`
+- **Job control**: Ctrl+C, Ctrl+Z, fg, bg
 
 ## Architecture
 
@@ -255,12 +259,73 @@ echo 'hello $USER'         # Prints: hello $USER
 echo "path: \"$PWD\""      # Prints: path: "/current/dir"
 ```
 
-### Background Execution
+### Logical Operators
 
-Append `&` to run command in background (not yet fully implemented):
+Chain commands based on exit status:
 
 ```bash
-long-running-task &
+make && ./test           # Run test only if make succeeds
+grep pattern file || echo "Not found"  # Echo if grep fails
+```
+
+### Functions
+
+Define reusable command sequences:
+
+```bash
+greet() {
+    echo "Hello, $1!"
+}
+
+greet "World"            # Prints: Hello, World!
+```
+
+### Arrays
+
+Bash-like array syntax:
+
+```bash
+arr=(one two three)      # Define array
+arr+=(four)              # Append element
+arr[0]=zero              # Set by index
+echo ${arr[1]}           # Access element (expansion not yet implemented)
+```
+
+### Heredocs
+
+Multi-line input:
+
+```bash
+cat <<EOF
+This is a
+multi-line
+document
+EOF
+
+cat <<-INDENTED
+	Tabs at start are stripped
+	with the - variant
+INDENTED
+```
+
+### Process Substitution
+
+Use command output as file:
+
+```bash
+diff <(ls dir1) <(ls dir2)   # Compare directory listings
+grep pattern <(cat file | sort)
+```
+
+### Background Execution
+
+Run commands in background:
+
+```bash
+long-running-task &          # Run in background
+jobs                         # List background jobs
+fg %1                        # Bring job 1 to foreground
+bg %1                        # Continue job 1 in background
 ```
 
 ## Parser Details

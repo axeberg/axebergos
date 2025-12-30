@@ -125,16 +125,28 @@ impl OpenOptions {
 
 ```rust
 pub struct Metadata {
+    pub file_type: FileType,  // File, Directory, Symlink
     pub size: u64,
-    pub is_dir: bool,
-    pub is_file: bool,
-    pub is_symlink: bool,
-    pub symlink_target: Option<String>,
-    pub uid: u32,        // Owner user ID
-    pub gid: u32,        // Owner group ID
-    pub mode: u16,       // Unix permission mode (rwxrwxrwx)
+    pub uid: u32,             // Owner user ID
+    pub gid: u32,             // Owner group ID
+    pub mode: u32,            // Unix permission mode (0o755, etc.)
+    pub nlink: u32,           // Link count
+    pub atime: f64,           // Access time (ms since epoch)
+    pub mtime: f64,           // Modification time
+    pub ctime: f64,           // Change time (metadata change)
+}
+
+pub enum FileType {
+    File,
+    Directory,
+    Symlink,
 }
 ```
+
+Timestamps are updated automatically:
+- **atime**: Updated on read
+- **mtime**: Updated on write/truncate
+- **ctime**: Updated on any metadata change (chmod, chown, write)
 
 ## Directory Entry
 
