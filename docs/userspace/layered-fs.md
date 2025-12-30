@@ -8,7 +8,7 @@ LayeredFs provides overlay mount functionality: a writable upper layer on top of
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     Unified View                             │
+│                     Unified View                            │
 │  /                                                          │
 │  ├── bin/         (from lower)                              │
 │  ├── etc/         (merged: lower + upper modifications)     │
@@ -18,12 +18,12 @@ LayeredFs provides overlay mount functionality: a writable upper layer on top of
                               │
               ┌───────────────┴───────────────┐
               ▼                               ▼
-┌─────────────────────────┐     ┌─────────────────────────┐
+┌──────────────────────────┐     ┌─────────────────────────┐
 │     Upper (writable)     │     │     Lower (read-only)   │
 │  /etc/passwd (modified)  │     │  /bin/cat               │
 │  /home/alice/            │     │  /etc/passwd (original) │
 │  /.wh.deleted_file       │     │  /etc/shadow            │
-└─────────────────────────┘     └─────────────────────────┘
+└──────────────────────────┘     └─────────────────────────┘
 ```
 
 ## Semantics
@@ -178,7 +178,7 @@ LayeredFs implements the full FileSystem trait:
 
 ```
 ┌─────────────────────────────────────────┐
-│           Container View                 │
+│           Container View                │
 └─────────────────────────────────────────┘
                     │
     ┌───────────────┼───────────────┐
