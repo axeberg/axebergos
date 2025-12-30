@@ -172,6 +172,523 @@ impl std::fmt::Display for FileMode {
     }
 }
 
+// ============================================================================
+// POSIX Capabilities
+// ============================================================================
+
+/// Linux-style capability for fine-grained privilege control
+///
+/// Capabilities split the traditional "root can do everything" model into
+/// distinct privileges. A process may have some capabilities but not others.
+///
+/// Based on POSIX 1003.1e draft and Linux capabilities(7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum Capability {
+    /// Override file read/search permission checks (DAC = Discretionary Access Control)
+    /// Allows reading any file regardless of permission bits
+    DacReadSearch = 0,
+
+    /// Override all DAC access, including write access
+    /// Allows reading/writing any file regardless of permission bits
+    DacOverride = 1,
+
+    /// Bypass file ownership checks for chown(2)
+    /// Allows changing file owner to any user
+    Chown = 2,
+
+    /// Don't clear setuid/setgid bits when modifying files
+    /// Allows preserving setuid/setgid on chown/write
+    Fsetid = 3,
+
+    /// Bypass permission checks for file owner operations
+    /// Allows operations that require file ownership
+    Fowner = 4,
+
+    /// Allow setting file capabilities (extended attributes)
+    SetFcap = 5,
+
+    /// Allow killing any process (bypass permission checks)
+    Kill = 6,
+
+    /// Allow setgid(2), setgroups(2), and forged gids in socket credentials
+    Setgid = 7,
+
+    /// Allow setuid(2), setreuid(2), etc.
+    Setuid = 8,
+
+    /// Allow transferring/forging process capabilities
+    Setpcap = 9,
+
+    /// Allow binding to privileged ports (< 1024)
+    NetBindService = 10,
+
+    /// Allow raw socket creation
+    NetRaw = 11,
+
+    /// Allow network administration (interface config, routing, etc.)
+    NetAdmin = 12,
+
+    /// Allow system administration operations
+    /// Includes: mount, sethostname, reboot, etc.
+    SysAdmin = 13,
+
+    /// Allow chroot(2)
+    SysChroot = 14,
+
+    /// Allow ptrace(2) on any process
+    SysPtrace = 15,
+
+    /// Allow nice(2), setpriority(2) to raise priority
+    SysNice = 16,
+
+    /// Allow resource limit modifications (setrlimit for other processes)
+    SysResource = 17,
+
+    /// Allow setting system time
+    SysTime = 18,
+
+    /// Allow tty configuration (vhangup, ioctl on ttys)
+    SysTtyConfig = 19,
+
+    /// Allow loading/unloading kernel modules
+    SysModule = 20,
+
+    /// Allow system boot operations
+    SysBoot = 21,
+
+    /// Allow I/O port operations
+    SysRawio = 22,
+
+    /// Allow triggering panic/reboot
+    SysPanic = 23,
+}
+
+impl Capability {
+    /// Total number of capabilities
+    pub const COUNT: usize = 24;
+
+    /// Get the capability name as a string
+    pub fn name(self) -> &'static str {
+        match self {
+            Capability::DacReadSearch => "CAP_DAC_READ_SEARCH",
+            Capability::DacOverride => "CAP_DAC_OVERRIDE",
+            Capability::Chown => "CAP_CHOWN",
+            Capability::Fsetid => "CAP_FSETID",
+            Capability::Fowner => "CAP_FOWNER",
+            Capability::SetFcap => "CAP_SETFCAP",
+            Capability::Kill => "CAP_KILL",
+            Capability::Setgid => "CAP_SETGID",
+            Capability::Setuid => "CAP_SETUID",
+            Capability::Setpcap => "CAP_SETPCAP",
+            Capability::NetBindService => "CAP_NET_BIND_SERVICE",
+            Capability::NetRaw => "CAP_NET_RAW",
+            Capability::NetAdmin => "CAP_NET_ADMIN",
+            Capability::SysAdmin => "CAP_SYS_ADMIN",
+            Capability::SysChroot => "CAP_SYS_CHROOT",
+            Capability::SysPtrace => "CAP_SYS_PTRACE",
+            Capability::SysNice => "CAP_SYS_NICE",
+            Capability::SysResource => "CAP_SYS_RESOURCE",
+            Capability::SysTime => "CAP_SYS_TIME",
+            Capability::SysTtyConfig => "CAP_SYS_TTY_CONFIG",
+            Capability::SysModule => "CAP_SYS_MODULE",
+            Capability::SysBoot => "CAP_SYS_BOOT",
+            Capability::SysRawio => "CAP_SYS_RAWIO",
+            Capability::SysPanic => "CAP_SYS_PANIC",
+        }
+    }
+
+    /// Parse capability from name (case-insensitive, with or without CAP_ prefix)
+    pub fn from_name(name: &str) -> Option<Self> {
+        let name = name.to_uppercase();
+        let name = name.strip_prefix("CAP_").unwrap_or(&name);
+
+        match name {
+            "DAC_READ_SEARCH" => Some(Capability::DacReadSearch),
+            "DAC_OVERRIDE" => Some(Capability::DacOverride),
+            "CHOWN" => Some(Capability::Chown),
+            "FSETID" => Some(Capability::Fsetid),
+            "FOWNER" => Some(Capability::Fowner),
+            "SETFCAP" => Some(Capability::SetFcap),
+            "KILL" => Some(Capability::Kill),
+            "SETGID" => Some(Capability::Setgid),
+            "SETUID" => Some(Capability::Setuid),
+            "SETPCAP" => Some(Capability::Setpcap),
+            "NET_BIND_SERVICE" => Some(Capability::NetBindService),
+            "NET_RAW" => Some(Capability::NetRaw),
+            "NET_ADMIN" => Some(Capability::NetAdmin),
+            "SYS_ADMIN" => Some(Capability::SysAdmin),
+            "SYS_CHROOT" => Some(Capability::SysChroot),
+            "SYS_PTRACE" => Some(Capability::SysPtrace),
+            "SYS_NICE" => Some(Capability::SysNice),
+            "SYS_RESOURCE" => Some(Capability::SysResource),
+            "SYS_TIME" => Some(Capability::SysTime),
+            "SYS_TTY_CONFIG" => Some(Capability::SysTtyConfig),
+            "SYS_MODULE" => Some(Capability::SysModule),
+            "SYS_BOOT" => Some(Capability::SysBoot),
+            "SYS_RAWIO" => Some(Capability::SysRawio),
+            "SYS_PANIC" => Some(Capability::SysPanic),
+            _ => None,
+        }
+    }
+
+    /// Get capability from its numeric value
+    pub fn from_u8(n: u8) -> Option<Self> {
+        match n {
+            0 => Some(Capability::DacReadSearch),
+            1 => Some(Capability::DacOverride),
+            2 => Some(Capability::Chown),
+            3 => Some(Capability::Fsetid),
+            4 => Some(Capability::Fowner),
+            5 => Some(Capability::SetFcap),
+            6 => Some(Capability::Kill),
+            7 => Some(Capability::Setgid),
+            8 => Some(Capability::Setuid),
+            9 => Some(Capability::Setpcap),
+            10 => Some(Capability::NetBindService),
+            11 => Some(Capability::NetRaw),
+            12 => Some(Capability::NetAdmin),
+            13 => Some(Capability::SysAdmin),
+            14 => Some(Capability::SysChroot),
+            15 => Some(Capability::SysPtrace),
+            16 => Some(Capability::SysNice),
+            17 => Some(Capability::SysResource),
+            18 => Some(Capability::SysTime),
+            19 => Some(Capability::SysTtyConfig),
+            20 => Some(Capability::SysModule),
+            21 => Some(Capability::SysBoot),
+            22 => Some(Capability::SysRawio),
+            23 => Some(Capability::SysPanic),
+            _ => None,
+        }
+    }
+
+    /// Iterator over all capabilities
+    pub fn all() -> impl Iterator<Item = Capability> {
+        (0..Self::COUNT as u8).filter_map(Self::from_u8)
+    }
+}
+
+impl std::fmt::Display for Capability {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name())
+    }
+}
+
+/// A set of capabilities represented as a bitfield
+///
+/// Linux uses three sets per process:
+/// - Permitted: The capabilities the process is allowed to use
+/// - Effective: The capabilities currently active (checked for operations)
+/// - Inheritable: The capabilities that can be passed to child processes
+///
+/// This implementation uses a u32 bitfield (supports up to 32 capabilities).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CapabilitySet(pub u32);
+
+impl CapabilitySet {
+    /// Empty capability set
+    pub const EMPTY: CapabilitySet = CapabilitySet(0);
+
+    /// All capabilities set (root-equivalent)
+    pub const ALL: CapabilitySet = CapabilitySet((1 << Capability::COUNT) - 1);
+
+    /// Create a new empty capability set
+    pub fn new() -> Self {
+        Self::EMPTY
+    }
+
+    /// Create a capability set with all capabilities
+    pub fn all() -> Self {
+        Self::ALL
+    }
+
+    /// Check if a capability is in the set
+    pub fn has(&self, cap: Capability) -> bool {
+        self.0 & (1 << cap as u32) != 0
+    }
+
+    /// Add a capability to the set
+    pub fn add(&mut self, cap: Capability) {
+        self.0 |= 1 << cap as u32;
+    }
+
+    /// Remove a capability from the set
+    pub fn remove(&mut self, cap: Capability) {
+        self.0 &= !(1 << cap as u32);
+    }
+
+    /// Set whether a capability is in the set
+    pub fn set(&mut self, cap: Capability, value: bool) {
+        if value {
+            self.add(cap);
+        } else {
+            self.remove(cap);
+        }
+    }
+
+    /// Clear all capabilities
+    pub fn clear(&mut self) {
+        self.0 = 0;
+    }
+
+    /// Set all capabilities
+    pub fn set_all(&mut self) {
+        self.0 = Self::ALL.0;
+    }
+
+    /// Union of two capability sets
+    pub fn union(&self, other: &CapabilitySet) -> CapabilitySet {
+        CapabilitySet(self.0 | other.0)
+    }
+
+    /// Intersection of two capability sets
+    pub fn intersection(&self, other: &CapabilitySet) -> CapabilitySet {
+        CapabilitySet(self.0 & other.0)
+    }
+
+    /// Difference (self - other)
+    pub fn difference(&self, other: &CapabilitySet) -> CapabilitySet {
+        CapabilitySet(self.0 & !other.0)
+    }
+
+    /// Check if this set is a subset of another
+    pub fn is_subset_of(&self, other: &CapabilitySet) -> bool {
+        (self.0 & other.0) == self.0
+    }
+
+    /// Check if the set is empty
+    pub fn is_empty(&self) -> bool {
+        self.0 == 0
+    }
+
+    /// Count the number of capabilities in the set
+    pub fn count(&self) -> usize {
+        self.0.count_ones() as usize
+    }
+
+    /// Iterate over capabilities in the set
+    pub fn iter(&self) -> impl Iterator<Item = Capability> + '_ {
+        Capability::all().filter(|cap| self.has(*cap))
+    }
+
+    /// Create from raw bits
+    pub fn from_bits(bits: u32) -> Self {
+        CapabilitySet(bits & Self::ALL.0)
+    }
+
+    /// Get raw bits
+    pub fn bits(&self) -> u32 {
+        self.0
+    }
+}
+
+impl std::fmt::Display for CapabilitySet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.is_empty() {
+            write!(f, "(none)")
+        } else if *self == Self::ALL {
+            write!(f, "(all)")
+        } else {
+            let caps: Vec<_> = self.iter().map(|c| c.name()).collect();
+            write!(f, "{}", caps.join(","))
+        }
+    }
+}
+
+impl From<Capability> for CapabilitySet {
+    fn from(cap: Capability) -> Self {
+        let mut set = CapabilitySet::new();
+        set.add(cap);
+        set
+    }
+}
+
+impl FromIterator<Capability> for CapabilitySet {
+    fn from_iter<I: IntoIterator<Item = Capability>>(iter: I) -> Self {
+        let mut set = CapabilitySet::new();
+        for cap in iter {
+            set.add(cap);
+        }
+        set
+    }
+}
+
+/// Capability state for a process
+///
+/// Each process has three capability sets:
+/// - `permitted`: Maximum capabilities the process can use
+/// - `effective`: Currently active capabilities (actually checked)
+/// - `inheritable`: Capabilities preserved across execve()
+///
+/// A capability must be in `permitted` to be added to `effective`.
+/// The `inheritable` set controls what capabilities child processes can inherit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProcessCapabilities {
+    /// Maximum capabilities the process is allowed to have
+    pub permitted: CapabilitySet,
+
+    /// Currently active capabilities (used for permission checks)
+    pub effective: CapabilitySet,
+
+    /// Capabilities that can be inherited by child processes
+    pub inheritable: CapabilitySet,
+}
+
+impl ProcessCapabilities {
+    /// Create empty capabilities (unprivileged)
+    pub fn new() -> Self {
+        Self {
+            permitted: CapabilitySet::EMPTY,
+            effective: CapabilitySet::EMPTY,
+            inheritable: CapabilitySet::EMPTY,
+        }
+    }
+
+    /// Create full capabilities (root-equivalent)
+    pub fn root() -> Self {
+        Self {
+            permitted: CapabilitySet::ALL,
+            effective: CapabilitySet::ALL,
+            inheritable: CapabilitySet::ALL,
+        }
+    }
+
+    /// Create capabilities for a specific UID
+    /// Root (UID 0) gets all capabilities, others get none
+    pub fn for_uid(uid: Uid) -> Self {
+        if uid == Uid::ROOT {
+            Self::root()
+        } else {
+            Self::new()
+        }
+    }
+
+    /// Check if a capability is effective (active)
+    pub fn has_effective(&self, cap: Capability) -> bool {
+        self.effective.has(cap)
+    }
+
+    /// Check if a capability is permitted
+    pub fn has_permitted(&self, cap: Capability) -> bool {
+        self.permitted.has(cap)
+    }
+
+    /// Check if a capability is inheritable
+    pub fn has_inheritable(&self, cap: Capability) -> bool {
+        self.inheritable.has(cap)
+    }
+
+    /// Raise a capability (add to effective if permitted)
+    /// Returns false if the capability is not in permitted set
+    pub fn raise(&mut self, cap: Capability) -> bool {
+        if self.permitted.has(cap) {
+            self.effective.add(cap);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Lower a capability (remove from effective)
+    pub fn lower(&mut self, cap: Capability) {
+        self.effective.remove(cap);
+    }
+
+    /// Drop a capability permanently (remove from all sets)
+    pub fn drop_cap(&mut self, cap: Capability) {
+        self.permitted.remove(cap);
+        self.effective.remove(cap);
+        self.inheritable.remove(cap);
+    }
+
+    /// Clear all capabilities
+    pub fn clear(&mut self) {
+        self.permitted.clear();
+        self.effective.clear();
+        self.inheritable.clear();
+    }
+
+    /// Calculate capabilities for a child process after fork()
+    /// Child inherits parent's capabilities unchanged
+    pub fn for_fork(&self) -> Self {
+        *self
+    }
+
+    /// Calculate capabilities after exec() with no file capabilities
+    ///
+    /// By default, exec clears effective and permitted capabilities unless
+    /// the process has CAP_SETPCAP or is running as root.
+    ///
+    /// For root processes: P'(effective) = P'(permitted) = P(inheritable) | F(permitted)
+    /// For non-root: P'(effective) = P'(permitted) = P(inheritable) & F(permitted)
+    ///
+    /// Since we're not implementing file capabilities yet, F(permitted) = 0,
+    /// so non-root processes lose their capabilities on exec.
+    pub fn for_exec(&self, is_root: bool) -> Self {
+        if is_root {
+            // Root preserves capabilities across exec
+            Self {
+                permitted: self.inheritable,
+                effective: self.inheritable,
+                inheritable: self.inheritable,
+            }
+        } else {
+            // Non-root loses capabilities unless the file has capabilities
+            // Since we don't have file capabilities, clear everything
+            Self::new()
+        }
+    }
+
+    /// Calculate capabilities after exec() with file capabilities
+    ///
+    /// Uses the Linux capability transformation formula:
+    /// P'(permitted) = (P(inheritable) & F(inheritable)) | (F(permitted) & cap_bset)
+    /// P'(effective) = F(effective) ? P'(permitted) : 0
+    /// P'(inheritable) = P(inheritable)
+    pub fn for_exec_with_file_caps(
+        &self,
+        file_permitted: CapabilitySet,
+        file_inheritable: CapabilitySet,
+        file_effective: bool,
+    ) -> Self {
+        // Calculate new permitted: (P(inh) & F(inh)) | F(perm)
+        let new_permitted = self
+            .inheritable
+            .intersection(&file_inheritable)
+            .union(&file_permitted);
+
+        // New effective is either all of permitted (if file has effective bit) or empty
+        let new_effective = if file_effective {
+            new_permitted
+        } else {
+            CapabilitySet::EMPTY
+        };
+
+        Self {
+            permitted: new_permitted,
+            effective: new_effective,
+            inheritable: self.inheritable,
+        }
+    }
+}
+
+impl Default for ProcessCapabilities {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Display for ProcessCapabilities {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "eff={} perm={} inh={}",
+            self.effective, self.permitted, self.inheritable
+        )
+    }
+}
+
 /// User entry (like /etc/passwd line)
 #[derive(Debug, Clone)]
 pub struct User {
@@ -810,6 +1327,76 @@ pub fn check_permission(
     (!want_read || r) && (!want_write || w) && (!want_exec || x)
 }
 
+/// Check if a user can access a file with given permissions, considering capabilities
+///
+/// This is an enhanced version of `check_permission` that also checks relevant
+/// capabilities like CAP_DAC_OVERRIDE and CAP_DAC_READ_SEARCH.
+///
+/// Capability effects:
+/// - CAP_DAC_OVERRIDE: Bypass all DAC permission checks (read, write, execute)
+/// - CAP_DAC_READ_SEARCH: Bypass read permission and directory search/execute checks
+/// - CAP_FOWNER: Bypass permission checks for operations that require file ownership
+#[allow(clippy::too_many_arguments)]
+pub fn check_permission_with_caps(
+    file_uid: Uid,
+    file_gid: Gid,
+    file_mode: FileMode,
+    user_uid: Uid,
+    user_gid: Gid,
+    user_groups: &[Gid],
+    caps: &ProcessCapabilities,
+    want_read: bool,
+    want_write: bool,
+    want_exec: bool,
+) -> bool {
+    // Root can do anything (traditional behavior)
+    if user_uid == Uid::ROOT {
+        return true;
+    }
+
+    // CAP_DAC_OVERRIDE bypasses all file permission checks
+    if caps.has_effective(Capability::DacOverride) {
+        return true;
+    }
+
+    // CAP_DAC_READ_SEARCH bypasses read and directory search (execute) checks
+    // Note: It does NOT bypass write permission checks
+    if caps.has_effective(Capability::DacReadSearch) && !want_write {
+        return true;
+    }
+
+    // CAP_FOWNER bypasses permission checks requiring file ownership
+    // (for owner permission bits, process is treated as file owner)
+    let is_owner = user_uid == file_uid || caps.has_effective(Capability::Fowner);
+
+    // Determine which permission bits to check
+    let (r, w, x) = if is_owner {
+        // Owner permissions (or CAP_FOWNER holder)
+        (
+            file_mode.owner_read(),
+            file_mode.owner_write(),
+            file_mode.owner_exec(),
+        )
+    } else if user_gid == file_gid || user_groups.contains(&file_gid) {
+        // Group permissions
+        (
+            file_mode.group_read(),
+            file_mode.group_write(),
+            file_mode.group_exec(),
+        )
+    } else {
+        // Other permissions
+        (
+            file_mode.other_read(),
+            file_mode.other_write(),
+            file_mode.other_exec(),
+        )
+    };
+
+    // Check requested permissions
+    (!want_read || r) && (!want_write || w) && (!want_exec || x)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -991,5 +1578,333 @@ mod tests {
             true,
             true
         ));
+    }
+
+    // ========== CAPABILITY TESTS ==========
+
+    #[test]
+    fn test_capability_basic() {
+        // Test single capability operations
+        let mut set = CapabilitySet::new();
+        assert!(set.is_empty());
+        assert!(!set.has(Capability::DacOverride));
+
+        set.add(Capability::DacOverride);
+        assert!(!set.is_empty());
+        assert!(set.has(Capability::DacOverride));
+        assert_eq!(set.count(), 1);
+
+        set.remove(Capability::DacOverride);
+        assert!(set.is_empty());
+        assert!(!set.has(Capability::DacOverride));
+    }
+
+    #[test]
+    fn test_capability_set_operations() {
+        let mut set1 = CapabilitySet::new();
+        set1.add(Capability::DacOverride);
+        set1.add(Capability::Setuid);
+
+        let mut set2 = CapabilitySet::new();
+        set2.add(Capability::Setuid);
+        set2.add(Capability::Kill);
+
+        // Union
+        let union = set1.union(&set2);
+        assert!(union.has(Capability::DacOverride));
+        assert!(union.has(Capability::Setuid));
+        assert!(union.has(Capability::Kill));
+        assert_eq!(union.count(), 3);
+
+        // Intersection
+        let inter = set1.intersection(&set2);
+        assert!(!inter.has(Capability::DacOverride));
+        assert!(inter.has(Capability::Setuid));
+        assert!(!inter.has(Capability::Kill));
+        assert_eq!(inter.count(), 1);
+
+        // Difference
+        let diff = set1.difference(&set2);
+        assert!(diff.has(Capability::DacOverride));
+        assert!(!diff.has(Capability::Setuid));
+        assert!(!diff.has(Capability::Kill));
+    }
+
+    #[test]
+    fn test_capability_all() {
+        let all = CapabilitySet::ALL;
+        assert_eq!(all.count(), Capability::COUNT);
+        assert!(all.has(Capability::DacOverride));
+        assert!(all.has(Capability::SysAdmin));
+        assert!(all.has(Capability::Setuid));
+    }
+
+    #[test]
+    fn test_capability_subset() {
+        let mut small = CapabilitySet::new();
+        small.add(Capability::DacOverride);
+
+        let mut large = CapabilitySet::new();
+        large.add(Capability::DacOverride);
+        large.add(Capability::Setuid);
+
+        assert!(small.is_subset_of(&large));
+        assert!(!large.is_subset_of(&small));
+        assert!(small.is_subset_of(&CapabilitySet::ALL));
+        assert!(CapabilitySet::EMPTY.is_subset_of(&small));
+    }
+
+    #[test]
+    fn test_capability_from_name() {
+        assert_eq!(
+            Capability::from_name("CAP_DAC_OVERRIDE"),
+            Some(Capability::DacOverride)
+        );
+        assert_eq!(
+            Capability::from_name("dac_override"),
+            Some(Capability::DacOverride)
+        );
+        assert_eq!(Capability::from_name("SETUID"), Some(Capability::Setuid));
+        assert_eq!(Capability::from_name("invalid"), None);
+    }
+
+    #[test]
+    fn test_process_capabilities_root() {
+        let caps = ProcessCapabilities::root();
+        assert!(caps.has_effective(Capability::DacOverride));
+        assert!(caps.has_effective(Capability::SysAdmin));
+        assert!(caps.has_permitted(Capability::Setuid));
+        assert!(caps.has_inheritable(Capability::Kill));
+    }
+
+    #[test]
+    fn test_process_capabilities_for_uid() {
+        // Root gets all caps
+        let root_caps = ProcessCapabilities::for_uid(Uid::ROOT);
+        assert!(root_caps.has_effective(Capability::DacOverride));
+
+        // Regular users get no caps
+        let user_caps = ProcessCapabilities::for_uid(Uid(1000));
+        assert!(!user_caps.has_effective(Capability::DacOverride));
+        assert!(user_caps.effective.is_empty());
+    }
+
+    #[test]
+    fn test_process_capabilities_raise_lower() {
+        let mut caps = ProcessCapabilities::root();
+
+        // Lower a capability
+        caps.lower(Capability::DacOverride);
+        assert!(!caps.has_effective(Capability::DacOverride));
+        assert!(caps.has_permitted(Capability::DacOverride)); // Still permitted
+
+        // Raise it back
+        assert!(caps.raise(Capability::DacOverride));
+        assert!(caps.has_effective(Capability::DacOverride));
+    }
+
+    #[test]
+    fn test_process_capabilities_raise_not_permitted() {
+        let mut caps = ProcessCapabilities::new(); // No capabilities
+        caps.permitted.add(Capability::Setuid); // Add only to permitted
+
+        // Can raise because it's in permitted
+        assert!(caps.raise(Capability::Setuid));
+
+        // Cannot raise DacOverride because it's not in permitted
+        assert!(!caps.raise(Capability::DacOverride));
+    }
+
+    #[test]
+    fn test_process_capabilities_drop() {
+        let mut caps = ProcessCapabilities::root();
+
+        // Drop a capability permanently
+        caps.drop_cap(Capability::SysAdmin);
+        assert!(!caps.has_effective(Capability::SysAdmin));
+        assert!(!caps.has_permitted(Capability::SysAdmin));
+        assert!(!caps.has_inheritable(Capability::SysAdmin));
+
+        // Can't raise it back
+        assert!(!caps.raise(Capability::SysAdmin));
+    }
+
+    #[test]
+    fn test_process_capabilities_fork() {
+        let parent = ProcessCapabilities::root();
+        let child = parent.for_fork();
+
+        // Child inherits same capabilities
+        assert_eq!(child.effective, parent.effective);
+        assert_eq!(child.permitted, parent.permitted);
+        assert_eq!(child.inheritable, parent.inheritable);
+    }
+
+    #[test]
+    fn test_process_capabilities_exec_root() {
+        let caps = ProcessCapabilities::root();
+        let after_exec = caps.for_exec(true);
+
+        // Root preserves inheritable capabilities on exec
+        assert_eq!(after_exec.effective, caps.inheritable);
+        assert_eq!(after_exec.permitted, caps.inheritable);
+    }
+
+    #[test]
+    fn test_process_capabilities_exec_non_root() {
+        let mut caps = ProcessCapabilities::new();
+        caps.permitted.add(Capability::Setuid);
+        caps.effective.add(Capability::Setuid);
+        caps.inheritable.add(Capability::Setuid);
+
+        let after_exec = caps.for_exec(false);
+
+        // Non-root loses capabilities on exec (without file caps)
+        assert!(after_exec.effective.is_empty());
+        assert!(after_exec.permitted.is_empty());
+    }
+
+    #[test]
+    fn test_permission_with_caps_dac_override() {
+        let mode = FileMode(0o000); // No permissions
+        let file_uid = Uid(1000);
+        let file_gid = Gid(1000);
+        let user_uid = Uid(2000); // Different user
+
+        // Without caps - should fail
+        let no_caps = ProcessCapabilities::new();
+        assert!(!check_permission_with_caps(
+            file_uid,
+            file_gid,
+            mode,
+            user_uid,
+            Gid(2000),
+            &[],
+            &no_caps,
+            true,
+            false,
+            false
+        ));
+
+        // With CAP_DAC_OVERRIDE - should succeed
+        let mut with_dac = ProcessCapabilities::new();
+        with_dac.permitted.add(Capability::DacOverride);
+        with_dac.effective.add(Capability::DacOverride);
+        assert!(check_permission_with_caps(
+            file_uid,
+            file_gid,
+            mode,
+            user_uid,
+            Gid(2000),
+            &[],
+            &with_dac,
+            true,
+            true,
+            true
+        ));
+    }
+
+    #[test]
+    fn test_permission_with_caps_dac_read_search() {
+        let mode = FileMode(0o000); // No permissions
+        let file_uid = Uid(1000);
+        let file_gid = Gid(1000);
+        let user_uid = Uid(2000);
+
+        let mut caps = ProcessCapabilities::new();
+        caps.permitted.add(Capability::DacReadSearch);
+        caps.effective.add(Capability::DacReadSearch);
+
+        // CAP_DAC_READ_SEARCH allows read but not write
+        assert!(check_permission_with_caps(
+            file_uid,
+            file_gid,
+            mode,
+            user_uid,
+            Gid(2000),
+            &[],
+            &caps,
+            true,
+            false,
+            false
+        ));
+        assert!(!check_permission_with_caps(
+            file_uid,
+            file_gid,
+            mode,
+            user_uid,
+            Gid(2000),
+            &[],
+            &caps,
+            false,
+            true,
+            false
+        ));
+    }
+
+    #[test]
+    fn test_permission_with_caps_fowner() {
+        let mode = FileMode(0o700); // Owner only
+        let file_uid = Uid(1000);
+        let file_gid = Gid(1000);
+        let user_uid = Uid(2000); // Different user
+
+        // Without FOWNER - should fail (not owner, no 'other' perms)
+        let no_caps = ProcessCapabilities::new();
+        assert!(!check_permission_with_caps(
+            file_uid,
+            file_gid,
+            mode,
+            user_uid,
+            Gid(2000),
+            &[],
+            &no_caps,
+            true,
+            true,
+            true
+        ));
+
+        // With CAP_FOWNER - treated as owner
+        let mut with_fowner = ProcessCapabilities::new();
+        with_fowner.permitted.add(Capability::Fowner);
+        with_fowner.effective.add(Capability::Fowner);
+        assert!(check_permission_with_caps(
+            file_uid,
+            file_gid,
+            mode,
+            user_uid,
+            Gid(2000),
+            &[],
+            &with_fowner,
+            true,
+            true,
+            true
+        ));
+    }
+
+    #[test]
+    fn test_capability_iterator() {
+        let mut set = CapabilitySet::new();
+        set.add(Capability::DacOverride);
+        set.add(Capability::Kill);
+        set.add(Capability::Setuid);
+
+        let caps: Vec<Capability> = set.iter().collect();
+        assert_eq!(caps.len(), 3);
+        assert!(caps.contains(&Capability::DacOverride));
+        assert!(caps.contains(&Capability::Kill));
+        assert!(caps.contains(&Capability::Setuid));
+    }
+
+    #[test]
+    fn test_capability_display() {
+        assert_eq!(Capability::DacOverride.to_string(), "CAP_DAC_OVERRIDE");
+        assert_eq!(Capability::SysAdmin.to_string(), "CAP_SYS_ADMIN");
+
+        let empty = CapabilitySet::EMPTY;
+        assert_eq!(empty.to_string(), "(none)");
+
+        let all = CapabilitySet::ALL;
+        assert_eq!(all.to_string(), "(all)");
     }
 }

@@ -13,9 +13,67 @@
 use super::TaskId;
 use super::memory::ProcessMemory;
 use super::signal::ProcessSignals;
-use super::users::{Gid, Uid};
+use super::users::{Gid, ProcessCapabilities, Uid};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Component, PathBuf};
+
+/// Canonicalize a path by removing "." and ".." components
+///
+/// This is a pure path manipulation - it doesn't access the filesystem.
+/// It's safe to use for jail path resolution.
+///
+/// Examples:
+/// - `/foo/bar/../baz` -> `/foo/baz`
+/// - `/foo/./bar` -> `/foo/bar`
+/// - `/foo/../../bar` -> `/bar` (can't go above root)
+/// - `foo/bar` -> `foo/bar` (relative paths preserved)
+fn canonicalize_path(path: &std::path::Path) -> PathBuf {
+    let mut components = Vec::new();
+    let mut is_absolute = false;
+
+    for component in path.components() {
+        match component {
+            Component::Prefix(p) => {
+                components.clear();
+                components.push(Component::Prefix(p));
+            }
+            Component::RootDir => {
+                is_absolute = true;
+                components.clear();
+                components.push(Component::RootDir);
+            }
+            Component::CurDir => {
+                // Skip "." - it means current directory
+            }
+            Component::ParentDir => {
+                // ".." - go up one level, but not above root
+                if components.len() > 1 || (!is_absolute && !components.is_empty()) {
+                    // Only pop if we have something to pop (and not just RootDir)
+                    if let Some(last) = components.last()
+                        && !matches!(last, Component::RootDir | Component::Prefix(_))
+                    {
+                        components.pop();
+                    }
+                }
+            }
+            Component::Normal(name) => {
+                components.push(Component::Normal(name));
+            }
+        }
+    }
+
+    // Handle empty result for relative paths
+    if components.is_empty() {
+        return PathBuf::from(".");
+    }
+
+    // Build the result path
+    let mut result = PathBuf::new();
+    for component in components {
+        result.push(component.as_os_str());
+    }
+    result
+}
 
 /// Process group identifier (for job control)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -304,6 +362,10 @@ pub struct Process {
     /// Supplementary group IDs
     pub groups: Vec<Gid>,
 
+    /// POSIX capabilities (fine-grained privileges)
+    /// Root processes get all capabilities by default
+    pub capabilities: ProcessCapabilities,
+
     /// Current state
     pub state: ProcessState,
 
@@ -324,6 +386,11 @@ pub struct Process {
 
     /// Current working directory
     pub cwd: PathBuf,
+
+    /// Jail root directory (chroot)
+    /// If set, all path operations are confined to this directory.
+    /// The process sees this as "/" and cannot escape via ".." traversal.
+    pub jail_root: Option<PathBuf>,
 
     /// The executor task running this process's code
     pub task: Option<TaskId>,
@@ -378,8 +445,10 @@ pub struct ProcessBuilder {
     euid: Option<Uid>,
     egid: Option<Gid>,
     groups: Vec<Gid>,
+    capabilities: Option<ProcessCapabilities>,
     environ: HashMap<String, String>,
     cwd: PathBuf,
+    jail_root: Option<PathBuf>,
     memory_limit: Option<usize>,
     is_session_leader: bool,
     umask: u16,
@@ -401,14 +470,28 @@ impl ProcessBuilder {
             euid: None,
             egid: None,
             groups: Vec::new(),
+            capabilities: None,
             environ: HashMap::new(),
             cwd: PathBuf::from("/"),
+            jail_root: None,
             memory_limit: None,
             is_session_leader: true,
             umask: 0o022,
             ctty: None,
             nice: 0,
         }
+    }
+
+    /// Set the process capabilities explicitly
+    pub fn capabilities(mut self, caps: ProcessCapabilities) -> Self {
+        self.capabilities = Some(caps);
+        self
+    }
+
+    /// Set the jail root (chroot directory)
+    pub fn jail_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.jail_root = Some(root.into());
+        self
     }
 
     /// Set the scheduling priority (nice value)
@@ -528,6 +611,11 @@ impl ProcessBuilder {
             ProcessMemory::new()
         };
 
+        // Default capabilities based on UID (root gets all, others get none)
+        let capabilities = self
+            .capabilities
+            .unwrap_or_else(|| ProcessCapabilities::for_uid(self.uid));
+
         Process {
             pid: self.pid,
             parent: self.parent,
@@ -540,6 +628,7 @@ impl ProcessBuilder {
             suid: self.uid,
             sgid: self.gid,
             groups,
+            capabilities,
             state: ProcessState::Running,
             files: FileTable::new(),
             memory,
@@ -547,6 +636,7 @@ impl ProcessBuilder {
             rlimits: ResourceLimits::new(),
             environ: self.environ,
             cwd: self.cwd,
+            jail_root: self.jail_root,
             task: None,
             name: self.name,
             children: Vec::new(),
@@ -591,6 +681,7 @@ impl Process {
             suid: uid, // Saved IDs start same as real IDs
             sgid: gid,
             groups: vec![gid],
+            capabilities: ProcessCapabilities::for_uid(uid), // Regular user: no capabilities
             state: ProcessState::Running,
             files: FileTable::new(),
             memory: ProcessMemory::new(),
@@ -598,6 +689,7 @@ impl Process {
             rlimits: ResourceLimits::new(),
             environ,
             cwd: PathBuf::from("/"),
+            jail_root: None, // No jail by default
             task: None,
             name,
             children: Vec::new(),
@@ -635,6 +727,7 @@ impl Process {
             suid: uid,
             sgid: gid,
             groups,
+            capabilities: ProcessCapabilities::for_uid(uid),
             state: ProcessState::Running,
             files: FileTable::new(),
             memory: ProcessMemory::new(),
@@ -642,6 +735,7 @@ impl Process {
             rlimits: ResourceLimits::new(),
             environ,
             cwd,
+            jail_root: None,
             task: None,
             name,
             children: Vec::new(),
@@ -679,6 +773,7 @@ impl Process {
             suid: uid,
             sgid: gid,
             groups: vec![gid],
+            capabilities: ProcessCapabilities::for_uid(uid),
             state: ProcessState::Running,
             files: FileTable::new(),
             memory: ProcessMemory::with_limit(limit),
@@ -686,6 +781,7 @@ impl Process {
             rlimits: ResourceLimits::new(),
             environ,
             cwd: PathBuf::from("/"),
+            jail_root: None,
             task: None,
             name,
             children: Vec::new(),
@@ -739,6 +835,7 @@ impl Process {
             suid: uid,
             sgid: gid,
             groups,
+            capabilities: ProcessCapabilities::for_uid(uid),
             state: ProcessState::Running,
             files: FileTable::new(),
             memory: ProcessMemory::new(),
@@ -746,6 +843,7 @@ impl Process {
             rlimits: ResourceLimits::new(),
             environ,
             cwd: PathBuf::from(home),
+            jail_root: None,
             task: None,
             name,
             children: Vec::new(),
@@ -775,6 +873,77 @@ impl Process {
 
     pub fn unsetenv(&mut self, name: &str) -> bool {
         self.environ.remove(name).is_some()
+    }
+
+    /// Resolve a path within the process's jail (chroot)
+    ///
+    /// If the process is jailed (jail_root is Some), this function:
+    /// - Prepends the jail root to absolute paths
+    /// - Resolves relative paths from the jailed cwd
+    /// - Canonicalizes the path to prevent ".." traversal escapes
+    /// - Ensures the final path is within the jail
+    ///
+    /// If the process is not jailed, returns the path as-is (after making absolute).
+    ///
+    /// # Returns
+    /// - `Ok(PathBuf)` - The resolved real filesystem path
+    /// - `Err(())` - If the path would escape the jail (security violation)
+    #[allow(clippy::result_unit_err)]
+    pub fn resolve_jailed_path(&self, path: &std::path::Path) -> Result<PathBuf, ()> {
+        match &self.jail_root {
+            None => {
+                // No jail - just make the path absolute if needed
+                if path.is_absolute() {
+                    Ok(path.to_path_buf())
+                } else {
+                    Ok(self.cwd.join(path))
+                }
+            }
+            Some(jail_root) => {
+                // Jailed - resolve path within jail
+                let virtual_path = if path.is_absolute() {
+                    // Absolute path in jail: /foo -> jail_root/foo
+                    path.to_path_buf()
+                } else {
+                    // Relative path: resolve from cwd (which is also virtual)
+                    self.cwd.join(path)
+                };
+
+                // Canonicalize to remove ".." and "." components safely
+                let canonical = canonicalize_path(&virtual_path);
+
+                // The canonical path should start with "/" (virtual root in jail)
+                // We need to join it with jail_root
+                // Strip leading "/" to avoid path joining issues
+                let relative_in_jail = canonical.strip_prefix("/").unwrap_or(&canonical);
+
+                let real_path = jail_root.join(relative_in_jail);
+
+                // Security check: ensure the resolved path is still within jail
+                // This handles edge cases like symlinks (if we add those later)
+                if !real_path.starts_with(jail_root) {
+                    return Err(());
+                }
+
+                Ok(real_path)
+            }
+        }
+    }
+
+    /// Check if this process is jailed (chrooted)
+    pub fn is_jailed(&self) -> bool {
+        self.jail_root.is_some()
+    }
+
+    /// Get the jail root, if any
+    pub fn get_jail_root(&self) -> Option<&std::path::Path> {
+        self.jail_root.as_deref()
+    }
+
+    /// Set the jail root (chroot)
+    /// This is called by sys_chroot after permission checks
+    pub fn set_jail_root(&mut self, root: PathBuf) {
+        self.jail_root = Some(root);
     }
 
     pub fn environ(&self) -> &HashMap<String, String> {
@@ -830,6 +999,7 @@ impl Process {
             suid: self.suid, // Inherit saved UID
             sgid: self.sgid, // Inherit saved GID
             groups: self.groups.clone(),
+            capabilities: self.capabilities.for_fork(), // Inherit capabilities
             state: ProcessState::Running,
             files: FileTable::new(), // Caller sets up fds
             memory: child_memory,
@@ -837,7 +1007,8 @@ impl Process {
             rlimits: self.rlimits.clone(),                 // Inherit resource limits
             environ: self.environ.clone(),
             cwd: self.cwd.clone(),
-            task: None, // Caller sets up task
+            jail_root: self.jail_root.clone(), // Inherit jail (child stays in same jail)
+            task: None,                        // Caller sets up task
             name: self.name.clone(),
             children: Vec::new(), // No children yet
             ctty: self.ctty.clone(),
@@ -1121,5 +1292,156 @@ mod tests {
     fn test_file_table_default_limit() {
         let ft = FileTable::new();
         assert_eq!(ft.max_fds(), MAX_FDS_PER_PROCESS);
+    }
+
+    // ========== CANONICALIZE PATH TESTS ==========
+
+    #[test]
+    fn test_canonicalize_absolute_simple() {
+        let result = super::canonicalize_path(std::path::Path::new("/foo/bar"));
+        assert_eq!(result, PathBuf::from("/foo/bar"));
+    }
+
+    #[test]
+    fn test_canonicalize_removes_dots() {
+        let result = super::canonicalize_path(std::path::Path::new("/foo/./bar"));
+        assert_eq!(result, PathBuf::from("/foo/bar"));
+    }
+
+    #[test]
+    fn test_canonicalize_removes_dotdot() {
+        let result = super::canonicalize_path(std::path::Path::new("/foo/bar/../baz"));
+        assert_eq!(result, PathBuf::from("/foo/baz"));
+    }
+
+    #[test]
+    fn test_canonicalize_dotdot_at_root() {
+        // ".." at root should stay at root
+        let result = super::canonicalize_path(std::path::Path::new("/foo/../.."));
+        assert_eq!(result, PathBuf::from("/"));
+    }
+
+    #[test]
+    fn test_canonicalize_multiple_dotdot() {
+        let result = super::canonicalize_path(std::path::Path::new("/a/b/c/../../d"));
+        assert_eq!(result, PathBuf::from("/a/d"));
+    }
+
+    #[test]
+    fn test_canonicalize_relative() {
+        let result = super::canonicalize_path(std::path::Path::new("foo/bar"));
+        assert_eq!(result, PathBuf::from("foo/bar"));
+    }
+
+    // ========== JAIL PATH RESOLUTION TESTS ==========
+
+    #[test]
+    fn test_jailed_path_absolute() {
+        let mut proc = Process::new(Pid(1), "test".to_string(), None);
+        proc.set_jail_root(PathBuf::from("/jail"));
+
+        // Absolute path in jail should map to jail root
+        let result = proc
+            .resolve_jailed_path(std::path::Path::new("/foo"))
+            .unwrap();
+        assert_eq!(result, PathBuf::from("/jail/foo"));
+    }
+
+    #[test]
+    fn test_jailed_path_relative() {
+        let mut proc = Process::new(Pid(1), "test".to_string(), None);
+        proc.cwd = PathBuf::from("/home");
+        proc.set_jail_root(PathBuf::from("/jail"));
+
+        // Relative path should resolve from virtual cwd
+        let result = proc
+            .resolve_jailed_path(std::path::Path::new("bar"))
+            .unwrap();
+        assert_eq!(result, PathBuf::from("/jail/home/bar"));
+    }
+
+    #[test]
+    fn test_jailed_path_prevents_escape() {
+        let mut proc = Process::new(Pid(1), "test".to_string(), None);
+        proc.set_jail_root(PathBuf::from("/jail"));
+
+        // Trying to escape with ".." should stay in jail
+        let result = proc
+            .resolve_jailed_path(std::path::Path::new("/../../../etc/passwd"))
+            .unwrap();
+        assert_eq!(result, PathBuf::from("/jail/etc/passwd"));
+    }
+
+    #[test]
+    fn test_jailed_path_root() {
+        let mut proc = Process::new(Pid(1), "test".to_string(), None);
+        proc.set_jail_root(PathBuf::from("/jail"));
+
+        // Root in jail should be jail root
+        let result = proc.resolve_jailed_path(std::path::Path::new("/")).unwrap();
+        assert_eq!(result, PathBuf::from("/jail"));
+    }
+
+    #[test]
+    fn test_unjailed_path_absolute() {
+        let proc = Process::new(Pid(1), "test".to_string(), None);
+        // No jail set
+
+        let result = proc
+            .resolve_jailed_path(std::path::Path::new("/foo/bar"))
+            .unwrap();
+        assert_eq!(result, PathBuf::from("/foo/bar"));
+    }
+
+    #[test]
+    fn test_unjailed_path_relative() {
+        let mut proc = Process::new(Pid(1), "test".to_string(), None);
+        proc.cwd = PathBuf::from("/home/user");
+        // No jail set
+
+        let result = proc
+            .resolve_jailed_path(std::path::Path::new("foo"))
+            .unwrap();
+        assert_eq!(result, PathBuf::from("/home/user/foo"));
+    }
+
+    #[test]
+    fn test_is_jailed() {
+        let mut proc = Process::new(Pid(1), "test".to_string(), None);
+        assert!(!proc.is_jailed());
+
+        proc.set_jail_root(PathBuf::from("/jail"));
+        assert!(proc.is_jailed());
+    }
+
+    #[test]
+    fn test_jail_inherited_on_fork() {
+        use super::super::memory::RegionId;
+
+        let mut parent = Process::new(Pid(1), "parent".to_string(), None);
+        parent.set_jail_root(PathBuf::from("/jail"));
+
+        let mut region_counter = 100u64;
+        let (child, _) = parent.cow_fork(Pid(2), || {
+            region_counter += 1;
+            RegionId(region_counter)
+        });
+
+        // Child should inherit jail
+        assert!(child.is_jailed());
+        assert_eq!(child.get_jail_root(), Some(std::path::Path::new("/jail")));
+    }
+
+    #[test]
+    fn test_process_builder_jail_root() {
+        let proc = ProcessBuilder::new(Pid(1), "test")
+            .jail_root("/chroot/env")
+            .build();
+
+        assert!(proc.is_jailed());
+        assert_eq!(
+            proc.get_jail_root(),
+            Some(std::path::Path::new("/chroot/env"))
+        );
     }
 }

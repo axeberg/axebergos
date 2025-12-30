@@ -1,7 +1,7 @@
 # AxebergOS Work Tracker
 
 **Created**: 2025-12-28
-**Last Updated**: 2025-12-29
+**Last Updated**: 2025-12-30
 
 This document tracks all identified issues, improvements, and feature work for AxebergOS.
 
@@ -17,8 +17,8 @@ This document tracks all identified issues, improvements, and feature work for A
 | Code Quality | 10 | 10 | 0 | 0 |
 | Missing Features | 15 | 15 | 0 | 0 |
 | Documentation | 5 | 0 | 0 | 5 |
-| Future Features | 12 | 3 | 0 | 9 |
-| **TOTAL** | **57** | **43** | **0** | **14** |
+| Future Features | 12 | 5 | 0 | 7 |
+| **TOTAL** | **57** | **45** | **0** | **12** |
 
 ---
 
@@ -478,14 +478,40 @@ This document tracks all identified issues, improvements, and feature work for A
 
 ### FUT-002: Capability-Based Security
 - **Priority**: 🟡 MEDIUM
-- **Status**: ⬜ TODO
+- **Status**: ✅ DONE (2025-12-30)
+- **Files**: `src/kernel/users.rs`, `src/kernel/process.rs`, `src/kernel/syscall.rs`
 - **Description**: Fine-grained permissions beyond rwx
+- **Fix**: Implemented Linux-style POSIX capabilities:
+  - Added `Capability` enum with 24 capabilities (DAC_OVERRIDE, SETUID, KILL, SYS_ADMIN, etc.)
+  - Added `CapabilitySet` bitfield for efficient capability storage
+  - Added `ProcessCapabilities` with permitted/effective/inheritable sets
+  - Added `capabilities` field to Process struct, initialized based on UID
+  - Syscalls: `capget`, `capset`, `cap_raise`, `cap_lower`, `cap_drop`, `cap_check`
+  - Integrated into permission checks:
+    - `check_permission_with_caps()` for DAC_OVERRIDE, DAC_READ_SEARCH, FOWNER
+    - `sys_setuid/seteuid` check CAP_SETUID
+    - `sys_setgid/setegid/setgroups` check CAP_SETGID
+    - `sys_kill` checks CAP_KILL
+    - `sys_setrlimit` checks CAP_SYS_RESOURCE
+  - Capability inheritance: fork copies capabilities, exec transforms based on UID
+  - 20+ unit tests for capability operations
 - **Estimate**: Large
 
 ### FUT-003: Process Sandboxing/Jails
 - **Priority**: 🟡 MEDIUM
-- **Status**: ⬜ TODO
+- **Status**: ✅ DONE (2025-12-30)
+- **Files**: `src/kernel/process.rs`, `src/kernel/syscall.rs`
 - **Description**: chroot-like isolation
+- **Fix**: Implemented chroot-based process jails:
+  - Added `jail_root: Option<PathBuf>` field to Process struct
+  - Added `resolve_jailed_path()` method for jail-aware path resolution
+  - Added `canonicalize_path()` helper to safely handle ".." traversal
+  - Added `is_jailed()`, `get_jail_root()`, `set_jail_root()` methods
+  - Added `sys_chroot` syscall requiring CAP_SYS_CHROOT capability
+  - Updated `resolve_path()` in syscall.rs to use jail-aware resolution
+  - Jail is inherited by child processes on fork
+  - ProcessBuilder supports `.jail_root()` method
+  - 17 unit tests for path resolution and syscall
 - **Estimate**: Medium
 
 ### FUT-004: Kernel Visualization
@@ -579,6 +605,37 @@ This document tracks all identified issues, improvements, and feature work for A
 ---
 
 ## Progress Log
+
+### 2025-12-30 (FUT-002 and FUT-003 Complete)
+- **FUT-002**: Implemented Capability-Based Security:
+  - Added `Capability` enum with 24 Linux-style capabilities (CAP_DAC_OVERRIDE, CAP_SETUID, CAP_KILL, CAP_SYS_ADMIN, etc.)
+  - Added `CapabilitySet` as u32 bitfield with set operations (union, intersection, difference, subset)
+  - Added `ProcessCapabilities` with permitted/effective/inheritable sets per process
+  - Added `capabilities` field to Process struct, auto-initialized based on UID (root gets all, others get none)
+  - Added syscalls: `capget` (get process caps), `capset` (set caps), `cap_raise`, `cap_lower`, `cap_drop`, `cap_check`
+  - Integrated into existing syscalls:
+    - `sys_setuid/seteuid` now check CAP_SETUID instead of just root
+    - `sys_setgid/setegid/setgroups` check CAP_SETGID
+    - `sys_kill` checks CAP_KILL for signaling other processes
+    - `sys_setrlimit` checks CAP_SYS_RESOURCE for raising hard limits
+  - Added `check_permission_with_caps()` for capability-aware file permission checks
+  - Capability inheritance: fork copies capabilities unchanged, exec transforms based on UID
+  - 20+ comprehensive unit tests
+
+- **FUT-003**: Implemented Process Sandboxing/Jails (chroot):
+  - Added `jail_root: Option<PathBuf>` field to Process struct for jail containment
+  - Added `resolve_jailed_path()` method with jail-aware path resolution
+  - Added `canonicalize_path()` helper to safely remove ".." traversal attempts
+  - Added `is_jailed()`, `get_jail_root()`, `set_jail_root()` process methods
+  - Added `sys_chroot` syscall requiring CAP_SYS_CHROOT capability
+  - Added `Chroot` to SyscallNr enum (syscall 314)
+  - Updated `resolve_path()` in syscall.rs to use jail-aware resolution
+  - All VFS operations (open, mkdir, stat, etc.) now automatically respect jail boundaries
+  - Jail is inherited by child processes on fork
+  - ProcessBuilder supports `.jail_root()` method for programmatic jail setup
+  - 17 unit tests (12 for path resolution, 5 for syscall)
+
+- Overall: 45 total issues resolved, 12 remaining (5 docs, 7 future features)
 
 ### 2025-12-29 (Phase 7 - Future Features)
 - **FUT-004**: Implemented Kernel Visualization (`src/kernel/visualizer.rs`):
