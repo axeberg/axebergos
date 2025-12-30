@@ -1,6 +1,6 @@
 # Testing
 
-axeberg has a comprehensive test suite ensuring kernel reliability.
+axeberg has ~1,000+ tests ensuring kernel reliability.
 
 ## Running Tests
 

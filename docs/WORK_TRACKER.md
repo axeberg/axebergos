@@ -16,9 +16,9 @@ This document tracks all identified issues, improvements, and feature work for A
 | Security (Medium) | 8 | 8 | 0 | 0 |
 | Code Quality | 10 | 10 | 0 | 0 |
 | Missing Features | 15 | 15 | 0 | 0 |
-| Documentation | 5 | 0 | 0 | 5 |
+| Documentation | 5 | 5 | 0 | 0 |
 | Future Features | 12 | 5 | 0 | 7 |
-| **TOTAL** | **57** | **45** | **0** | **12** |
+| **TOTAL** | **57** | **50** | **0** | **7** |
 
 ---
 
@@ -427,42 +427,66 @@ This document tracks all identified issues, improvements, and feature work for A
 
 ### DOC-001: Sync Documentation with Code
 - **Priority**: 🟡 MEDIUM
-- **Status**: ⬜ TODO
+- **Status**: ✅ DONE (2025-12-30)
 - **File**: Various in `docs/`
 - **Issue**: 70+ documented issues in DOCUMENTATION_REVIEW.md
-- **Fix**: Address critical/high priority doc issues
+- **Fix**: Comprehensive documentation overhaul:
+  - Updated README.md with accurate architecture diagram and features
+  - Updated docs/index.md with correct test counts (~1,000+) and statistics
+  - Updated kernel/overview.md with current subsystem structure
+  - Updated userspace/vfs.md with timestamps and metadata fields
+  - Updated userspace/shell.md with new features (functions, arrays, heredocs)
+  - Updated development/building.md with correct project structure
+  - Updated development/testing.md with correct test counts
 - **Estimate**: Medium
 
 ### DOC-002: Document Work Stealing Scheduler
 - **Priority**: 🟢 LOW
-- **Status**: ⬜ TODO
-- **File**: `docs/kernel/work-stealing.md` (new)
+- **Status**: ✅ DONE (2025-12-30)
+- **File**: `docs/kernel/work-stealing.md`
 - **Issue**: No documentation
-- **Fix**: Write architecture and usage docs
+- **Fix**: Created comprehensive documentation:
+  - Architecture diagram with injector and worker deques
+  - Chase-Lev algorithm explanation
+  - Usage examples and API reference
+  - Formal properties (TLA+ verified)
+  - Lock-free guarantees and memory ordering
 - **Estimate**: Small
 
 ### DOC-003: Document Layered Filesystem
 - **Priority**: 🟢 LOW
-- **Status**: ⬜ TODO
-- **File**: `docs/userspace/layered-fs.md` (new)
+- **Status**: ✅ DONE (2025-12-30)
+- **File**: `docs/userspace/layered-fs.md`
 - **Issue**: Recently added, no docs
-- **Fix**: Write usage and architecture docs
+- **Fix**: Created comprehensive documentation:
+  - Union mount semantics with diagrams
+  - Read/write/delete operation flow
+  - Whiteout markers and opaque directories
+  - API reference and use cases
+  - Copy-on-write behavior explanation
 - **Estimate**: Small
 
 ### DOC-004: Add Integration Guides
 - **Priority**: 🟢 LOW
-- **Status**: ⬜ TODO
+- **Status**: ✅ DONE (2025-12-30)
 - **File**: `docs/guides/` (new directory)
 - **Issue**: No guides for extending OS
-- **Topics**: Custom commands, VFS backends, new syscalls
+- **Fix**: Created three integration guides:
+  - `custom-commands.md` - Writing shell commands (builtins, programs, WASM)
+  - `vfs-backends.md` - Implementing custom filesystems
+  - `adding-syscalls.md` - Extending the kernel with new syscalls
 - **Estimate**: Medium
 
 ### DOC-005: Update Man Pages for Implemented Options
 - **Priority**: 🟢 LOW
-- **Status**: ⬜ TODO
+- **Status**: ✅ DONE (2025-12-30)
 - **File**: `man/`
 - **Issue**: 30+ man pages describe unimplemented options
-- **Fix**: Remove or mark unimplemented features
+- **Fix**: Man pages already updated by previous work:
+  - Unimplemented options marked with "(Note: Not yet implemented)"
+  - Removed documentation for non-existent features
+  - Fixed duplicate option definitions
+  - Corrected misinformation (e.g., passwd.1.scd)
 - **Estimate**: Medium
 
 ---
@@ -605,6 +629,37 @@ This document tracks all identified issues, improvements, and feature work for A
 ---
 
 ## Progress Log
+
+### 2025-12-30 (Documentation Complete)
+- **DOC-001**: Synced all documentation with code:
+  - README.md: Complete rewrite with accurate architecture, features, stats
+  - docs/index.md: Updated test counts (~1,000+), added execution flow diagram
+  - kernel/overview.md: Updated with subsystem structure, capabilities, jails
+  - userspace/vfs.md: Added timestamps (atime/mtime/ctime), nlink field
+  - userspace/shell.md: Added functions, arrays, heredocs, process substitution
+  - development/building.md: Updated project structure with all modules
+  - development/testing.md: Updated test count
+
+- **DOC-002**: Created `docs/kernel/work-stealing.md`:
+  - Architecture diagram with injector and worker deques
+  - Chase-Lev algorithm explanation with LIFO/FIFO semantics
+  - Formal properties (TLA+ verified): no lost tasks, no double execution
+  - Lock-free guarantees and memory ordering details
+
+- **DOC-003**: Created `docs/userspace/layered-fs.md`:
+  - Union mount semantics with ASCII diagrams
+  - Read/write/delete operation flow
+  - Whiteout markers (.wh.) and opaque directories
+  - API reference and use cases (containers, sandboxing)
+
+- **DOC-004**: Created `docs/guides/` directory with three guides:
+  - `custom-commands.md`: Builtins, programs, WASM modules
+  - `vfs-backends.md`: FileSystem trait implementation
+  - `adding-syscalls.md`: Kernel extension guide
+
+- **DOC-005**: Verified man pages already fixed (unimplemented options marked)
+
+- Overall: 50 total issues resolved, 7 remaining (all future features)
 
 ### 2025-12-30 (FUT-002 and FUT-003 Complete)
 - **FUT-002**: Implemented Capability-Based Security:

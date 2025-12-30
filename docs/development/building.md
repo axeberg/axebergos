@@ -26,25 +26,42 @@ cargo install wasm-pack
 ```
 axebergos/
 ├── src/
-│   ├── lib.rs          # Library entry point
-│   ├── boot.rs         # Boot sequence
-│   ├── kernel/         # Kernel components
+│   ├── lib.rs              # Library entry point
+│   ├── boot.rs             # Boot sequence
+│   ├── kernel/             # Kernel components
 │   │   ├── mod.rs
-│   │   ├── executor.rs # Task scheduler
-│   │   ├── process.rs  # Process abstraction
-│   │   ├── memory.rs   # Memory management
-│   │   ├── syscall.rs  # Syscall interface
-│   │   ├── object.rs   # Kernel objects
-│   │   ├── ipc.rs      # Inter-process communication
-│   │   ├── events.rs   # Event handling
-│   │   └── task.rs     # Task abstraction
-│   ├── vfs/            # Virtual filesystem
+│   │   ├── syscall.rs      # Syscall interface (300+)
+│   │   ├── process.rs      # Process management
+│   │   ├── memory.rs       # Memory (COW, mmap)
+│   │   ├── executor.rs     # Single-threaded scheduler
+│   │   ├── work_stealing/  # Parallel scheduler
+│   │   ├── signal.rs       # POSIX-like signals
+│   │   ├── users.rs        # Users, groups, capabilities
+│   │   ├── wasm/           # WASM loader + WASI
+│   │   ├── pkg/            # Package manager
+│   │   ├── ipc.rs          # Channels, pipes
+│   │   ├── uds.rs          # Unix domain sockets
+│   │   ├── flock.rs        # File locking
+│   │   ├── msgqueue.rs     # Message queues
+│   │   ├── semaphore.rs    # Semaphores
+│   │   └── ...
+│   ├── shell/              # Command interpreter
+│   │   ├── parser.rs       # Shell parsing
+│   │   ├── executor.rs     # Pipeline execution
+│   │   ├── builtins.rs     # Built-in commands
+│   │   └── programs/       # Shell commands (80+)
+│   ├── vfs/                # Virtual filesystem
 │   │   ├── mod.rs
-│   │   └── memory.rs   # In-memory backend
+│   │   ├── memory.rs       # In-memory FS
+│   │   ├── layered.rs      # Union filesystem
+│   │   └── persist.rs      # OPFS persistence
+│   ├── compositor/         # WebGPU compositor
 │   └── bin/
-│       └── serve.rs    # Dev server
-├── index.html          # HTML shell (project root)
-├── docs/               # Documentation
+│       └── serve.rs        # Dev server
+├── index.html              # Browser entry point
+├── docs/                   # Documentation
+├── man/                    # Man pages (scdoc)
+├── tests/                  # Integration tests
 ├── Cargo.toml
 └── README.md
 ```
