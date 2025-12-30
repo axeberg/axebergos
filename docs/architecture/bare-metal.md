@@ -46,6 +46,7 @@ Build AxebergOS as a UEFI application that runs directly from the bootloader.
 - `uefi-services` - Higher-level UEFI helpers
 
 **Boot flow:**
+
 ```
 UEFI Firmware
   └── Load axeberg.efi from EFI System Partition
@@ -75,6 +76,7 @@ Build as a Multiboot2-compliant kernel loaded by GRUB2.
 - `multiboot2` - Multiboot2 info parsing
 
 **Boot flow:**
+
 ```
 BIOS
   └── GRUB2
@@ -101,6 +103,7 @@ Use the `bootloader` crate to create a complete bootable image.
 - Disk image generation
 
 **Example Cargo.toml:**
+
 ```toml
 [dependencies]
 bootloader = "0.11"
