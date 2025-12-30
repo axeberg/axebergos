@@ -29,7 +29,7 @@ munal-os makes unconventional simplifications that align with axeberg's philosop
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                        axeberg.efi                           │
+│                        axeberg.efi                          │
 │  (single UEFI binary containing everything)                 │
 ├─────────────────────────────────────────────────────────────┤
 │  ┌─────────────────────────────────────────────────────┐    │
@@ -57,9 +57,9 @@ munal-os makes unconventional simplifications that align with axeberg's philosop
 │  │  - Font rendering (embedded bitmap font)            │    │
 │  └─────────────────────────────────────────────────────┘    │
 ├─────────────────────────────────────────────────────────────┤
-│  UEFI Boot Services (used briefly, then exited)            │
+│  UEFI Boot Services (used briefly, then exited)             │
 ├─────────────────────────────────────────────────────────────┤
-│  Hardware (QEMU with VirtIO, or real UEFI machine)         │
+│  Hardware (QEMU with VirtIO, or real UEFI machine)          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
