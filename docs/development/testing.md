@@ -1,6 +1,6 @@
 # Testing
 
-axeberg has ~1,000+ tests ensuring kernel reliability.
+axebergos tests ensuring kernel reliability.
 
 ## Running Tests
 
