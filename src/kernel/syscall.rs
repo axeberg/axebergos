@@ -145,6 +145,7 @@ pub enum SyscallNr {
     Chown = 311,
     Capget = 312,
     Capset = 313,
+    Chroot = 314,
 
     // Message Queues (325-349)
     Msgget = 325,
@@ -258,6 +259,7 @@ syscall_names! {
     Chown => "chown",
     Capget => "capget",
     Capset => "capset",
+    Chroot => "chroot",
     // Message Queues
     Msgget => "msgget",
     Msgsnd => "msgsnd",
@@ -1768,12 +1770,11 @@ impl Kernel {
             .get(&pid)
             .ok_or(SyscallError::NoProcess)?;
 
-        let path = Path::new(path);
-        if path.is_absolute() {
-            Ok(path.to_path_buf())
-        } else {
-            Ok(process.cwd.join(path))
-        }
+        // Use jail-aware path resolution
+        // This handles both regular paths and chrooted processes
+        process
+            .resolve_jailed_path(Path::new(path))
+            .map_err(|_| SyscallError::PermissionDenied)
     }
 
     /// Check if the current process has permission to access a file
@@ -3714,6 +3715,66 @@ impl Kernel {
     pub fn sys_cap_check(&self, cap: Capability) -> SyscallResult<bool> {
         let process = self.get_current_process()?;
         Ok(process.capabilities.has_effective(cap))
+    }
+
+    /// Change the root directory for the current process (chroot)
+    ///
+    /// This creates a "jail" - the process will see `path` as "/" and cannot
+    /// access anything outside it via ".." traversal. Requires CAP_SYS_CHROOT.
+    ///
+    /// After chroot:
+    /// - Absolute paths start from the new root
+    /// - Relative paths resolve from cwd (which should be changed to "/" or inside jail)
+    /// - The jail is inherited by child processes
+    ///
+    /// Security notes:
+    /// - The caller should chdir to "/" or a path inside the jail after chroot
+    /// - CAP_SYS_CHROOT is required (root-only by default)
+    /// - Once jailed, a process cannot escape (no ".." tricks work)
+    pub fn sys_chroot(&mut self, path: &str) -> SyscallResult<()> {
+        // Check if the path exists and is a directory
+        {
+            let process = self.get_current_process()?;
+
+            // Check for CAP_SYS_CHROOT capability
+            if !process.capabilities.has_effective(Capability::SysChroot) {
+                return Err(SyscallError::PermissionDenied);
+            }
+
+            // Resolve the path (using current jail if any)
+            let resolved_path = process
+                .resolve_jailed_path(Path::new(path))
+                .map_err(|_| SyscallError::PermissionDenied)?;
+
+            // Check if the path exists and is a directory
+            let resolved_str = resolved_path
+                .to_str()
+                .ok_or(SyscallError::InvalidArgument)?;
+            let meta = self
+                .fs
+                .vfs
+                .metadata(resolved_str)
+                .map_err(|_| SyscallError::NotFound)?;
+
+            if !meta.is_dir {
+                return Err(SyscallError::NotADirectory);
+            }
+        }
+
+        // All checks passed - set the jail root
+        let process = self.get_current_process_mut()?;
+
+        // Resolve path again with mutable access
+        let resolved_path = process
+            .resolve_jailed_path(Path::new(path))
+            .map_err(|_| SyscallError::PermissionDenied)?;
+
+        process.set_jail_root(resolved_path);
+
+        // Note: Best practice is to also chdir("/") after chroot
+        // but we don't do it automatically - let the caller decide
+
+        Ok(())
     }
 
     pub fn users(&self) -> &UserDb {
@@ -5982,5 +6043,131 @@ mod tests {
         assert_eq!(addr.unwrap().path, "/tmp/named.sock");
 
         socket_close(sock).unwrap();
+    }
+
+    // ========== CHROOT / JAIL TESTS ==========
+
+    #[test]
+    fn test_chroot_requires_capability() {
+        setup_test_kernel();
+
+        // Setup: create jail directory in /tmp (world-writable)
+        mkdir("/tmp/jail_test").unwrap();
+
+        // Regular user (no CAP_SYS_CHROOT) should fail
+        KERNEL.with(|k| {
+            let current = k.borrow().proc.current.unwrap();
+            let mut kernel = k.borrow_mut();
+            let process = kernel.proc.processes.get_mut(&current).unwrap();
+            // Ensure no CAP_SYS_CHROOT
+            process.capabilities.drop_cap(Capability::SysChroot);
+        });
+
+        let result = chroot("/tmp/jail_test");
+        assert_eq!(result, Err(SyscallError::PermissionDenied));
+    }
+
+    #[test]
+    fn test_chroot_directory_must_exist() {
+        setup_test_kernel();
+
+        // Give the process CAP_SYS_CHROOT
+        KERNEL.with(|k| {
+            let current = k.borrow().proc.current.unwrap();
+            let mut kernel = k.borrow_mut();
+            let process = kernel.proc.processes.get_mut(&current).unwrap();
+            process.capabilities = ProcessCapabilities::root();
+        });
+
+        // Non-existent directory should fail
+        let result = chroot("/tmp/nonexistent_jail_dir");
+        assert_eq!(result, Err(SyscallError::NotFound));
+    }
+
+    #[test]
+    fn test_chroot_must_be_directory() {
+        setup_test_kernel();
+
+        // Create a file (not a directory) in /tmp
+        let fd = open("/tmp/jail_file", OpenFlags::WRITE).unwrap();
+        write(fd, b"not a directory").unwrap();
+        close(fd).unwrap();
+
+        // Give the process CAP_SYS_CHROOT
+        KERNEL.with(|k| {
+            let current = k.borrow().proc.current.unwrap();
+            let mut kernel = k.borrow_mut();
+            let process = kernel.proc.processes.get_mut(&current).unwrap();
+            process.capabilities = ProcessCapabilities::root();
+        });
+
+        // File should fail with NotADirectory
+        let result = chroot("/tmp/jail_file");
+        assert_eq!(result, Err(SyscallError::NotADirectory));
+    }
+
+    #[test]
+    fn test_chroot_success() {
+        setup_test_kernel();
+
+        // Setup: create jail directory with a file inside in /tmp
+        mkdir("/tmp/chroot_jail").unwrap();
+        let fd = open("/tmp/chroot_jail/inside.txt", OpenFlags::WRITE).unwrap();
+        write(fd, b"inside jail").unwrap();
+        close(fd).unwrap();
+
+        // Give the process CAP_SYS_CHROOT
+        KERNEL.with(|k| {
+            let current = k.borrow().proc.current.unwrap();
+            let mut kernel = k.borrow_mut();
+            let process = kernel.proc.processes.get_mut(&current).unwrap();
+            process.capabilities = ProcessCapabilities::root();
+        });
+
+        // Chroot should succeed
+        assert!(chroot("/tmp/chroot_jail").is_ok());
+
+        // Now /inside.txt should be accessible (mapped to /tmp/chroot_jail/inside.txt)
+        let fd = open("/inside.txt", OpenFlags::READ).unwrap();
+        let mut buf = [0u8; 20];
+        let n = read(fd, &mut buf).unwrap();
+        close(fd).unwrap();
+
+        assert_eq!(&buf[..n], b"inside jail");
+    }
+
+    #[test]
+    fn test_chroot_prevents_escape() {
+        setup_test_kernel();
+
+        // Setup: create jail directory in /tmp
+        mkdir("/tmp/escape_jail").unwrap();
+
+        // Create a file outside the jail (in /tmp, not in the jail)
+        let fd = open("/tmp/secret.txt", OpenFlags::WRITE).unwrap();
+        write(fd, b"secret data").unwrap();
+        close(fd).unwrap();
+
+        // Give the process CAP_SYS_CHROOT
+        KERNEL.with(|k| {
+            let current = k.borrow().proc.current.unwrap();
+            let mut kernel = k.borrow_mut();
+            let process = kernel.proc.processes.get_mut(&current).unwrap();
+            process.capabilities = ProcessCapabilities::root();
+        });
+
+        // Chroot to jail
+        chroot("/tmp/escape_jail").unwrap();
+
+        // Try to access file outside via ".."
+        // This should fail because ".." can't escape the jail
+        let result = open("/../secret.txt", OpenFlags::READ);
+        // The path resolves to /secret.txt inside the jail, which doesn't exist
+        assert!(result.is_err());
+    }
+
+    /// Helper to call sys_chroot
+    fn chroot(path: &str) -> SyscallResult<()> {
+        KERNEL.with(|k| k.borrow_mut().sys_chroot(path))
     }
 }
