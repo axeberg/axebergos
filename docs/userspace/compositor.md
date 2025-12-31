@@ -102,10 +102,10 @@ A custom Canvas2D/WebGPU compositor is planned for:
 - Custom window decorations
 - Animation support
 
-See the [Compositor Plan](../plans/compositor.md) for detailed design.
+See the compositor module in `src/compositor/` for implementation details.
 
 ## Related Documentation
 
 - [Shell](shell.md) - Command-line interpreter
 - [Standard I/O](stdio.md) - Console and pipes
-- [Compositor Plan](../plans/compositor.md) - Future window manager design
+- [Kernel Objects](../kernel/objects.md) - Window objects and handles
