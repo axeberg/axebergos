@@ -7,7 +7,7 @@
 use super::process::Handle;
 use std::collections::{HashMap, VecDeque};
 
-/// Window identifier (stub - now using xterm.js instead of compositor)
+/// Window identifier for kernel window objects
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WindowId(pub u64);
 use std::io::{self, Read, Seek, SeekFrom, Write};

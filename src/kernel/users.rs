@@ -1224,11 +1224,6 @@ fn verify_password(password: &str, stored_hash: &str) -> bool {
     let parts: Vec<&str> = stored_hash.split(':').collect();
 
     if parts.len() != 2 {
-        // Invalid format - check if this is a legacy DJB2 hash (16 hex chars)
-        // For backwards compatibility during migration
-        if stored_hash.len() == 16 && stored_hash.chars().all(|c| c.is_ascii_hexdigit()) {
-            return legacy_hash(password) == stored_hash;
-        }
         return false;
     }
 
@@ -1269,16 +1264,6 @@ fn constant_time_compare(a: &str, b: &str) -> bool {
     }
 
     result == 0
-}
-
-/// Legacy DJB2 hash for backwards compatibility
-/// Only used to verify old passwords - new passwords use the secure hash
-fn legacy_hash(password: &str) -> String {
-    let mut hash: u64 = 5381;
-    for byte in password.bytes() {
-        hash = hash.wrapping_mul(33).wrapping_add(byte as u64);
-    }
-    format!("{:016x}", hash)
 }
 
 /// Check if a user can access a file with given permissions
@@ -1488,14 +1473,6 @@ mod tests {
         user.lock_account();
         assert!(user.is_locked());
         assert!(!user.check_password("secret")); // Can't login to locked account
-    }
-
-    #[test]
-    fn test_legacy_hash_compatibility() {
-        // Test that legacy DJB2 hashes still work for verification
-        let legacy = legacy_hash("oldpassword");
-        assert!(verify_password("oldpassword", &legacy));
-        assert!(!verify_password("wrongpassword", &legacy));
     }
 
     #[test]

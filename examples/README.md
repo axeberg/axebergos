@@ -25,7 +25,7 @@ Composing commands with Unix pipes.
 ### 4. [Users and Permissions](04-users-and-permissions.md)
 Multi-user system and access control.
 
-### 5. [Understanding the Kernel](06-understanding-kernel.md)
+### 5. [Understanding the Kernel](05-understanding-kernel.md)
 Deep dive into kernel internals.
 
 ## Quick Examples

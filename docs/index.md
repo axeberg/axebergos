@@ -100,7 +100,7 @@ A mini operating system written in Rust, compiled to WebAssembly.
 |----------|-------------|
 | [Decision Records](decisions/README.md) | Architecture decisions (ADRs) |
 | [Bare Metal](plans/bare-metal-boot.md) | Future: x86_64 port |
-| [Compositor](plans/compositor.md) | WebGPU window management |
+| [Compositor](userspace/compositor.md) | WebGPU window management |
 
 ## Quick Start
 

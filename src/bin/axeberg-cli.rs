@@ -47,7 +47,6 @@ fn main() {
                         println!("  cat     - Display file contents");
                         println!();
                         println!("Note: This is a minimal WASI CLI.");
-                        println!("Full kernel integration coming soon.");
                     }
                     "pwd" => match std::env::current_dir() {
                         Ok(path) => println!("{}", path.display()),

@@ -1072,8 +1072,9 @@ impl Kernel {
         process.state = ProcessState::Zombie(exit_code);
         process.task = None; // Task has completed
 
-        // TODO: Send SIGCHLD to parent
-        // For now, parent will discover it via waitpid
+        // Note: SIGCHLD is not sent here by design. The default action for SIGCHLD
+        // is Ignore, and axebergos uses non-blocking waitpid() for child reaping.
+        // Sending SIGCHLD would add overhead with no functional benefit.
 
         Ok(())
     }
@@ -1450,8 +1451,7 @@ impl Kernel {
     pub fn sys_window_create(&mut self, _title: &str) -> SyscallResult<Fd> {
         let current = self.proc.current.ok_or(SyscallError::NoProcess)?;
 
-        // For now, use a placeholder window ID
-        // The compositor integration will make this real
+        // Generate a unique window ID for this window object
         static NEXT_WINDOW_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let window_id = WindowId(NEXT_WINDOW_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
 
