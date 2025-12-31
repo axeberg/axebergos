@@ -262,7 +262,7 @@ pub fn sys_path_op(&mut self, path: &str) -> SyscallResult<()> {
 
 Add to syscalls.md:
 
-```markdown
+````markdown
 ### my_new_syscall
 
 Does something useful.
@@ -286,7 +286,7 @@ Does something useful.
 ```rust
 let result = syscall_my_new_syscall(42, "test".as_ptr(), 4);
 ```
-```
+````
 
 ## Related Documentation
 
