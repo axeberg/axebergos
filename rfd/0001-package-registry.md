@@ -1,7 +1,7 @@
 ---
 authors: axeberg contributors
 state: predraft
-discussion: https://github.com/axeberg/axebergos/issues/TBD
+discussion: https://github.com/axeberg/axebergos/rfd/0001
 ---
 
 # RFD 0001 Package Registry

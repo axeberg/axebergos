@@ -283,4 +283,4 @@ In the real axeberg:
 
 ## What's Next?
 
-Continue to [Understanding the Kernel](06-understanding-kernel.md) for a deep dive into axeberg's internals.
+Continue to [Understanding the Kernel](05-understanding-kernel.md) for a deep dive into axeberg's internals.

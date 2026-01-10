@@ -1,7 +1,7 @@
 # AxebergOS Work Tracker
 
 **Created**: 2025-12-28
-**Last Updated**: 2025-12-30
+**Last Updated**: 2025-12-31
 
 This document tracks all identified issues, improvements, and feature work for AxebergOS.
 
@@ -16,7 +16,7 @@ For detailed documentation on each subsystem, see:
 - [Memory](kernel/memory.md)
 - [VFS](userspace/vfs.md)
 - [WASM Modules](kernel/wasm-modules.md)
-- [Compositor](plans/compositor.md)
+- [Compositor](userspace/compositor.md)
 
 ---
 
