@@ -97,7 +97,7 @@ jobs:
         run: wasm-pack build --target web --release
 
       - name: Upload WASM artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: wasm-pkg
           path: pkg/
