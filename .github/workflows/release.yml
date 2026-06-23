@@ -40,7 +40,7 @@ jobs:
           cd release && zip -r ../axeberg-${{ github.ref_name }}.zip .
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: axeberg-${{ github.ref_name }}.zip
           generate_release_notes: true
