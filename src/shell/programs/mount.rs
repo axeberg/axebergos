@@ -84,7 +84,7 @@ pub fn prog_mount(args: &[String], __stdin: &str, stdout: &mut String, stderr: &
 
     let result = syscall::KERNEL.with(|k| {
         let mut kernel = k.borrow_mut();
-        kernel.mounts_mut().mount(source, target, fs, opts, now)
+        kernel.sys_mount(source, target, fs, opts, now)
     });
 
     match result {
@@ -116,7 +116,7 @@ pub fn prog_umount(
 
     let target = &args[0];
 
-    let result = syscall::KERNEL.with(|k| k.borrow_mut().mounts_mut().umount(target));
+    let result = syscall::KERNEL.with(|k| k.borrow_mut().sys_umount(target));
 
     match result {
         Ok(_) => 0,

@@ -93,29 +93,17 @@ pub fn prog_sudo(args: &[String], __stdin: &str, stdout: &mut String, stderr: &m
         }
     }
 
-    // Temporarily become root
-    let old_euid = euid;
-    let old_egid = syscall::getegid().unwrap_or_default();
-
-    if let Err(e) = syscall::seteuid(crate::kernel::Uid::ROOT) {
-        stderr.push_str(&format!("sudo: failed to elevate: {}\n", e));
-        return 1;
-    }
-    if let Err(e) = syscall::setegid(crate::kernel::Gid::ROOT) {
-        stderr.push_str(&format!("sudo: failed to elevate gid: {}\n", e));
-        let _ = syscall::seteuid(old_euid);
-        return 1;
-    }
-
-    // The actual command would be executed by the shell in a real implementation
-    // For now, just print that we're running as root
-    stdout.push_str(&format!("[sudo] Running as root: {}\n", args.join(" ")));
-
-    // Restore original effective uid/gid
-    let _ = syscall::seteuid(old_euid);
-    let _ = syscall::setegid(old_egid);
-
-    0
+    // Authorization passed, but actually running the command as root requires
+    // the shell executor to re-dispatch `args` under a temporary root euid; a
+    // standalone program cannot do that from here. Previously this silently
+    // elevated around a no-op, printed "[sudo] Running as root", and returned 0
+    // -- making callers believe the command had executed as root when nothing
+    // ran. Fail honestly instead of reporting a false success.
+    stderr.push_str(&format!(
+        "sudo: running commands under sudo is not yet supported (would run: {})\n",
+        args.join(" ")
+    ));
+    1
 }
 
 /// useradd - create a new user
