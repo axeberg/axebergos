@@ -244,14 +244,16 @@ impl<T: Send> Worker<T> {
                 );
                 StealResult::Success(task)
             } else {
-                // A stealer took it, restore bottom
+                // A stealer won the race for this slot. Both sides bitwise-read
+                // the same task at `new_bottom == top`, so the stealer now owns
+                // that value; forget our copy to avoid dropping it twice
+                // (double-free). This mirrors the stealer's `mem::forget` on its
+                // own lost-CAS path below.
                 self.inner.bottom.store(
                     Inner::<T>::pack_bottom(top.wrapping_add(1)),
                     Ordering::SeqCst,
                 );
-                // Note: we already read the task, but the stealer invalidated it
-                // This shouldn't happen in practice as we'd have lost the CAS
-                // The task value is already moved out, stealer got nothing
+                std::mem::forget(task);
                 StealResult::Empty
             }
         } else {
