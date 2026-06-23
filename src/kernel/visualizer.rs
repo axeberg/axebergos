@@ -198,7 +198,7 @@ impl ProcessTree {
     /// Get processes sorted by memory usage
     pub fn by_memory_usage(&self) -> Vec<&ProcessTreeNode> {
         let mut procs: Vec<_> = self.processes.values().collect();
-        procs.sort_by(|a, b| b.memory.cmp(&a.memory));
+        procs.sort_by_key(|p| std::cmp::Reverse(p.memory));
         procs
     }
 }

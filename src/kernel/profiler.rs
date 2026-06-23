@@ -226,7 +226,7 @@ impl CpuProfile {
     /// Get top N syscalls by call count
     pub fn top_syscalls_by_count(&self, n: usize) -> Vec<(&String, &SyscallProfile)> {
         let mut profiles: Vec<_> = self.syscall_profiles.iter().collect();
-        profiles.sort_by(|a, b| b.1.counters.count.cmp(&a.1.counters.count));
+        profiles.sort_by_key(|p| std::cmp::Reverse(p.1.counters.count));
         profiles.into_iter().take(n).collect()
     }
 
@@ -315,7 +315,7 @@ impl MemorySnapshot {
     /// Find top N processes by memory usage
     pub fn top_by_memory(&self, n: usize) -> Vec<&ProcessMemorySnapshot> {
         let mut procs: Vec<_> = self.processes.iter().collect();
-        procs.sort_by(|a, b| b.allocated.cmp(&a.allocated));
+        procs.sort_by_key(|p| std::cmp::Reverse(p.allocated));
         procs.into_iter().take(n).collect()
     }
 }

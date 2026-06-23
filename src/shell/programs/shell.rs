@@ -767,14 +767,8 @@ pub fn prog_test(args: &[String], _stdin: &str, _stdout: &mut String, stderr: &m
                     1
                 }
             }
-            "-L" | "-h" => {
-                // True if symbolic link (check via read_link)
-                if syscall::read_link(arg).is_ok() {
-                    0
-                } else {
-                    1
-                }
-            }
+            // True if symbolic link (check via read_link)
+            "-L" | "-h" if syscall::read_link(arg).is_ok() => 0,
             _ => 1, // Unknown unary operator
         };
     }
