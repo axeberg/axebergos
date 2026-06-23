@@ -741,10 +741,11 @@ impl Editor {
         // Draw message bar
         self.draw_message_bar(&mut buf);
 
-        // Position cursor
-        let cursor_y = self.cy - self.row_offset + 1;
+        // Position cursor (saturating_sub guards a zero-size terminal where the
+        // scroll invariants cy>=row_offset / rx>=col_offset can momentarily break)
+        let cursor_y = self.cy.saturating_sub(self.row_offset) + 1;
         let rx = self.current_row().map(|r| r.cx_to_rx(self.cx)).unwrap_or(0);
-        let cursor_x = rx - self.col_offset + 1;
+        let cursor_x = rx.saturating_sub(self.col_offset) + 1;
         buf.push_str(&format!("\x1b[{};{}H", cursor_y, cursor_x));
 
         buf.push_str(CURSOR_SHOW);
@@ -831,24 +832,22 @@ impl Editor {
             };
 
             let row = &self.rows[row_idx];
-            let search_start = if i == 0 && forward {
-                start_col.min(row.chars.len())
-            } else if i == 0 && !forward {
-                start_col.saturating_sub(query.len() + 1)
+            // start_col is a CHAR index (cursor cx); convert it to a byte offset
+            // before slicing `row.chars` (a String) so we never slice mid-codepoint.
+            let start_byte = row.char_to_byte_pos(start_col.min(row.len()));
+
+            let found_byte = if forward {
+                let from = if i == 0 { start_byte } else { 0 };
+                row.chars[from..].find(query).map(|p| from + p)
             } else {
-                0
+                // Search the region before the cursor on the current row, or the
+                // whole row on other rows (the previous `[..0]` never matched).
+                let upto = if i == 0 { start_byte } else { row.chars.len() };
+                row.chars[..upto].rfind(query)
             };
 
-            if let Some(col) = if forward {
-                row.chars[search_start..].find(query).map(|p| {
-                    // Convert byte position to char position
-                    row.chars[..search_start + p].chars().count()
-                })
-            } else {
-                row.chars[..search_start]
-                    .rfind(query)
-                    .map(|p| row.chars[..p].chars().count())
-            } {
+            if let Some(byte_pos) = found_byte {
+                let col = row.chars[..byte_pos].chars().count();
                 self.cy = row_idx;
                 self.cx = col;
                 self.last_match = Some((row_idx, col));
@@ -946,7 +945,9 @@ impl Editor {
                 }
             }
             Key::PageDown => {
-                self.cy = (self.row_offset + self.screen_rows - 1).min(self.rows.len() - 1);
+                self.cy = (self.row_offset + self.screen_rows)
+                    .saturating_sub(1)
+                    .min(self.rows.len().saturating_sub(1));
                 for _ in 0..self.screen_rows {
                     self.move_cursor(Arrow::Down);
                 }

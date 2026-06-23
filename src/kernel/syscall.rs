@@ -1304,7 +1304,9 @@ impl Kernel {
             uptime_secs: self.time.now,
             total_memory: 64 * 1024 * 1024, // 64MB simulated
             used_memory: sys_stats.total_allocated as u64,
-            free_memory: 64 * 1024 * 1024 - sys_stats.total_allocated as u64,
+            // saturating_sub: once allocations exceed the simulated 64MB this
+            // would otherwise underflow and panic on `cat /proc/meminfo`.
+            free_memory: (64u64 * 1024 * 1024).saturating_sub(sys_stats.total_allocated as u64),
             num_processes: self.proc.processes.len(),
         };
 

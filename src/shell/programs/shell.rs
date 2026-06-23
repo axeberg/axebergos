@@ -425,7 +425,7 @@ pub fn prog_xargs(args: &[String], stdin: &str, stdout: &mut String, _stderr: &m
 }
 
 /// cal - display a calendar
-pub fn prog_cal(args: &[String], _stdin: &str, stdout: &mut String, _stderr: &mut String) -> i32 {
+pub fn prog_cal(args: &[String], _stdin: &str, stdout: &mut String, stderr: &mut String) -> i32 {
     let args = args_to_strs(args);
 
     if let Some(help) = check_help(&args, "Usage: cal [MONTH] [YEAR]\nDisplay a calendar.") {
@@ -481,6 +481,16 @@ pub fn prog_cal(args: &[String], _stdin: &str, stdout: &mut String, _stderr: &mu
         (month, year)
     };
 
+    // Reject out-of-range months: otherwise `cal 0` underflows `show_month - 1`
+    // below (panic in debug) and day_of_week/days_in_month misbehave.
+    if !(1..=12).contains(&show_month) {
+        stderr.push_str(&format!(
+            "cal: {}: illegal month value: use 1-12\n",
+            show_month
+        ));
+        return 1;
+    }
+
     let month_names = [
         "January",
         "February",
@@ -500,7 +510,7 @@ pub fn prog_cal(args: &[String], _stdin: &str, stdout: &mut String, _stderr: &mu
 
     // Header
     let header = format!("{} {}", month_name, show_year);
-    let padding = (20 - header.len()) / 2;
+    let padding = 20_usize.saturating_sub(header.len()) / 2;
     stdout.push_str(&" ".repeat(padding));
     stdout.push_str(&header);
     stdout.push('\n');

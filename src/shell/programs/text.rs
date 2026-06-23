@@ -524,7 +524,8 @@ pub fn prog_fold(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut
 
     for line in input.lines() {
         let chars: Vec<char> = line.chars().collect();
-        for chunk in chars.chunks(width) {
+        // chunks(0) panics; treat a zero width as 1 column.
+        for chunk in chars.chunks(width.max(1)) {
             let s: String = chunk.iter().collect();
             stdout.push_str(&s);
             stdout.push('\n');

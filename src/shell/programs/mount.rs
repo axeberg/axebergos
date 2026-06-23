@@ -153,14 +153,17 @@ pub fn prog_findmnt(
             mounts.sort_by(|a, b| a.target.cmp(&b.target));
 
             for entry in mounts {
+                // Char-aware truncation: byte-slicing entry.source[..10] would
+                // panic on a multibyte boundary (sources are user-controlled).
+                let source: String = if entry.source.chars().count() > 10 {
+                    entry.source.chars().take(10).collect()
+                } else {
+                    entry.source.clone()
+                };
                 stdout.push_str(&format!(
                     "{:<23} {:<10} {:<8} {}\n",
                     entry.target,
-                    if entry.source.len() > 10 {
-                        &entry.source[..10]
-                    } else {
-                        &entry.source
-                    },
+                    source,
                     entry.fstype.as_str(),
                     entry.options
                 ));

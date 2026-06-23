@@ -369,7 +369,15 @@ impl WasmExecutor {
     #[cfg(target_arch = "wasm32")]
     fn add_syscall_read(&self, env: &Object, state: SharedRuntime) -> WasmResult<()> {
         let closure = Closure::wrap(Box::new(move |fd: i32, buf_ptr: i32, len: i32| -> i32 {
-            let mut buf = vec![0u8; len as usize];
+            // A guest controls `len`; a negative value casts to a ~4GB usize and
+            // a huge positive value would OOM-abort the whole instance. Reject
+            // negatives and clamp to a sane maximum.
+            const MAX_IO_BYTES: usize = 64 * 1024 * 1024;
+            if len < 0 {
+                return -1;
+            }
+            let len = (len as usize).min(MAX_IO_BYTES);
+            let mut buf = vec![0u8; len];
             let result = state.borrow_mut().runtime.sys_read(fd, &mut buf);
             if result > 0 {
                 let state_ref = state.borrow();
@@ -727,8 +735,14 @@ impl WasmExecutor {
         let total_size = layout.total_size();
 
         // Allocate at the end of the first page (after potential data)
-        // In a real implementation, we'd use __heap_base
-        let base_addr = (memory.size() - total_size as u32 - 256).max(1024);
+        // In a real implementation, we'd use __heap_base.
+        // saturating_sub avoids an underflow panic/wrap when the args are larger
+        // than the available memory.
+        let base_addr = memory
+            .size()
+            .saturating_sub(total_size as u32)
+            .saturating_sub(256)
+            .max(1024);
 
         let mut buf = vec![0u8; total_size];
         let argv_ptr = layout.write_to(args, base_addr, &mut buf);
