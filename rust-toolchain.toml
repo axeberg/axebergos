@@ -1,0 +1,7 @@
+# Pin the toolchain so CI is reproducible and doesn't silently break when a new
+# stable Rust ships lints that fail under `-D warnings`. Bump this deliberately.
+[toolchain]
+channel = "1.96.0"
+components = ["clippy", "rustfmt"]
+targets = ["wasm32-unknown-unknown"]
+profile = "minimal"
