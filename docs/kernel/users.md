@@ -7,7 +7,7 @@ axeberg implements Linux-like multi-user support with file-based persistence.
 Users are stored in `/etc/passwd` with standard format:
 
 ```
-root:x:0:0::root:/bin/sh
+root:x:0:0::/root:/bin/sh
 user:x:1000:1000::/home/user:/bin/sh
 nobody:x:65534:65534::/nonexistent:/bin/sh
 ```
@@ -19,12 +19,23 @@ Format: `name:x:uid:gid:gecos:home:shell`
 Passwords are stored in `/etc/shadow`:
 
 ```
-root:0000573001aaef2b:19000:0:99999:7:::
+root:!:19000:0:99999:7:::
 user:!:19000:0:99999:7:::
 ```
 
-- `!` or `*` means no password (login allowed)
-- Hash is a simple hash for demo purposes
+- `!` or `*` (or an empty hash field) means no password is set
+- When a password is set, the hash field has the form `salt_hex$hash_hex`
+
+Hashing (see `src/kernel/users.rs`) is a homebrew, salted key-stretching
+construction — **not** a standard KDF, and not intended to be
+cryptographically strong:
+
+- A 16-byte random salt is generated per password
+- The password and salt are mixed through 10,000 rounds of key stretching
+- The result is stored as `salt_hex$hash_hex` (the `$` separator keeps the
+  value free of the `:` field delimiter used in `/etc/shadow`)
+- Verification recomputes the hash from the stored salt and compares in
+  constant time
 
 ## Groups
 
@@ -42,7 +53,7 @@ Format: `name:x:gid:member1,member2,...`
 
 | User | UID | Home | Notes |
 |------|-----|------|-------|
-| root | 0 | /root | Password: "root" |
+| root | 0 | /root | No password (passwordless login; set one with `passwd root`) |
 | user | 1000 | /home/user | No password |
 | nobody | 65534 | /nonexistent | Unprivileged |
 
@@ -79,19 +90,26 @@ Ends the current session.
 ### su
 
 ```bash
-$ su              # Switch to root (requires password)
+$ su              # Switch to root (defaults to root)
 $ su alice        # Switch to alice
-$ su - alice      # Login shell (sets HOME, etc.)
+$ su - alice      # Also update HOME/SHELL environment
 ```
+
+`su` switches the user **in place** in the current shell (via `setuid`/
+`setgid` plus updating `USER`/`HOME`); it does not spawn a new shell. A
+non-root caller must be in the `wheel` group to `su` to root.
 
 ### sudo
 
 ```bash
-$ sudo whoami     # Run as root
-$ sudo -u bob cmd # Run as bob
+$ sudo whoami     # Intended to run as root
 ```
 
-Requires membership in `wheel` group.
+Requires membership in the `wheel` group. Note: `sudo` currently only
+performs the authorization check — actually re-dispatching the target
+command under root requires support in the shell executor that is not yet
+implemented, so `sudo` reports that running commands is unsupported rather
+than silently failing to elevate.
 
 ### useradd
 

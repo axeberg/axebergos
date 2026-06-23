@@ -52,7 +52,7 @@ total 1
 
 ```bash
 $ cat /etc/passwd | grep root
-root:x:0:0:root:/root:/bin/sh
+root:x:0:0::/root:/bin/sh
 
 $ ls -la | grep "^d" | wc -l
 3
@@ -95,15 +95,20 @@ The kernel is readable. Start here:
 
 ### Trace a Command
 
-Use `strace` to see what syscalls a command makes:
+`strace` does not yet perform real per-syscall tracing. It enables kernel
+tracing, prints a "would trace" line for the target command, and reports a
+trace summary from the kernel counters:
 
 ```bash
 $ strace cat /etc/passwd
-open("/etc/passwd", O_RDONLY) = 3
-read(3, "root:x:0:0:root:/root:/bin/sh\n", 4096) = 31
-write(1, "root:x:0:0:root:/root:/bin/sh\n", 31) = 31
-close(3) = 0
+strace: would trace 'cat /etc/passwd'
+--- tracing enabled for 0.000ms ---
+syscalls: 0
+events: 0
 ```
+
+(With `-c` it prints a per-call summary table instead.) Actually running the
+traced command and emitting one line per syscall is not implemented.
 
 ### Explore /proc
 
@@ -122,9 +127,13 @@ cmdline  cwd  environ  exe  fd  status
 
 ```bash
 $ free
-              total        used        free
-Mem:       67108864     2097152    65011712
+              total        used        free      shared
+Mem:               0     2097152           0           0
 ```
+
+`total` reports the system memory limit, which defaults to `0` (unlimited),
+so `free` is `0` until you set a limit (e.g. via `set_memlimit`). Use
+`free -h` for human-readable sizes.
 
 ## Learning Paths
 

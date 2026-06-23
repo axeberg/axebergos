@@ -4,7 +4,7 @@ Instructions for building and running axeberg.
 
 ## Prerequisites
 
-- **Rust**: Latest stable (1.80+)
+- **Rust**: 1.85+ (the project uses edition 2024, which requires Rust >= 1.85). The repository pins the toolchain to **1.96.0** via `rust-toolchain.toml`, so rustup will use that version automatically.
 - **wasm-pack**: For building WASM
 - **Modern browser**: Chrome, Firefox, Safari, or Edge
 
@@ -30,7 +30,7 @@ axebergos/
 │   ├── boot.rs             # Boot sequence
 │   ├── kernel/             # Kernel components
 │   │   ├── mod.rs
-│   │   ├── syscall.rs      # Syscall interface (300+)
+│   │   ├── syscall.rs      # Syscall interface (115 syscalls)
 │   │   ├── process.rs      # Process management
 │   │   ├── memory.rs       # Memory (COW, mmap)
 │   │   ├── executor.rs     # Single-threaded scheduler

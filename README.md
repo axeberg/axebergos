@@ -102,7 +102,7 @@ $ fg %1                       # Foreground
 axebergos/
 ├── src/
 │   ├── kernel/              # OS kernel
-│   │   ├── syscall.rs       # System calls (300+)
+│   │   ├── syscall.rs       # System calls (115)
 │   │   ├── process.rs       # Process management
 │   │   ├── memory.rs        # Memory (COW, mmap)
 │   │   ├── signal.rs        # POSIX-like signals

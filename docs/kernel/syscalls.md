@@ -381,11 +381,14 @@ Set signal disposition for current process.
 pub fn signal(sig: Signal, action: SignalAction) -> SyscallResult<()>
 ```
 
-**Actions:**
-- `SignalAction::Default` - Use default behavior
+**Actions** (`SignalAction`, `src/kernel/signal.rs`):
+- `SignalAction::Default` - Use the signal's default action
 - `SignalAction::Ignore` - Ignore the signal
 - `SignalAction::Terminate` - Terminate the process
-- `SignalAction::Handle` - Custom handler (future)
+- `SignalAction::Kill` - Kill the process (unconditional)
+- `SignalAction::Stop` - Stop the process
+- `SignalAction::Continue` - Continue a stopped process
+- `SignalAction::Handle` - Notify a task to run a custom handler
 
 Note: `SIGKILL` and `SIGSTOP` cannot have their disposition changed.
 
@@ -471,18 +474,24 @@ All syscalls return `SyscallResult<T>`, which is `Result<T, SyscallError>`:
 
 ```rust
 pub enum SyscallError {
-    BadFd,            // Invalid file descriptor
-    NotFound,         // File or path not found
-    PermissionDenied, // Permission denied
-    InvalidArgument,  // Invalid argument
-    WouldBlock,       // Would block (non-blocking I/O)
-    BrokenPipe,       // Pipe/connection closed
-    Busy,             // Resource busy
-    NoProcess,        // No current process
-    Io(String),       // Generic I/O error
+    BadFd,               // Invalid file descriptor
+    NotFound,            // File or path not found
+    PermissionDenied,    // Permission denied
+    InvalidArgument,     // Invalid argument
+    WouldBlock,          // Would block (non-blocking I/O)
+    BrokenPipe,          // Pipe/connection closed
+    Busy,                // Resource busy
+    InvalidData,         // Invalid data (e.g. invalid UTF-8)
+    NoProcess,           // No current process
+    Io(String),          // Generic I/O error
     Memory(MemoryError), // Memory error
     Signal(SignalError), // Signal error
-    Interrupted,      // Interrupted by signal
+    Interrupted,         // Interrupted by signal
+    NotADirectory,       // Not a directory
+    IsADirectory,        // Is a directory (can't read/write)
+    AlreadyExists,       // Already exists
+    TooManyOpenFiles,    // Too many open files (EMFILE)
+    TooBig,              // Value too big for type (E2BIG/EFBIG)
 }
 ```
 
