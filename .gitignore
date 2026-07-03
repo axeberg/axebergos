@@ -2,4 +2,3 @@
 /pkg
 /site
 .venv
-Cargo.lock

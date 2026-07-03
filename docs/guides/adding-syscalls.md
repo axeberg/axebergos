@@ -6,11 +6,14 @@ Guide to extending the kernel with new system calls.
 
 Syscalls are the interface between userspace and kernel. Adding a new syscall involves:
 
-1. Define syscall number
-2. Implement handler function
-3. Register in dispatch
+1. Define the syscall number (optional, for tracing/ABI)
+2. Implement the handler as a `sys_*` method on `Kernel`
+3. Add a public wrapper function
 4. Add WASM ABI bindings (if needed)
 5. Test
+
+There is no central `syscall(nr, args)` dispatch table and no `SyscallArg`
+enum. Each syscall is just a method plus a thin wrapper.
 
 ## Step 1: Define Syscall Number
 
@@ -25,7 +28,11 @@ syscall_names! {
 }
 ```
 
-The `syscall_names!` macro generates both the enum variant and name lookup.
+The `syscall_names!` macro only generates the syscall-number enum and a
+name lookup (used by tracing and the WASM ABI). It does **not** generate any
+dispatch logic — calls reach the kernel directly through the wrapper in
+Step 3. This step is optional and only needed if the syscall should appear
+in traces or be exposed to WASM modules.
 
 ## Step 2: Implement Handler
 
@@ -68,23 +75,24 @@ impl Kernel {
 }
 ```
 
-## Step 3: Register in Dispatch
+## Step 3: Add a Public Wrapper
+
+Userspace code (shell programs, etc.) does not call `sys_*` methods
+directly. Instead, each syscall has a free function that borrows the
+thread-local kernel and forwards the call. Add yours next to the others in
+`src/kernel/syscall.rs`:
 
 ```rust
-// src/kernel/syscall.rs, in syscall() method
+// src/kernel/syscall.rs (free functions, outside the `impl Kernel` block)
 
-pub fn syscall(&mut self, nr: SyscallNr, args: &[SyscallArg]) -> SyscallResult<SyscallArg> {
-    match nr {
-        // ... existing syscalls ...
-
-        SyscallNr::MyNewSyscall => {
-            let arg1 = args.get(0).map(|a| a.as_i32()).unwrap_or(0);
-            let arg2 = args.get(1).map(|a| a.as_str()).unwrap_or("");
-            self.sys_my_new_syscall(arg1, arg2).map(SyscallArg::Int)
-        }
-    }
+/// My new syscall - does something useful.
+pub fn my_new_syscall(arg1: i32, arg2: &str) -> SyscallResult<i32> {
+    KERNEL.with(|k| k.borrow_mut().sys_my_new_syscall(arg1, arg2))
 }
 ```
+
+That wrapper is the entire "registration" — there is no match arm to update
+and no argument-boxing enum to thread the call through.
 
 ## Step 4: WASM ABI Bindings
 
@@ -153,56 +161,42 @@ mod tests {
 }
 ```
 
-## Syscall Argument Types
+## Argument Types
 
-```rust
-pub enum SyscallArg {
-    Int(i32),
-    Long(i64),
-    Ptr(u32),
-    Str(String),
-    Bytes(Vec<u8>),
-}
-
-impl SyscallArg {
-    pub fn as_i32(&self) -> i32;
-    pub fn as_i64(&self) -> i64;
-    pub fn as_u32(&self) -> u32;
-    pub fn as_str(&self) -> &str;
-    pub fn as_bytes(&self) -> &[u8];
-}
-```
+Syscall methods take ordinary Rust types directly — `i32`, `&str`,
+`&[u8]`, `Fd`, etc. There is no `SyscallArg` enum boxing arguments; the
+method signature is the contract.
 
 ## Error Types
 
+Syscalls return `SyscallResult<T>` (`Result<T, SyscallError>`). The full set
+of error variants (`src/kernel/syscall.rs`):
+
 ```rust
 pub enum SyscallError {
-    BadFd,              // Invalid file descriptor
-    NotFound,           // Path/resource not found
-    PermissionDenied,   // Access denied
-    InvalidArgument,    // Bad argument value
-    WouldBlock,         // Non-blocking would block
-    BrokenPipe,         // Pipe has no readers
-    TooManyOpenFiles,   // FD limit reached
-    NoProcess,          // No current process
-    TooBig,             // Size overflow
-    Busy,               // Resource busy
-    Io(String),         // Generic I/O error
-}
-
-impl SyscallError {
-    pub fn to_errno(&self) -> i32 {
-        match self {
-            Self::BadFd => -9,          // EBADF
-            Self::NotFound => -2,       // ENOENT
-            Self::PermissionDenied => -13, // EACCES
-            Self::InvalidArgument => -22,  // EINVAL
-            Self::WouldBlock => -11,    // EAGAIN
-            // ...
-        }
-    }
+    BadFd,               // Invalid file descriptor
+    NotFound,            // File or path not found
+    PermissionDenied,    // Permission denied
+    InvalidArgument,     // Invalid argument
+    WouldBlock,          // Would block (non-blocking I/O)
+    BrokenPipe,          // Pipe/connection closed
+    Busy,                // Resource busy
+    InvalidData,         // Invalid data (e.g. invalid UTF-8)
+    NoProcess,           // No current process
+    Io(String),          // Generic I/O error
+    Memory(MemoryError), // Memory error
+    Signal(SignalError), // Signal error
+    Interrupted,         // Interrupted by signal
+    NotADirectory,       // Not a directory
+    IsADirectory,        // Is a directory
+    AlreadyExists,       // Already exists
+    TooManyOpenFiles,    // FD limit reached (EMFILE)
+    TooBig,              // Value too big for type (E2BIG/EFBIG)
 }
 ```
+
+`SyscallError` provides a `to_errno()` mapping to negative errno values for
+the WASM ABI.
 
 ## Common Patterns
 

@@ -752,6 +752,34 @@ impl Kernel {
         &mut self.fs.mounts
     }
 
+    /// Mount a filesystem. Privileged: requires root (POSIX requires
+    /// CAP_SYS_ADMIN). Unprivileged callers get `MountError::PermissionDenied`
+    /// instead of being able to mount over `/etc` or unmount `/proc`.
+    pub fn sys_mount(
+        &mut self,
+        source: &str,
+        target: &str,
+        fstype: super::mount::FsType,
+        options: super::mount::MountOptions,
+        now: f64,
+    ) -> Result<(), super::mount::MountError> {
+        if self.current_euid().map(|u| u != Uid::ROOT).unwrap_or(true) {
+            return Err(super::mount::MountError::PermissionDenied);
+        }
+        self.fs.mounts.mount(source, target, fstype, options, now)
+    }
+
+    /// Unmount a filesystem. Privileged, like [`sys_mount`](Self::sys_mount).
+    pub fn sys_umount(
+        &mut self,
+        target: &str,
+    ) -> Result<super::mount::MountEntry, super::mount::MountError> {
+        if self.current_euid().map(|u| u != Uid::ROOT).unwrap_or(true) {
+            return Err(super::mount::MountError::PermissionDenied);
+        }
+        self.fs.mounts.umount(target)
+    }
+
     pub fn ttys(&self) -> &TtyManager {
         &self.ttys
     }
@@ -1276,7 +1304,9 @@ impl Kernel {
             uptime_secs: self.time.now,
             total_memory: 64 * 1024 * 1024, // 64MB simulated
             used_memory: sys_stats.total_allocated as u64,
-            free_memory: 64 * 1024 * 1024 - sys_stats.total_allocated as u64,
+            // saturating_sub: once allocations exceed the simulated 64MB this
+            // would otherwise underflow and panic on `cat /proc/meminfo`.
+            free_memory: (64u64 * 1024 * 1024).saturating_sub(sys_stats.total_allocated as u64),
             num_processes: self.proc.processes.len(),
         };
 
@@ -1426,25 +1456,40 @@ impl Kernel {
 
         // Allocate two fds pointing to same pipe
         // (In a real OS these would be separate read/write ends)
-        let process = self
-            .proc
-            .processes
-            .get_mut(&current)
-            .ok_or(SyscallError::NoProcess)?;
-        let read_fd = process
-            .files
-            .alloc(handle)
-            .ok_or(SyscallError::TooManyOpenFiles)?;
-        let write_fd = match process.files.alloc(handle) {
-            Some(fd) => fd,
-            None => {
-                // Clean up the read fd if we can't allocate write fd
-                process.files.remove(read_fd);
-                return Err(SyscallError::TooManyOpenFiles);
+        let alloc_result = {
+            let process = self
+                .proc
+                .processes
+                .get_mut(&current)
+                .ok_or(SyscallError::NoProcess)?;
+            match process.files.alloc(handle) {
+                Some(read_fd) => match process.files.alloc(handle) {
+                    Some(write_fd) => Ok((read_fd, write_fd)),
+                    None => {
+                        process.files.remove(read_fd);
+                        Err(SyscallError::TooManyOpenFiles)
+                    }
+                },
+                None => Err(SyscallError::TooManyOpenFiles),
             }
         };
 
-        Ok((read_fd, write_fd))
+        match alloc_result {
+            Ok((read_fd, write_fd)) => {
+                // Two fds now reference the same pipe object, but insert() only
+                // counted one. Retain once for the second fd; otherwise closing
+                // one fd frees the object out from under the other
+                // (use-after-close, and later handle-id reuse aliasing).
+                self.objects.retain(handle);
+                Ok((read_fd, write_fd))
+            }
+            Err(e) => {
+                // No fd survives, so drop the object we inserted (refcount 1 -> 0)
+                // instead of leaking it.
+                self.objects.release(handle);
+                Err(e)
+            }
+        }
     }
 
     /// Create a window (returns fd for the window)
@@ -2067,29 +2112,50 @@ impl Kernel {
             }
         }
 
-        // Convert our flags to VFS options
-        // Note: We always need read access in VFS to read existing content into FileObject,
-        // but the actual permissions are tracked separately in the FileObject
+        // Convert our flags to VFS options.
+        // We always need read access in VFS to read existing content into the
+        // FileObject; actual permissions are tracked separately. We deliberately
+        // do NOT pass truncate here: truncation destroys data, so it must wait
+        // until after the write-permission check below.
         let vfs_opts = VfsOpenOptions {
             read: true, // Always need to read existing content
             write: flags.write,
             create: flags.create,
-            truncate: flags.truncate,
+            truncate: false,
         };
 
         // Open via VFS first (before permission check for TOCTOU safety)
-        let vfs_handle = self.fs.vfs.open(path_str, vfs_opts)?;
+        let mut vfs_handle = self.fs.vfs.open(path_str, vfs_opts)?;
 
-        // For existing files, check permissions AFTER opening (TOCTOU-safe)
-        // This uses fstat on the opened handle, not the path that could have changed
-        if file_exists
-            && self
-                .check_handle_permission(vfs_handle, flags.read, flags.write, false)
+        // For existing files, check permissions AFTER opening (TOCTOU-safe).
+        // This uses fstat on the opened handle, not the path that could have
+        // changed. Truncation requires write permission even for O_RDONLY|O_TRUNC.
+        if file_exists {
+            let need_write = flags.write || flags.truncate;
+            if self
+                .check_handle_permission(vfs_handle, flags.read, need_write, false)
                 .is_err()
-        {
-            // Permission denied - close the handle and return error
-            let _ = self.fs.vfs.close(vfs_handle);
-            return Err(SyscallError::PermissionDenied);
+            {
+                // Permission denied - close the handle and return error
+                let _ = self.fs.vfs.close(vfs_handle);
+                return Err(SyscallError::PermissionDenied);
+            }
+
+            // Permission verified; only now is it safe to honor O_TRUNC. Syscalls
+            // are synchronous and single-threaded, so nothing runs between the
+            // close and reopen (no TOCTOU window).
+            if flags.truncate {
+                let _ = self.fs.vfs.close(vfs_handle);
+                vfs_handle = self.fs.vfs.open(
+                    path_str,
+                    VfsOpenOptions {
+                        read: true,
+                        write: flags.write,
+                        create: false,
+                        truncate: true,
+                    },
+                )?;
+            }
         }
 
         // If we just created a new file, set ownership and apply umask
@@ -3797,14 +3863,14 @@ impl Kernel {
         // Write /etc/passwd (readable by all)
         let _ = write_string(&mut self.fs.vfs, "/etc/passwd", &passwd_content);
 
-        // Write /etc/shadow (readable only by root)
+        // Write /etc/shadow, then restrict it to root: it holds password hashes
+        // and must not be world-readable. load_user_db reads it via the
+        // kernel-internal VFS path, so 0600 does not block the kernel itself.
         let _ = write_string(&mut self.fs.vfs, "/etc/shadow", &shadow_content);
+        let _ = self.fs.vfs.chmod("/etc/shadow", 0o600);
 
         // Write /etc/group (readable by all)
         let _ = write_string(&mut self.fs.vfs, "/etc/group", &group_content);
-
-        // Note: File permissions would be set here if the VFS supported chmod.
-        // For now, the files are created with default permissions.
     }
 
     /// Load user database from /etc/passwd, /etc/shadow, /etc/group

@@ -24,7 +24,7 @@ A mini operating system written in Rust, compiled to WebAssembly.
 │  │  │                            Kernel                                │ │  │
 │  │  │  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐  │ │  │
 │  │  │  │ Syscalls   │  │ Processes  │  │   VFS      │  │  Memory    │  │ │  │
-│  │  │  │ (300+)     │  │ + Signals  │  │ MemoryFs   │  │  COW/mmap  │  │ │  │
+│  │  │  │ (115)      │  │ + Signals  │  │ MemoryFs   │  │  COW/mmap  │  │ │  │
 │  │  │  └────────────┘  └────────────┘  └────────────┘  └────────────┘  │ │  │
 │  │  │  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐  │ │  │
 │  │  │  │ Executor   │  │    IPC     │  │  Timers    │  │   Users    │  │ │  │

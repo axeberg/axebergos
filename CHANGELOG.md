@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - This CHANGELOG
 
 ### Changed
-- Upgraded `getrandom` from 0.2 to 0.3 (breaking: `js` feature renamed to `wasm_js`)
+- Upgraded `getrandom` to 0.4 (from 0.2; breaking: the `js` feature was renamed to `wasm_js`, and the API moved from `getrandom::getrandom()` to `getrandom::fill()`)
 
 ## [0.1.0] - 2024-12-26
 
@@ -82,11 +82,12 @@ Initial release of axeberg - a mini-OS in Rust running in WebAssembly.
 ### From pre-0.1.0
 This is the initial release. No migration needed.
 
-### getrandom 0.2 → 0.3
+### getrandom 0.2 → 0.4
 If you have code depending on axeberg's random functions:
 ```rust
 // Old (0.2)
 getrandom::getrandom(&mut buf)
-// New (0.3)
+// New (0.4)
 getrandom::fill(&mut buf)
 ```
+The `js` feature was also renamed to `wasm_js` for the WASM target.

@@ -103,24 +103,32 @@ pub struct VfsSubsystem {
 }
 ```
 
-**Filesystem trait:**
+**Filesystem trait** (abridged; `src/vfs/mod.rs` is authoritative):
 
 ```rust
 pub trait FileSystem {
-    fn open(&mut self, path: &str, opts: OpenOptions) -> io::Result<FileHandle>;
+    fn open(&mut self, path: &str, options: OpenOptions) -> io::Result<FileHandle>;
     fn close(&mut self, handle: FileHandle) -> io::Result<()>;
     fn read(&mut self, handle: FileHandle, buf: &mut [u8]) -> io::Result<usize>;
     fn write(&mut self, handle: FileHandle, buf: &[u8]) -> io::Result<usize>;
+    fn seek(&mut self, handle: FileHandle, pos: io::SeekFrom) -> io::Result<u64>;
     fn metadata(&self, path: &str) -> io::Result<Metadata>;
+    fn fstat(&self, handle: FileHandle) -> io::Result<Metadata>;
     fn create_dir(&mut self, path: &str) -> io::Result<()>;
     fn read_dir(&self, path: &str) -> io::Result<Vec<DirEntry>>;
     fn remove_file(&mut self, path: &str) -> io::Result<()>;
     fn remove_dir(&mut self, path: &str) -> io::Result<()>;
-    fn symlink(&mut self, target: &str, link: &str) -> io::Result<()>;
-    fn link(&mut self, src: &str, dst: &str) -> io::Result<()>;
-    fn chmod(&mut self, path: &str, mode: u32) -> io::Result<()>;
-    fn chown(&mut self, path: &str, uid: u32, gid: u32) -> io::Result<()>;
-    fn utimes(&mut self, path: &str, atime: f64, mtime: f64) -> io::Result<()>;
+    fn rename(&mut self, from: &str, to: &str) -> io::Result<()>;
+    fn copy_file(&mut self, from: &str, to: &str) -> io::Result<u64>;
+    fn exists(&self, path: &str) -> bool;
+    fn symlink(&mut self, target: &str, link_path: &str) -> io::Result<()>;
+    fn read_link(&self, path: &str) -> io::Result<String>;
+    fn link(&mut self, source: &str, dest: &str) -> io::Result<()>;
+    fn chmod(&mut self, path: &str, mode: u16) -> io::Result<()>;
+    fn chown(&mut self, path: &str, uid: Option<u32>, gid: Option<u32>) -> io::Result<()>;
+    fn handle_path(&self, handle: FileHandle) -> io::Result<String>;
+    fn set_clock(&mut self, now: f64);
+    fn utimes(&mut self, path: &str, atime: Option<f64>, mtime: Option<f64>) -> io::Result<()>;
 }
 ```
 
@@ -158,9 +166,8 @@ pub enum KernelObject {
     File(FileObject),
     Pipe(PipeObject),
     Console(ConsoleObject),
-    Directory(DirectoryObject),
     Window(WindowObject),
-    Socket(SocketObject),
+    Directory(DirectoryObject),
 }
 ```
 
@@ -245,10 +252,18 @@ pub enum SyscallError {
     InvalidArgument,
     WouldBlock,
     BrokenPipe,
-    TooManyOpenFiles,
+    Busy,
+    InvalidData,
     NoProcess,
-    TooBig,
     Io(String),
+    Memory(MemoryError),
+    Signal(SignalError),
+    Interrupted,
+    NotADirectory,
+    IsADirectory,
+    AlreadyExists,
+    TooManyOpenFiles,
+    TooBig,
 }
 ```
 

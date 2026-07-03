@@ -17,7 +17,7 @@ concurrent and stateful systems. TLA+ allows us to:
 
 ## Specifications
 
-This directory contains 5 formal TLA+ specifications:
+This directory contains 6 formal TLA+ specifications:
 
 ### ProcessStateMachine.tla
 
@@ -63,6 +63,20 @@ Models the command history buffer with size limits:
   - H2: Oldest entries are evicted when limit reached (FIFO)
   - H3: Duplicate consecutive commands are not added
 
+### WorkStealing.tla
+
+Models the lock-free work-stealing executor (Chase-Lev deque plus a global
+injector queue) for N workers:
+- Invariants verified:
+  - W1: No lost tasks (every spawned task eventually executes)
+  - W2: No double execution (each task executes exactly once)
+  - W3: LIFO local pop / FIFO steal
+  - W4: Linearizability (operations appear atomic)
+  - W5: Progress under fair scheduling
+  - W6: Bounded stealing (steal attempts don't spin forever)
+
+A ready-to-run `WorkStealing.cfg` is included for this spec.
+
 ## Running the Model Checker
 
 ### Install TLC (TLA+ Model Checker)
@@ -77,9 +91,11 @@ wget https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar
 
 ### Create a Config File
 
-(Required - not included in repository)
+Most specs need a `.cfg` file that you create yourself; `WorkStealing.cfg`
+is already included as a worked example.
 
-For each spec, create a `.cfg` file. Example for `ProcessStateMachine.cfg`:
+For a spec without a config, create a `.cfg` file. Example for
+`ProcessStateMachine.cfg`:
 
 ```
 CONSTANTS

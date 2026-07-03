@@ -84,7 +84,7 @@ pub fn prog_mount(args: &[String], __stdin: &str, stdout: &mut String, stderr: &
 
     let result = syscall::KERNEL.with(|k| {
         let mut kernel = k.borrow_mut();
-        kernel.mounts_mut().mount(source, target, fs, opts, now)
+        kernel.sys_mount(source, target, fs, opts, now)
     });
 
     match result {
@@ -116,7 +116,7 @@ pub fn prog_umount(
 
     let target = &args[0];
 
-    let result = syscall::KERNEL.with(|k| k.borrow_mut().mounts_mut().umount(target));
+    let result = syscall::KERNEL.with(|k| k.borrow_mut().sys_umount(target));
 
     match result {
         Ok(_) => 0,
@@ -153,14 +153,17 @@ pub fn prog_findmnt(
             mounts.sort_by(|a, b| a.target.cmp(&b.target));
 
             for entry in mounts {
+                // Char-aware truncation: byte-slicing entry.source[..10] would
+                // panic on a multibyte boundary (sources are user-controlled).
+                let source: String = if entry.source.chars().count() > 10 {
+                    entry.source.chars().take(10).collect()
+                } else {
+                    entry.source.clone()
+                };
                 stdout.push_str(&format!(
                     "{:<23} {:<10} {:<8} {}\n",
                     entry.target,
-                    if entry.source.len() > 10 {
-                        &entry.source[..10]
-                    } else {
-                        &entry.source
-                    },
+                    source,
                     entry.fstype.as_str(),
                     entry.options
                 ));

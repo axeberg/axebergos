@@ -11,7 +11,7 @@
 //! Passwords are hashed using a salted key-stretching algorithm:
 //! - 16-byte cryptographically random salt per password
 //! - 10,000 rounds of hashing to slow brute-force attacks
-//! - Stored as "salt_hex:hash_hex"
+//! - Stored as "salt_hex$hash_hex" (`$` avoids the /etc/shadow `:` delimiter)
 
 use std::collections::HashMap;
 
@@ -719,7 +719,12 @@ impl User {
     /// Returns true if:
     /// - No password is set (account allows passwordless login)
     /// - The provided password matches the stored hash
+    ///
+    /// Always returns false for a locked account.
     pub fn check_password(&self, password: &str) -> bool {
+        if self.is_locked() {
+            return false; // Locked accounts never authenticate.
+        }
         match &self.password_hash {
             None => true, // No password set = allow
             Some(hash) => verify_password(password, hash),
@@ -928,7 +933,9 @@ impl UserDb {
         lines
             .iter()
             .map(|u| {
-                let hash = u.password_hash.as_deref().unwrap_or("!");
+                // Empty field = no password; "!"/"*" (a locked account's hash) =
+                // login disabled. Real hashes use '$', so they carry no ':'.
+                let hash = u.password_hash.as_deref().unwrap_or("");
                 format!("{}:{}:19000:0:99999:7:::", u.name, hash)
             })
             .collect::<Vec<_>>()
@@ -950,9 +957,13 @@ impl UserDb {
                 let hash = parts[1];
 
                 if let Some(user) = self.get_user_by_name_mut(name) {
-                    if hash == "!" || hash == "*" || hash.is_empty() {
+                    if hash.is_empty() {
+                        // No password required.
                         user.password_hash = None;
                     } else {
+                        // A real hash or a lock marker ("!"/"*"); keep both so a
+                        // locked account stays locked across a reload (recognized
+                        // by is_locked()/check_password()).
                         user.password_hash = Some(hash.to_string());
                     }
                 }
@@ -1206,22 +1217,25 @@ fn hash_with_salt(password: &str, salt: &[u8]) -> [u8; 32] {
 }
 
 /// Hash a password with a new random salt
-/// Returns the hash in format "salt_hex:hash_hex"
+/// Returns the hash in format "salt_hex$hash_hex"
+///
+/// The salt and hash are joined with '$' (not ':') so the value never collides
+/// with the ':' field delimiter when written to /etc/shadow.
 fn hash_password(password: &str) -> String {
     let salt = generate_salt();
     let hash = hash_with_salt(password, &salt);
 
-    // Format: salt_hex:hash_hex
+    // Format: salt_hex$hash_hex
     let salt_hex: String = salt.iter().map(|b| format!("{:02x}", b)).collect();
     let hash_hex: String = hash.iter().map(|b| format!("{:02x}", b)).collect();
 
-    format!("{}:{}", salt_hex, hash_hex)
+    format!("{}${}", salt_hex, hash_hex)
 }
 
 /// Verify a password against a stored hash
-/// Expects hash in format "salt_hex:hash_hex"
+/// Expects hash in format "salt_hex$hash_hex"
 fn verify_password(password: &str, stored_hash: &str) -> bool {
-    let parts: Vec<&str> = stored_hash.split(':').collect();
+    let parts: Vec<&str> = stored_hash.split('$').collect();
 
     if parts.len() != 2 {
         return false;
@@ -1437,12 +1451,17 @@ mod tests {
 
     #[test]
     fn test_password_hash_format() {
-        // Test that password hashes have correct format (salt:hash)
+        // Test that password hashes have correct format (salt$hash). The '$'
+        // separator (not ':') keeps the hash free of the /etc/shadow delimiter.
         let hash = hash_password("testpassword");
-        let parts: Vec<&str> = hash.split(':').collect();
-        assert_eq!(parts.len(), 2, "Hash should be in salt:hash format");
+        let parts: Vec<&str> = hash.split('$').collect();
+        assert_eq!(parts.len(), 2, "Hash should be in salt$hash format");
         assert_eq!(parts[0].len(), 32, "Salt should be 32 hex chars (16 bytes)");
         assert_eq!(parts[1].len(), 64, "Hash should be 64 hex chars (32 bytes)");
+        assert!(
+            !hash.contains(':'),
+            "Hash must not contain the ':' shadow delimiter"
+        );
     }
 
     #[test]
@@ -1473,6 +1492,47 @@ mod tests {
         user.lock_account();
         assert!(user.is_locked());
         assert!(!user.check_password("secret")); // Can't login to locked account
+    }
+
+    #[test]
+    fn test_shadow_roundtrip_preserves_password_and_lock_state() {
+        // Regression: a save (to_shadow) + load (parse_shadow) must preserve
+        // passwordless, real-password, and locked accounts. Previously a locked
+        // account reloaded as passwordless (auth bypass), and a real hash (which
+        // contained ':') was truncated by the shadow field split.
+        let mut db = UserDb::new();
+        db.add_user("alice", None).unwrap();
+        db.get_user_by_name_mut("alice")
+            .unwrap()
+            .set_password("secret");
+        db.add_user("bob", None).unwrap();
+        db.get_user_by_name_mut("bob")
+            .unwrap()
+            .set_password("hunter2");
+        db.get_user_by_name_mut("bob").unwrap().lock_account();
+
+        let passwd = db.to_passwd();
+        let shadow = db.to_shadow();
+
+        let mut reloaded = UserDb::empty();
+        reloaded.parse_passwd(&passwd);
+        reloaded.parse_shadow(&shadow);
+
+        // root: passwordless by default -> still allows login after reload
+        let root = reloaded.get_user_by_name("root").unwrap();
+        assert!(!root.is_locked());
+        assert!(root.check_password("anything"));
+
+        // alice: real password survives the round-trip
+        let alice = reloaded.get_user_by_name("alice").unwrap();
+        assert!(!alice.is_locked());
+        assert!(alice.check_password("secret"));
+        assert!(!alice.check_password("wrong"));
+
+        // bob: locked account stays locked and rejects his old password
+        let bob = reloaded.get_user_by_name("bob").unwrap();
+        assert!(bob.is_locked());
+        assert!(!bob.check_password("hunter2"));
     }
 
     #[test]

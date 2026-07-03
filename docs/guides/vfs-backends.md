@@ -4,21 +4,22 @@ Guide to creating custom filesystem implementations.
 
 ## FileSystem Trait
 
-All filesystems implement this trait:
+All filesystems implement this trait (verbatim from `src/vfs/mod.rs`, which
+is authoritative):
 
 ```rust
 pub trait FileSystem {
     // File operations
-    fn open(&mut self, path: &str, opts: OpenOptions) -> io::Result<FileHandle>;
+    fn open(&mut self, path: &str, options: OpenOptions) -> io::Result<FileHandle>;
     fn close(&mut self, handle: FileHandle) -> io::Result<()>;
     fn read(&mut self, handle: FileHandle, buf: &mut [u8]) -> io::Result<usize>;
     fn write(&mut self, handle: FileHandle, buf: &[u8]) -> io::Result<usize>;
-    fn seek(&mut self, handle: FileHandle, pos: SeekFrom) -> io::Result<u64>;
-    fn truncate(&mut self, handle: FileHandle, len: u64) -> io::Result<()>;
+    fn seek(&mut self, handle: FileHandle, pos: io::SeekFrom) -> io::Result<u64>;
 
     // Metadata
     fn metadata(&self, path: &str) -> io::Result<Metadata>;
     fn fstat(&self, handle: FileHandle) -> io::Result<Metadata>;
+    fn handle_path(&self, handle: FileHandle) -> io::Result<String>;
     fn exists(&self, path: &str) -> bool;
 
     // Directory operations
@@ -27,23 +28,27 @@ pub trait FileSystem {
     fn remove_file(&mut self, path: &str) -> io::Result<()>;
     fn remove_dir(&mut self, path: &str) -> io::Result<()>;
 
-    // Links
-    fn symlink(&mut self, target: &str, link: &str) -> io::Result<()>;
-    fn read_link(&self, path: &str) -> io::Result<String>;
-    fn link(&mut self, src: &str, dst: &str) -> io::Result<()>;
+    // Move / copy
+    fn rename(&mut self, from: &str, to: &str) -> io::Result<()>;
+    fn copy_file(&mut self, from: &str, to: &str) -> io::Result<u64>;
 
-    // Permissions
-    fn chmod(&mut self, path: &str, mode: u32) -> io::Result<()>;
-    fn chown(&mut self, path: &str, uid: u32, gid: u32) -> io::Result<()>;
+    // Links
+    fn symlink(&mut self, target: &str, link_path: &str) -> io::Result<()>;
+    fn read_link(&self, path: &str) -> io::Result<String>;
+    fn link(&mut self, source: &str, dest: &str) -> io::Result<()>;
+
+    // Permissions / ownership
+    fn chmod(&mut self, path: &str, mode: u16) -> io::Result<()>;
+    fn chown(&mut self, path: &str, uid: Option<u32>, gid: Option<u32>) -> io::Result<()>;
 
     // Timestamps
-    fn utimes(&mut self, path: &str, atime: f64, mtime: f64) -> io::Result<()>;
     fn set_clock(&mut self, now: f64);
-
-    // Rename
-    fn rename(&mut self, from: &str, to: &str) -> io::Result<()>;
+    fn utimes(&mut self, path: &str, atime: Option<f64>, mtime: Option<f64>) -> io::Result<()>;
 }
 ```
+
+Note: there is no `truncate(handle, len)` method — truncation happens via
+`OpenOptions::truncate` at open time.
 
 ## Minimal Implementation
 
@@ -156,21 +161,18 @@ impl FileSystem for SimpleFs {
 
 ```rust
 pub struct Metadata {
-    pub file_type: FileType,
     pub size: u64,
-    pub mode: u32,          // Unix permissions (0o755, etc.)
+    pub is_dir: bool,
+    pub is_file: bool,
+    pub is_symlink: bool,
+    pub symlink_target: Option<String>,
     pub uid: u32,
     pub gid: u32,
-    pub nlink: u32,         // Link count
+    pub mode: u16,          // Unix permissions (0o755, etc.)
     pub atime: f64,         // Access time (ms since epoch)
     pub mtime: f64,         // Modification time
     pub ctime: f64,         // Change time
-}
-
-pub enum FileType {
-    File,
-    Directory,
-    Symlink,
+    pub nlink: u32,         // Hard link count
 }
 ```
 
@@ -182,16 +184,19 @@ pub struct OpenOptions {
     pub write: bool,
     pub create: bool,
     pub truncate: bool,
-    pub append: bool,
 }
 
 impl OpenOptions {
-    pub const READ: Self = Self { read: true, write: false, create: false, truncate: false, append: false };
-    pub const WRITE: Self = Self { read: false, write: true, create: true, truncate: true, append: false };
-    pub const RDWR: Self = Self { read: true, write: true, create: false, truncate: false, append: false };
-    pub const APPEND: Self = Self { read: false, write: true, create: true, truncate: false, append: true };
+    pub fn new() -> Self;                       // defaults: read = true, others false
+    pub fn read(self, read: bool) -> Self;      // builder methods chain
+    pub fn write(self, write: bool) -> Self;
+    pub fn create(self, create: bool) -> Self;
+    pub fn truncate(self, truncate: bool) -> Self;
 }
 ```
+
+Construct options with the builder, e.g.
+`OpenOptions::new().write(true).create(true).truncate(true)`.
 
 ## Example: Read-Only Archive FS
 
@@ -266,12 +271,14 @@ mod tests {
         let mut fs = SimpleFs::new();
 
         // Write
-        let h = fs.open("/test.txt", OpenOptions::WRITE).unwrap();
+        let h = fs
+            .open("/test.txt", OpenOptions::new().write(true).create(true).truncate(true))
+            .unwrap();
         fs.write(h, b"hello").unwrap();
         fs.close(h).unwrap();
 
         // Read back
-        let h = fs.open("/test.txt", OpenOptions::READ).unwrap();
+        let h = fs.open("/test.txt", OpenOptions::new().read(true)).unwrap();
         let mut buf = [0u8; 100];
         let n = fs.read(h, &mut buf).unwrap();
         assert_eq!(&buf[..n], b"hello");

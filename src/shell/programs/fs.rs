@@ -460,11 +460,7 @@ pub fn prog_df(args: &[String], __stdin: &str, stdout: &mut String, _stderr: &mu
     let used = count_size("/");
     let total: u64 = 1024 * 1024 * 100; // 100MB virtual filesystem
     let available = total.saturating_sub(used);
-    let use_pct = if total > 0 {
-        (used * 100 / total) as u32
-    } else {
-        0
-    };
+    let use_pct = (used * 100).checked_div(total).unwrap_or(0) as u32;
 
     fn format_size(size: u64, human: bool) -> String {
         if human {

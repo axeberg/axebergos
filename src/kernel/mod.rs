@@ -40,6 +40,12 @@ pub mod uds;
 pub mod users;
 pub mod visualizer;
 pub mod wasm;
+
+// Experimental multi-threaded work-stealing scheduler. It relies on
+// std::thread, which is unavailable on wasm32-unknown-unknown (the real
+// target), and the kernel's async runtime is the single-threaded `Executor`
+// below, so this is gated to native builds (where its own tests run).
+#[cfg(not(target_arch = "wasm32"))]
 pub mod work_stealing;
 
 #[cfg(target_arch = "wasm32")]
@@ -101,6 +107,7 @@ pub use visualizer::{
     ProcessTreeNode, ResourceDashboard, ResourceLimitView, SchedulerView, SyscallActivity,
     SyscallMonitor, SystemMemoryView, TaskView, TaskViewState,
 };
+#[cfg(not(target_arch = "wasm32"))]
 pub use work_stealing::{
     Config as WorkStealingConfig, Injector, StealResult, Stealer, TaskHandle, WorkStealingExecutor,
     Worker,

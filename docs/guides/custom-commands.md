@@ -33,12 +33,12 @@ pub fn builtin_mycommand(
 }
 ```
 
-### Registration
+### Dispatch
 
-```rust
-// In BUILTINS HashMap
-("mycommand", builtin_mycommand as BuiltinFn),
-```
+Builtins are not stored in a table. They are dispatched from `builtins.rs`:
+`builtins::is_builtin(name)` reports whether a name is a builtin, and a
+`match` on the name runs the corresponding handler, returning a
+`BuiltinResult`.
 
 ### When to Use
 
@@ -52,70 +52,77 @@ For more complex commands organized by category.
 
 ### Structure
 
+Programs are plain functions matching the `ProgramFn` signature
+(`src/shell/executor.rs`):
+
+```rust
+pub type ProgramFn =
+    fn(args: &[String], stdin: &str, stdout: &mut String, stderr: &mut String) -> i32;
+```
+
+- `args` — command-line arguments (`args[0]` is the command name)
+- `stdin` — standard input, already collected to a string
+- `stdout` / `stderr` — buffers you append output to
+- returns the exit code (0 = success)
+
+The kernel is reached through the free functions in `crate::kernel::syscall`,
+each of which wraps `KERNEL.with(|k| k.borrow_mut().sys_xxx(...))`.
+
 ```rust
 // src/shell/programs/mymodule.rs
 
-use crate::shell::ProgramContext;
+use crate::kernel::syscall;
 
-pub fn cmd_mytool(ctx: &mut ProgramContext) -> i32 {
-    let args = ctx.args();
-
-    // Parse arguments
+pub fn prog_mytool(
+    args: &[String],
+    _stdin: &str,
+    stdout: &mut String,
+    stderr: &mut String,
+) -> i32 {
+    // args[0] is the command name
     if args.len() < 2 {
-        ctx.stderr("Usage: mytool <arg>\n");
+        stderr.push_str("Usage: mytool <file>\n");
         return 1;
     }
 
-    // Access kernel
-    let result = ctx.kernel(|k| {
-        k.sys_read_file(&args[1])
-    });
-
-    match result {
-        Ok(data) => {
-            ctx.stdout(&String::from_utf8_lossy(&data));
-            0
-        }
+    let fd = match syscall::open(&args[1], syscall::OpenFlags::READ) {
+        Ok(fd) => fd,
         Err(e) => {
-            ctx.stderr(&format!("Error: {}\n", e));
-            1
+            stderr.push_str(&format!("mytool: {}\n", e));
+            return 1;
+        }
+    };
+
+    let mut buf = [0u8; 4096];
+    loop {
+        match syscall::read(fd, &mut buf) {
+            Ok(0) => break,
+            Ok(n) => stdout.push_str(&String::from_utf8_lossy(&buf[..n])),
+            Err(e) => {
+                stderr.push_str(&format!("mytool: {}\n", e));
+                let _ = syscall::close(fd);
+                return 1;
+            }
         }
     }
+    let _ = syscall::close(fd);
+    0
 }
 ```
 
 ### Registration
 
-```rust
-// src/shell/programs/mod.rs
-
-pub fn register_programs(registry: &mut ProgramRegistry) {
-    registry.register("mytool", mymodule::cmd_mytool);
-}
-```
-
-### ProgramContext API
+Register the function inside `ProgramRegistry::new()` in
+`src/shell/executor.rs`:
 
 ```rust
-impl ProgramContext {
-    // Arguments
-    fn args(&self) -> &[String];
-
-    // I/O
-    fn stdout(&mut self, s: &str);
-    fn stderr(&mut self, s: &str);
-    fn read_stdin(&mut self) -> Vec<u8>;
-    fn read_line(&mut self) -> Option<String>;
-
-    // Kernel access
-    fn kernel<F, R>(&mut self, f: F) -> R
-    where F: FnOnce(&mut Kernel) -> R;
-
-    // Environment
-    fn env(&self) -> &HashMap<String, String>;
-    fn cwd(&self) -> &Path;
-}
+// inside ProgramRegistry::new()
+reg.register("mytool", programs::prog_mytool);
 ```
+
+`register` takes a `&str` name and a `ProgramFn`. There is no separate
+`register_programs(registry)` entry point — every program is registered in
+this one constructor.
 
 ## WASM Commands
 
@@ -126,9 +133,10 @@ For external, portable commands.
 Commands use axeberg's WASM ABI:
 
 ```rust
-// Exported functions
+// Exported entry point (the kernel calls the export named "main";
+// see MAIN in src/kernel/wasm/abi.rs)
 #[no_mangle]
-pub extern "C" fn _start() -> i32;
+pub extern "C" fn main() -> i32;
 
 // Imported syscalls
 extern "C" {
@@ -147,7 +155,7 @@ extern "C" {
 // my_command/src/main.rs
 
 #[no_mangle]
-pub extern "C" fn _start() -> i32 {
+pub extern "C" fn main() -> i32 {
     let args = get_args();
 
     if args.len() < 2 {
@@ -195,16 +203,17 @@ fn main() {
 
 ## Command Categories
 
-Organize by function:
+Organize by function. The command names below are illustrative groupings,
+not a guarantee that every one is implemented — check `src/shell/programs/`
+for the current set (and `ProgramRegistry::new()` for what is registered):
 
-| Module | Purpose | Examples |
+| Module | Purpose | Example commands |
 |--------|---------|----------|
 | `fs.rs` | File operations | ls, cat, cp, mv, rm |
-| `text.rs` | Text processing | grep, sed, wc, sort |
+| `text.rs` | Text processing | grep, wc, sort |
 | `process.rs` | Process management | ps, kill, jobs |
 | `user.rs` | User management | useradd, passwd, whoami |
 | `system.rs` | System info | uname, uptime, free |
-| `net.rs` | Networking | ping, curl, nc |
 
 ## Testing
 
@@ -215,13 +224,14 @@ mod tests {
 
     #[test]
     fn test_mytool_basic() {
-        let mut ctx = ProgramContext::test_context();
-        ctx.set_args(vec!["mytool".into(), "arg1".into()]);
+        let args = vec!["mytool".to_string(), "/etc/hostname".to_string()];
+        let mut stdout = String::new();
+        let mut stderr = String::new();
 
-        let code = cmd_mytool(&mut ctx);
+        let code = prog_mytool(&args, "", &mut stdout, &mut stderr);
 
         assert_eq!(code, 0);
-        assert!(ctx.stdout_content().contains("expected output"));
+        assert!(stdout.contains("expected output"));
     }
 }
 ```

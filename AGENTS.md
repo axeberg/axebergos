@@ -23,8 +23,7 @@ Only proceed with `git add` and `git commit` if all three pass. This is **mandat
 ### Core Documentation
 | Document | Location | Purpose |
 |----------|----------|---------|
-| Project Analysis | `docs/PROJECT_ANALYSIS.md` | Full codebase review, security findings, architecture grades |
-| Work Tracker | `docs/WORK_TRACKER.md` | Known issues, priorities, progress log, and completed features |
+| Work Tracker | `docs/WORK_TRACKER.md` | Known issues, priorities, progress log, completed features, and security status |
 | Invariants | `docs/development/invariants.md` | Critical system invariants (P1-P3, S1-S5, M1-M5, etc.) |
 | Contributing Guide | `docs/development/contributing.md` | Code style, commit format, PR process |
 
@@ -63,6 +62,7 @@ TLA+ specifications in `specs/tla/`:
 - `TimerQueue.tla` - Timer queue ordering
 - `PathValidation.tla` - VFS path handling
 - `HistoryBuffer.tla` - Terminal history
+- `WorkStealing.tla` - Work-stealing scheduler (includes `WorkStealing.cfg`)
 
 ---
 
@@ -70,7 +70,7 @@ TLA+ specifications in `specs/tla/`:
 
 ```
 src/
-├── kernel/                 # Kernel subsystems (~21k lines)
+├── kernel/                 # Kernel subsystems (~37k lines)
 │   ├── syscall.rs         # System call implementations
 │   ├── process.rs         # Process management
 │   ├── memory.rs          # Memory management
@@ -83,7 +83,7 @@ src/
 │   ├── pkg/               # Package manager
 │   ├── work_stealing/     # Work-stealing scheduler
 │   └── ...
-├── shell/                  # Shell implementation (~3k lines)
+├── shell/                  # Shell implementation (~15k lines)
 │   ├── executor.rs        # Command execution
 │   ├── parser.rs          # Command parsing
 │   ├── builtins.rs        # Built-in commands
@@ -231,7 +231,7 @@ fn test_feature_edge_case() {
 - All new code must have tests
 - Cover happy path, error cases, and edge cases
 - Tests may use `.unwrap()` (production code may not)
-- Current test count: 660+ tests
+- Current test count: ~1090 tests
 
 ---
 
@@ -280,18 +280,16 @@ From `docs/development/invariants.md` - these must NEVER be violated:
 ## Security Guidelines
 
 ### Current Security Status
-See `docs/PROJECT_ANALYSIS.md` Appendix B for full details.
+See `docs/WORK_TRACKER.md` for the full, up-to-date security log.
 
 **Fixed Issues:**
-- SEC-001: Hardcoded root password removed
-- SEC-002: Secure password hashing with salt + key stretching
+- SEC-001: Hardcoded root password removed (root is passwordless by default)
+- SEC-002: Secure password hashing with salt + key stretching (10,000 rounds)
 - SEC-003: Kernel panic points fixed (32+ unwrap calls)
 - SEC-004: Symlink loop detection (MAX_DEPTH = 40)
-
-**Remaining Issues (HIGH):**
-- TOCTOU race conditions in file operations
-- Missing setuid bit processing
-- No privilege dropping support
+- SEC-005: TOCTOU race conditions fixed via atomic `fstat()` permission checks
+- SEC-006: setuid/setgid bit processing implemented; `setuid`/`setgid`
+  gated behind CAP_SETUID/CAP_SETGID
 
 ### Security Patterns
 ```rust
@@ -345,16 +343,15 @@ From `docs/development/contributing.md`:
 ### Adding a Shell Command
 1. Add function to appropriate file in `src/shell/programs/`
 2. Register in `ProgramRegistry::new()` in `src/shell/executor.rs`
-3. Add man page in `docs/man/`
+3. Add man page in `man/`
 4. Run pre-commit checklist
 
 ### Fixing a Security Issue
 1. Check `docs/WORK_TRACKER.md` for existing tracking
 2. Implement fix following security patterns above
 3. Add tests that verify the fix
-4. Update `docs/PROJECT_ANALYSIS.md` to mark as fixed
-5. Update `docs/WORK_TRACKER.md` progress log
-6. Run pre-commit checklist
+4. Update `docs/WORK_TRACKER.md` to mark the item DONE and add a progress-log entry
+5. Run pre-commit checklist
 
 ---
 

@@ -198,7 +198,7 @@ impl ProcessTree {
     /// Get processes sorted by memory usage
     pub fn by_memory_usage(&self) -> Vec<&ProcessTreeNode> {
         let mut procs: Vec<_> = self.processes.values().collect();
-        procs.sort_by(|a, b| b.memory.cmp(&a.memory));
+        procs.sort_by_key(|p| std::cmp::Reverse(p.memory));
         procs
     }
 }
@@ -784,12 +784,14 @@ fn format_size(bytes: usize) -> String {
     }
 }
 
-/// Truncate string to max length
+/// Truncate string to `max` characters (char-aware; never slices mid-codepoint)
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
+    if s.chars().count() <= max {
         s.to_string()
     } else {
-        format!("{}…", &s[..max - 1])
+        // Reserve one column for the ellipsis; saturating_sub guards max == 0.
+        let truncated: String = s.chars().take(max.saturating_sub(1)).collect();
+        format!("{}…", truncated)
     }
 }
 

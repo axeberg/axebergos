@@ -270,8 +270,7 @@ impl Surface {
 
         // Submit commands
         let command_buffer = encoder.finish();
-        let commands = Array::of1(&command_buffer);
-        self.queue.submit(&commands);
+        self.queue.submit(&[command_buffer]);
     }
 
     /// Build vertex data from queued rectangles
@@ -462,7 +461,7 @@ fn create_render_pipeline(
 }
 
 fn create_vertex_buffer(device: &GpuDevice) -> Result<GpuBuffer, String> {
-    let size = (MAX_RECTS * FLOATS_PER_RECT * 4) as f64; // 4 bytes per float
+    let size = (MAX_RECTS * FLOATS_PER_RECT * 4) as u32; // 4 bytes per float
 
     let descriptor = web_sys::GpuBufferDescriptor::new(
         size,
@@ -490,7 +489,7 @@ fn create_index_buffer(device: &GpuDevice, queue: &GpuQueue) -> Result<GpuBuffer
         indices.push(base + 3);
     }
 
-    let size = (indices.len() * 2) as f64; // 2 bytes per u16
+    let size = (indices.len() * 2) as u32; // 2 bytes per u16
     let descriptor =
         web_sys::GpuBufferDescriptor::new(size, GPU_BUFFER_USAGE_INDEX | GPU_BUFFER_USAGE_COPY_DST);
 
@@ -507,7 +506,7 @@ fn create_index_buffer(device: &GpuDevice, queue: &GpuQueue) -> Result<GpuBuffer
 
 fn create_uniform_buffer(device: &GpuDevice) -> Result<GpuBuffer, String> {
     // Screen dimensions: width, height, padding (16-byte aligned)
-    let size = 16.0;
+    let size = 16u32;
 
     let descriptor = web_sys::GpuBufferDescriptor::new(
         size,
@@ -553,19 +552,20 @@ fn create_color_attachment(
     Reflect::set(&clear_value, &"b".into(), &(clear_color.b as f64).into()).unwrap();
     Reflect::set(&clear_value, &"a".into(), &(clear_color.a as f64).into()).unwrap();
 
-    let attachment = web_sys::GpuRenderPassColorAttachment::new(
-        web_sys::GpuLoadOp::Clear,
-        web_sys::GpuStoreOp::Store,
-        view,
-    );
-    attachment.set_clear_value(&clear_value.into());
+    let attachment = Object::new();
+    Reflect::set(&attachment, &"view".into(), view).unwrap();
+    Reflect::set(&attachment, &"loadOp".into(), &"clear".into()).unwrap();
+    Reflect::set(&attachment, &"storeOp".into(), &"store".into()).unwrap();
+    Reflect::set(&attachment, &"clearValue".into(), &clear_value).unwrap();
 
-    attachment
+    attachment.unchecked_into()
 }
 
 fn create_render_pass_descriptor(
     color_attachment: &web_sys::GpuRenderPassColorAttachment,
 ) -> web_sys::GpuRenderPassDescriptor {
     let color_attachments = Array::of1(color_attachment);
-    web_sys::GpuRenderPassDescriptor::new(&color_attachments)
+    let descriptor = Object::new();
+    Reflect::set(&descriptor, &"colorAttachments".into(), &color_attachments).unwrap();
+    descriptor.unchecked_into()
 }

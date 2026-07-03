@@ -25,7 +25,8 @@ The VFS provides a unified file interface over different storage backends.
 
 ## FileSystem Trait
 
-All backends implement this trait:
+All backends implement this trait. The definition below is the full method
+set from `src/vfs/mod.rs`, which is the authoritative source:
 
 ```rust
 pub trait FileSystem {
@@ -42,9 +43,9 @@ pub trait FileSystem {
     fn write(&mut self, handle: FileHandle, buf: &[u8]) -> io::Result<usize>;
 
     /// Seek within a file
-    fn seek(&mut self, handle: FileHandle, pos: SeekFrom) -> io::Result<u64>;
+    fn seek(&mut self, handle: FileHandle, pos: io::SeekFrom) -> io::Result<u64>;
 
-    /// Get file metadata
+    /// Get file metadata by path
     fn metadata(&self, path: &str) -> io::Result<Metadata>;
 
     /// Create a directory
@@ -59,8 +60,41 @@ pub trait FileSystem {
     /// Remove a directory
     fn remove_dir(&mut self, path: &str) -> io::Result<()>;
 
+    /// Rename/move a file or directory
+    fn rename(&mut self, from: &str, to: &str) -> io::Result<()>;
+
+    /// Copy a file to a new location
+    fn copy_file(&mut self, from: &str, to: &str) -> io::Result<u64>;
+
     /// Check if path exists
     fn exists(&self, path: &str) -> bool;
+
+    /// Create a symbolic link
+    fn symlink(&mut self, target: &str, link_path: &str) -> io::Result<()>;
+
+    /// Read the target of a symbolic link
+    fn read_link(&self, path: &str) -> io::Result<String>;
+
+    /// Create a hard link
+    fn link(&mut self, source: &str, dest: &str) -> io::Result<()>;
+
+    /// Change file mode (permissions)
+    fn chmod(&mut self, path: &str, mode: u16) -> io::Result<()>;
+
+    /// Change file owner (uid/gid; None leaves that field unchanged)
+    fn chown(&mut self, path: &str, uid: Option<u32>, gid: Option<u32>) -> io::Result<()>;
+
+    /// Get metadata for an open handle (fstat)
+    fn fstat(&self, handle: FileHandle) -> io::Result<Metadata>;
+
+    /// Get the resolved path for an open handle
+    fn handle_path(&self, handle: FileHandle) -> io::Result<String>;
+
+    /// Set the filesystem clock used for timestamp updates
+    fn set_clock(&mut self, now: f64);
+
+    /// Update access and modification times (None = use current clock)
+    fn utimes(&mut self, path: &str, atime: Option<f64>, mtime: Option<f64>) -> io::Result<()>;
 }
 ```
 
@@ -125,21 +159,18 @@ impl OpenOptions {
 
 ```rust
 pub struct Metadata {
-    pub file_type: FileType,  // File, Directory, Symlink
     pub size: u64,
+    pub is_dir: bool,
+    pub is_file: bool,
+    pub is_symlink: bool,
+    pub symlink_target: Option<String>,
     pub uid: u32,             // Owner user ID
     pub gid: u32,             // Owner group ID
-    pub mode: u32,            // Unix permission mode (0o755, etc.)
-    pub nlink: u32,           // Link count
+    pub mode: u16,            // Unix permission mode (0o755, etc.)
     pub atime: f64,           // Access time (ms since epoch)
     pub mtime: f64,           // Modification time
     pub ctime: f64,           // Change time (metadata change)
-}
-
-pub enum FileType {
-    File,
-    Directory,
-    Symlink,
+    pub nlink: u32,           // Hard link count
 }
 ```
 
